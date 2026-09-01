@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { Mail, Lock, ArrowRight, Loader2 } from 'lucide-react'
 import { TextField } from './text-field'
 import { GoogleButton } from './google-button'
@@ -10,6 +11,7 @@ import { AuthAlert } from './auth-alert'
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 export function LoginForm() {
+  const router = useRouter()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [remember, setRemember] = useState(true)
@@ -32,8 +34,11 @@ export function LoginForm() {
         setStatus('error')
       } else {
         setStatus('success')
+        setTimeout(() => {
+          router.push('/dashboard')
+        }, 500)
       }
-    }, 1400)
+    }, 1000)
   }
 
   return (

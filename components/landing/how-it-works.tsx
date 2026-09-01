@@ -1,69 +1,121 @@
-import { Upload, Sparkles, TrendingUp } from 'lucide-react'
+import {
+  Upload,
+  MessagesSquare,
+  Zap,
+  BarChart3,
+  AlertTriangle,
+  Sparkles,
+  Map,
+  RotateCcw,
+  Target,
+  ArrowRight,
+} from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 
-const steps = [
+const loopSteps = [
   {
-    icon: Upload,
     step: '01',
-    title: 'Upload your material',
-    desc: 'Drop in PDFs, lecture notes, or past papers. LumoraAI indexes everything into a private, searchable workspace.',
+    title: 'YOUR MATERIAL',
+    desc: 'Upload PDFs, textbooks, lecture slides, or question banks into an isolated workspace.',
+    icon: Upload,
   },
   {
-    icon: Sparkles,
     step: '02',
-    title: 'Let the AI build your plan',
-    desc: 'It generates flashcards, quizzes, and a roadmap tailored to your goal, timeline, and current level.',
+    title: 'AI TUTOR',
+    desc: 'Learn through interactive dialogues grounded strictly in your uploaded notes with page citations.',
+    icon: MessagesSquare,
   },
   {
-    icon: TrendingUp,
     step: '03',
-    title: 'Learn and watch mastery grow',
-    desc: 'Study, get grounded answers, and let adaptive review target weak spots until concepts truly stick.',
+    title: 'ASSESSMENT',
+    desc: 'Take adaptive diagnostic quizzes where difficulty shifts dynamically based on real-time accuracy.',
+    icon: Zap,
+  },
+  {
+    step: '04',
+    title: 'KNOWLEDGE ANALYSIS',
+    desc: 'The engine models your mastery level per concept without relying on superficial vanity metrics.',
+    icon: BarChart3,
+  },
+  {
+    step: '05',
+    title: 'KNOWLEDGE GAPS',
+    desc: 'Weak spots and underlying cognitive misconceptions are precisely diagnosed and highlighted.',
+    icon: AlertTriangle,
+  },
+  {
+    step: '06',
+    title: 'RECOMMENDATION',
+    desc: 'Receive transparent "next best actions" explaining exactly WHY a specific drill is prioritized.',
+    icon: Sparkles,
+  },
+  {
+    step: '07',
+    title: 'ADAPTIVE ROADMAP',
+    desc: 'Your learning roadmap automatically splices remediation nodes before unlocking advanced topics.',
+    icon: Map,
+  },
+  {
+    step: '08',
+    title: 'REVISION & MASTERY',
+    desc: 'Review spaced-repetition flashcards and reassess until every critical gap achieves 80%+ mastery.',
+    icon: Target,
   },
 ]
 
 export function HowItWorks() {
   return (
     <section
-      id="how-it-works"
-      className="mx-auto w-full max-w-[1200px] scroll-mt-20 px-4 py-16 md:px-6 md:py-24"
+      id="learning-loop"
+      className="mx-auto w-full max-w-[1280px] scroll-mt-20 px-4 py-16 md:px-6 md:py-24"
     >
       <div className="mx-auto max-w-2xl text-center">
-        <Badge variant="default" size="md">
-          How it works
+        <Badge variant="default" size="md" className="text-xs">
+          The Core Engine
         </Badge>
-        <h2 className="mt-4 text-balance font-display text-3xl font-semibold tracking-tight text-foreground md:text-4xl">
-          From documents to mastery in three steps
+        <h2 className="mt-4 text-balance font-display text-3xl font-bold tracking-tight text-foreground md:text-4xl">
+          The Closed-Loop Adaptive Learning Cycle
         </h2>
-        <p className="mt-4 text-pretty text-base leading-relaxed text-muted-foreground">
-          Set up in minutes. LumoraAI handles the heavy lifting so you can focus on
-          learning.
+        <p className="mt-3 text-pretty text-xs leading-relaxed text-muted-foreground md:text-sm">
+          LumoraAI isn&apos;t a static reader or a generic chatbot. It is a continuous feedback loop that
+          actively analyzes your strengths and adapts every study session to your cognitive state.
         </p>
       </div>
 
-      <div className="relative mt-14 grid gap-4 md:grid-cols-3 md:gap-6">
-        {/* connecting line */}
-        <div
-          className="pointer-events-none absolute left-0 right-0 top-[52px] hidden h-px bg-gradient-to-r from-transparent via-border to-transparent md:block"
-          aria-hidden
-        />
-        {steps.map((s) => (
-          <article
-            key={s.step}
-            className="relative flex flex-col rounded-2xl border border-border bg-card p-6 shadow-soft"
-          >
-            <div className="flex items-center justify-between">
-              <span className="flex size-12 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-[var(--shadow-glow)]">
-                <s.icon className="size-5" strokeWidth={2} />
-              </span>
-              <span className="font-display text-3xl font-semibold text-border">{s.step}</span>
-            </div>
-            <h3 className="mt-5 font-display text-[17px] font-semibold text-foreground">
-              {s.title}
-            </h3>
-            <p className="mt-2 text-[14px] leading-relaxed text-muted-foreground">{s.desc}</p>
-          </article>
-        ))}
+      {/* Grid of Loop Stages */}
+      <div className="mt-14 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {loopSteps.map((s, idx) => {
+          const Icon = s.icon
+          return (
+            <article
+              key={s.step}
+              className="group relative flex flex-col justify-between rounded-3xl border border-border bg-card p-6 shadow-soft transition-all duration-200 hover:-translate-y-1 hover:border-primary/40 hover:shadow-card"
+            >
+              <div>
+                <div className="flex items-center justify-between">
+                  <span className="flex size-11 items-center justify-center rounded-2xl bg-primary/10 text-primary shadow-soft">
+                    <Icon className="size-5" />
+                  </span>
+                  <span className="font-mono text-xs font-bold text-muted-foreground">
+                    STEP {s.step}
+                  </span>
+                </div>
+
+                <h3 className="mt-5 font-display text-sm font-bold tracking-wider text-foreground">
+                  {s.title}
+                </h3>
+                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{s.desc}</p>
+              </div>
+
+              {idx < loopSteps.length - 1 && (
+                <div className="mt-4 flex items-center gap-1 text-[10px] font-semibold uppercase text-primary">
+                  <span>Leads to next step</span>
+                  <ArrowRight className="size-3" />
+                </div>
+              )}
+            </article>
+          )
+        })}
       </div>
     </section>
   )

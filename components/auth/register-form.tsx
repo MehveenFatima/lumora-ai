@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { User, Mail, Lock, ArrowRight, Loader2 } from 'lucide-react'
 import { TextField } from './text-field'
 import { GoogleButton } from './google-button'
@@ -11,6 +12,7 @@ import { PasswordStrength, getPasswordStrength } from './password-strength'
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 export function RegisterForm() {
+  const router = useRouter()
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -30,7 +32,12 @@ export function RegisterForm() {
     setTouched({ name: true, email: true, password: true })
     if (name.trim().length < 2 || !EMAIL_RE.test(email) || !strong || !agree) return
     setStatus('loading')
-    setTimeout(() => setStatus('success'), 1500)
+    setTimeout(() => {
+      setStatus('success')
+      setTimeout(() => {
+        router.push('/dashboard')
+      }, 500)
+    }, 1000)
   }
 
   return (
