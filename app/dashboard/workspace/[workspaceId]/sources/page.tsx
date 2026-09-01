@@ -25,6 +25,7 @@ import {
   WorkspaceDocument,
 } from '@/lib/types/domain'
 import { Badge } from '@/components/ui/badge'
+import { AddSourceModal } from '@/components/workspace/add-source-modal'
 import { cn } from '@/lib/utils'
 
 export default function SourcesPage() {
@@ -35,14 +36,8 @@ export default function SourcesPage() {
   const [documents, setDocuments] = useState<WorkspaceDocument[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedDoc, setSelectedDoc] = useState<WorkspaceDocument | null>(null)
-  const [uploadModalOpen, setUploadModalOpen] = useState(false)
-  const [isUploading, setIsUploading] = useState(false)
-
-  // Upload modal states
-  const [newTitle, setNewTitle] = useState('')
-  const [newFilename, setNewFilename] = useState('')
-  const [fileType, setFileType] = useState<'pdf' | 'pptx' | 'docx'>('pdf')
-  const [pagesCount, setPagesCount] = useState(48)
+  const [addSourceModalOpen, setAddSourceModalOpen] = useState(false)
+  const [toastMessage, setToastMessage] = useState<string | null>(null)
 
   useEffect(() => {
     async function loadDocs() {
@@ -56,29 +51,31 @@ export default function SourcesPage() {
     loadDocs()
   }, [workspaceId])
 
-  const handleUploadSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!newTitle.trim()) return
+  const showToast = (msg: string) => {
+    setToastMessage(msg)
+    setTimeout(() => {
+      setToastMessage(null)
+    }, 3000)
+  }
 
-    setIsUploading(true)
-    try {
-      const newDoc = await workspaceService.addDocument(workspaceId, {
-        title: newTitle.trim(),
-        filename: newFilename.trim() || `${newTitle.trim().replace(/\s+/g, '_')}.${fileType}`,
-        type: fileType,
-        sizeBytes: 8500000,
-        pagesCount,
-      })
-
-      setDocuments((prev) => [newDoc, ...prev])
-      setIsUploading(false)
-      setUploadModalOpen(false)
-      setNewTitle('')
-      setNewFilename('')
-    } catch (err) {
-      console.error(err)
-      setIsUploading(false)
+  const handleSourceAdded = (newDoc: WorkspaceDocument) => {
+    setDocuments((prev) => [newDoc, ...prev])
+    if (workspace) {
+      setWorkspace({ ...workspace, documentCount: workspace.documentCount + 1 })
     }
+    showToast('Source added successfully.')
+  }
+
+  const handleRemoveDoc = async (docId: string) => {
+    await workspaceService.removeDocument(workspaceId, docId)
+    setDocuments((prev) => prev.filter((d) => d.id !== docId))
+    if (selectedDoc?.id === docId) {
+      setSelectedDoc(null)
+    }
+    if (workspace) {
+      setWorkspace({ ...workspace, documentCount: Math.max(0, workspace.documentCount - 1) })
+    }
+    showToast('Source removed from workspace.')
   }
 
   const filteredDocs = documents.filter((doc) =>
@@ -88,6 +85,14 @@ export default function SourcesPage() {
 
   return (
     <div className="mx-auto w-full max-w-[1360px] px-4 py-6 md:px-6 md:py-8 space-y-6">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-2xl border border-border bg-card px-4 py-3 text-xs font-semibold text-foreground shadow-card animate-in fade-in slide-in-from-bottom-3 duration-200">
+          <CheckCircle2 className="size-4 text-success" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
         <div>
@@ -119,7 +124,7 @@ export default function SourcesPage() {
           </div>
 
           <button
-            onClick={() => setUploadModalOpen(true)}
+            onClick={() => setAddSourceModalOpen(true)}
             className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-primary px-3.5 text-xs font-semibold text-primary-foreground shadow-glow transition-opacity hover:opacity-90"
           >
             <Plus className="size-4" />
@@ -139,7 +144,7 @@ export default function SourcesPage() {
                 Upload your first textbook, lecture PDF, or notes to build the workspace knowledge base.
               </p>
               <button
-                onClick={() => setUploadModalOpen(true)}
+                onClick={() => setAddSourceModalOpen(true)}
                 className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow-glow"
               >
                 <Upload className="size-3.5" /> Upload Resource
@@ -245,100 +250,28 @@ export default function SourcesPage() {
                   'Document has been pre-processed with semantic chunking and layout parsing. Citations are ready for the AI Tutor.'}
               </p>
             </div>
+
+            <div className="border-t border-border pt-3">
+              <button
+                onClick={() => handleRemoveDoc(selectedDoc.id)}
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-border bg-background py-2 text-xs font-semibold text-muted-foreground transition-colors hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+              >
+                <Trash2 className="size-3.5" />
+                <span>Remove Source from Workspace</span>
+              </button>
+            </div>
           </aside>
         )}
       </div>
 
-      {/* Upload Source Modal */}
-      {uploadModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-background/80 backdrop-blur-sm" onClick={() => setUploadModalOpen(false)} aria-hidden />
-
-          <div className="relative w-full max-w-md rounded-3xl border border-border bg-card p-6 shadow-card animate-in fade-in zoom-in-95 duration-150">
-            <button
-              onClick={() => setUploadModalOpen(false)}
-              className="absolute right-5 top-5 flex size-8 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground"
-            >
-              <X className="size-4" />
-            </button>
-
-            <div className="flex items-center gap-2.5">
-              <span className="flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                <Upload className="size-4" />
-              </span>
-              <div>
-                <h3 className="font-display text-base font-semibold text-foreground">Add Workspace Source</h3>
-                <p className="text-xs text-muted-foreground">PDF, PPTX, or DOCX documents</p>
-              </div>
-            </div>
-
-            <form onSubmit={handleUploadSubmit} className="mt-5 space-y-4">
-              <div>
-                <label className="text-xs font-semibold text-foreground">Document Title *</label>
-                <input
-                  type="text"
-                  value={newTitle}
-                  onChange={(e) => setNewTitle(e.target.value)}
-                  placeholder="e.g. Graph Algorithms Deep Dive"
-                  className="mt-1.5 h-10 w-full rounded-xl border border-input bg-background px-3 text-xs text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-semibold text-foreground">Resource Type</label>
-                <div className="mt-1.5 grid grid-cols-3 gap-2">
-                  {(['pdf', 'pptx', 'docx'] as const).map((t) => (
-                    <button
-                      key={t}
-                      type="button"
-                      onClick={() => setFileType(t)}
-                      className={cn(
-                        'rounded-xl border p-2 text-center text-xs font-semibold uppercase transition-all',
-                        fileType === t
-                          ? 'border-primary bg-primary/10 text-primary'
-                          : 'border-border bg-background text-muted-foreground'
-                      )}
-                    >
-                      {t}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs font-semibold text-foreground">Estimated Page / Slide Count</label>
-                <input
-                  type="number"
-                  value={pagesCount}
-                  onChange={(e) => setPagesCount(Number(e.target.value))}
-                  min={1}
-                  max={500}
-                  className="mt-1.5 h-10 w-full rounded-xl border border-input bg-background px-3 text-xs text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20"
-                />
-              </div>
-
-              <div className="pt-2">
-                <button
-                  type="submit"
-                  disabled={!newTitle.trim() || isUploading}
-                  className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary text-xs font-semibold text-primary-foreground shadow-glow transition-opacity hover:opacity-90 disabled:opacity-40"
-                >
-                  {isUploading ? (
-                    <>
-                      <Loader2 className="size-4 animate-spin" /> Indexing Document Vectors...
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle2 className="size-4" /> Index into Workspace
-                    </>
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Improved Add Source Modal */}
+      <AddSourceModal
+        isOpen={addSourceModalOpen}
+        workspaceId={workspaceId}
+        workspaceName={workspace?.name}
+        onClose={() => setAddSourceModalOpen(false)}
+        onSourceAdded={handleSourceAdded}
+      />
     </div>
   )
 }

@@ -112,6 +112,41 @@ export const workspaceService = {
     return newWs
   },
 
+  async searchWorkspaces(query: string): Promise<Workspace[]> {
+    await delay(80)
+    const q = query.trim().toLowerCase()
+    if (!q) return [...workspacesState]
+    return workspacesState.filter(
+      (w) =>
+        w.name.toLowerCase().includes(q) ||
+        w.goal.toLowerCase().includes(q) ||
+        w.description.toLowerCase().includes(q)
+    )
+  },
+
+  async deleteWorkspace(workspaceId: string): Promise<boolean> {
+    await delay(300)
+    const initialLen = workspacesState.length
+    workspacesState = workspacesState.filter((w) => w.id !== workspaceId)
+    delete documentsState[workspaceId]
+    delete tutorMessagesState[workspaceId]
+    delete studyPlansState[workspaceId]
+    delete activitiesState[workspaceId]
+    return workspacesState.length < initialLen
+  },
+
+  async removeDocument(workspaceId: string, documentId: string): Promise<boolean> {
+    await delay(200)
+    if (!documentsState[workspaceId]) return false
+    const initialLen = documentsState[workspaceId].length
+    documentsState[workspaceId] = documentsState[workspaceId].filter((d) => d.id !== documentId)
+    const ws = workspacesState.find((w) => w.id === workspaceId)
+    if (ws) {
+      ws.documentCount = Math.max(0, ws.documentCount - 1)
+    }
+    return documentsState[workspaceId].length < initialLen
+  },
+
   async getDocuments(workspaceId: string): Promise<WorkspaceDocument[]> {
     await delay(120)
     return documentsState[workspaceId] ? [...documentsState[workspaceId]] : []

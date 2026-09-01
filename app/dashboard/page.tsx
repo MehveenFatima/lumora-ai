@@ -8,6 +8,7 @@ import {
   Flame,
   Target,
   Plus,
+  Trash2,
   ArrowRight,
   Sparkles,
   Zap,
@@ -19,6 +20,7 @@ import {
   Search,
   Command,
   BookOpen,
+  CheckCircle2,
 } from 'lucide-react'
 import { workspaceService } from '@/lib/services/workspace-service'
 import { Workspace, LearningActivity, NotificationItem } from '@/lib/types/domain'
@@ -26,6 +28,7 @@ import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { ThemeToggle } from '@/components/ui/theme-toggle'
 import { CreateWorkspaceModal } from '@/components/workspace/create-workspace-modal'
+import { DeleteWorkspaceModal } from '@/components/workspace/delete-workspace-modal'
 import { BaselineAssessmentModal } from '@/components/workspace/baseline-assessment-modal'
 import { cn } from '@/lib/utils'
 
@@ -34,7 +37,9 @@ export default function GlobalDashboardPage() {
   const [activities, setActivities] = useState<LearningActivity[]>([])
   const [notifications, setNotifications] = useState<NotificationItem[]>([])
   const [createModalOpen, setCreateModalOpen] = useState(false)
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false)
   const [baselineModalOpen, setBaselineModalOpen] = useState(false)
+  const [toastMessage, setToastMessage] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -58,6 +63,24 @@ export default function GlobalDashboardPage() {
     loadDashboard()
   }, [])
 
+  const showToast = (msg: string) => {
+    setToastMessage(msg)
+    setTimeout(() => {
+      setToastMessage(null)
+    }, 3000)
+  }
+
+  const handleDeleteWorkspace = async (workspaceId: string) => {
+    await workspaceService.deleteWorkspace(workspaceId)
+    const [updatedWs, updatedActs] = await Promise.all([
+      workspaceService.getWorkspaces(),
+      workspaceService.getActivities(),
+    ])
+    setWorkspaces(updatedWs)
+    setActivities(updatedActs)
+    showToast('Workspace deleted.')
+  }
+
   const totalDocs = workspaces.reduce((acc, w) => acc + w.documentCount, 0)
   const avgMastery =
     workspaces.length > 0
@@ -66,6 +89,14 @@ export default function GlobalDashboardPage() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-2xl border border-border bg-card px-4 py-3 text-xs font-semibold text-foreground shadow-card animate-in fade-in slide-in-from-bottom-3 duration-200">
+          <CheckCircle2 className="size-4 text-success" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
       {/* Global Header */}
       <header className="sticky top-0 z-30 flex h-16 w-full items-center justify-between border-b border-border bg-background/85 px-4 backdrop-blur-xl md:px-8">
         <div className="flex items-center gap-3">
@@ -82,7 +113,7 @@ export default function GlobalDashboardPage() {
           </span>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2 md:gap-2.5">
           <button
             onClick={() => setBaselineModalOpen(true)}
             className="hidden sm:inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-accent/40"
@@ -97,6 +128,15 @@ export default function GlobalDashboardPage() {
           >
             <Plus className="size-3.5" />
             <span>New Workspace</span>
+          </button>
+
+          <button
+            onClick={() => setDeleteModalOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+            aria-label="Delete workspace"
+          >
+            <Trash2 className="size-3.5" />
+            <span className="hidden sm:inline">Delete Workspace</span>
           </button>
 
           <ThemeToggle />
@@ -143,6 +183,12 @@ export default function GlobalDashboardPage() {
             >
               <Plus className="size-4" /> Create Learning Workspace
             </button>
+            <button
+              onClick={() => setDeleteModalOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-2xl border border-border bg-card px-3.5 py-2.5 text-xs font-semibold text-muted-foreground transition-colors hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+            >
+              <Trash2 className="size-3.5" /> Delete Workspace
+            </button>
           </div>
         </div>
 
@@ -186,34 +232,36 @@ export default function GlobalDashboardPage() {
         </div>
 
         {/* Continue Learning Banner */}
-        <section className="rounded-3xl border border-primary/25 bg-gradient-to-r from-card via-card to-primary/10 p-6 shadow-card">
-          <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <span className="flex size-6 items-center justify-center rounded-md bg-primary text-primary-foreground">
-                  <Sparkles className="size-3.5" />
-                </span>
-                <span className="text-xs font-bold uppercase tracking-wider text-primary">
-                  Top Recommended Next Step
-                </span>
+        {workspaces.length > 0 && (
+          <section className="rounded-3xl border border-primary/25 bg-gradient-to-r from-card via-card to-primary/10 p-6 shadow-card">
+            <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="flex size-6 items-center justify-center rounded-md bg-primary text-primary-foreground">
+                    <Sparkles className="size-3.5" />
+                  </span>
+                  <span className="text-xs font-bold uppercase tracking-wider text-primary">
+                    Top Recommended Next Step
+                  </span>
+                </div>
+                <h2 className="font-display text-lg font-semibold text-foreground">
+                  {workspaces[0]?.name}: Graph Traversal & Disconnected Component Practice
+                </h2>
+                <p className="text-xs text-muted-foreground max-w-2xl">
+                  Your last quiz showed a 46% accuracy drop on disconnected DFS graphs. Spend 25 minutes reviewing with your tutor to raise your mastery.
+                </p>
               </div>
-              <h2 className="font-display text-lg font-semibold text-foreground">
-                Data Structures: Graph Traversal & Disconnected Component Practice
-              </h2>
-              <p className="text-xs text-muted-foreground max-w-2xl">
-                Your last quiz showed a 46% accuracy drop on disconnected DFS graphs. Spend 25 minutes reviewing with your tutor to raise your mastery.
-              </p>
-            </div>
 
-            <Link
-              href="/dashboard/workspace/dsa"
-              className="inline-flex shrink-0 items-center justify-center gap-2 rounded-2xl bg-primary px-6 py-3 text-xs font-semibold text-primary-foreground shadow-glow transition-opacity hover:opacity-90"
-            >
-              <span>Enter Workspace</span>
-              <ArrowRight className="size-4" />
-            </Link>
-          </div>
-        </section>
+              <Link
+                href={`/dashboard/workspace/${workspaces[0]?.id}`}
+                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-2xl bg-primary px-6 py-3 text-xs font-semibold text-primary-foreground shadow-glow transition-opacity hover:opacity-90"
+              >
+                <span>Enter Workspace</span>
+                <ArrowRight className="size-4" />
+              </Link>
+            </div>
+          </section>
+        )}
 
         {/* Workspaces Grid */}
         <section className="space-y-4">
@@ -298,28 +346,32 @@ export default function GlobalDashboardPage() {
           </div>
 
           <div className="space-y-3">
-            {activities.slice(0, 5).map((act) => (
-              <div
-                key={act.id}
-                className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-background/50 p-3.5 text-xs"
-              >
-                <div className="flex items-center gap-3 truncate">
-                  <span className="size-2 rounded-full bg-primary shrink-0" />
-                  <div>
-                    <span className="font-semibold text-foreground">{act.title}</span>
-                    <p className="text-[11px] text-muted-foreground truncate">{act.description}</p>
+            {activities.length === 0 ? (
+              <p className="py-4 text-center text-xs text-muted-foreground">No recent activities.</p>
+            ) : (
+              activities.slice(0, 5).map((act) => (
+                <div
+                  key={act.id}
+                  className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-background/50 p-3.5 text-xs"
+                >
+                  <div className="flex items-center gap-3 truncate">
+                    <span className="size-2 rounded-full bg-primary shrink-0" />
+                    <div>
+                      <span className="font-semibold text-foreground">{act.title}</span>
+                      <p className="text-[11px] text-muted-foreground truncate">{act.description}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {act.workspaceName && (
+                      <Badge variant="neutral" size="sm">
+                        {act.workspaceName}
+                      </Badge>
+                    )}
+                    <span className="text-[11px] text-muted-foreground">{act.timestamp}</span>
                   </div>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  {act.workspaceName && (
-                    <Badge variant="neutral" size="sm">
-                      {act.workspaceName}
-                    </Badge>
-                  )}
-                  <span className="text-[11px] text-muted-foreground">{act.timestamp}</span>
-                </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </section>
       </main>
@@ -328,6 +380,13 @@ export default function GlobalDashboardPage() {
       <CreateWorkspaceModal
         isOpen={createModalOpen}
         onClose={() => setCreateModalOpen(false)}
+      />
+
+      <DeleteWorkspaceModal
+        isOpen={deleteModalOpen}
+        workspaces={workspaces}
+        onClose={() => setDeleteModalOpen(false)}
+        onDeleteWorkspace={handleDeleteWorkspace}
       />
 
       <BaselineAssessmentModal
