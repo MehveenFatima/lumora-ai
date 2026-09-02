@@ -370,7 +370,12 @@ export const workspaceService = {
     return tutorMessagesCache[workspaceId] ? [...tutorMessagesCache[workspaceId]] : []
   },
 
-  async sendTutorMessage(workspaceId: string, userText: string): Promise<TutorMessage> {
+  async sendTutorMessage(
+    workspaceId: string,
+    userText: string,
+    conversationId?: string,
+    currentDocumentId?: string
+  ): Promise<TutorMessage> {
     const userMsg: TutorMessage = {
       id: `tm_u_${Date.now()}`,
       workspaceId,
@@ -385,7 +390,12 @@ export const workspaceService = {
     tutorMessagesCache[workspaceId].push(userMsg)
 
     try {
-      const assistantMsg = await tutorApiClient.sendTutorMessage(workspaceId, userText)
+      const assistantMsg = await tutorApiClient.sendTutorMessage(
+        workspaceId,
+        userText,
+        conversationId,
+        currentDocumentId
+      )
       tutorMessagesCache[workspaceId].push(assistantMsg)
       return assistantMsg
     } catch (err: any) {

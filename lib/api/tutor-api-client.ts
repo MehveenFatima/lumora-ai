@@ -176,7 +176,8 @@ export const tutorApiClient = {
   async sendTutorMessage(
     workspaceId: string,
     message: string,
-    conversationId?: string
+    conversationId?: string,
+    currentDocumentId?: string
   ): Promise<TutorMessage> {
     const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/tutor`, {
       method: 'POST',
@@ -186,6 +187,7 @@ export const tutorApiClient = {
       body: JSON.stringify({
         message,
         conversation_id: conversationId,
+        current_document_id: currentDocumentId,
       }),
     })
 

@@ -7,6 +7,7 @@ from backend.app.repositories.workspaces import workspace_repo
 from backend.app.repositories.documents import document_repo
 from backend.app.repositories.tutor import tutor_repo
 from backend.app.services.retrieval import retrieval_service, RetrievedChunk
+from backend.app.services.query_understanding import ResolvedQuery
 from backend.app.schemas.tutor import (
     TutorResponse,
     TutorCitationSchema,
@@ -21,7 +22,9 @@ Your primary objective is to help the learner understand concepts based strictly
 
 CRITICAL INSTRUCTIONS & RULES:
 1. Grounding: You must prioritize and strictly ground your factual answers in the provided [WORKSPACE SOURCES CONTEXT].
-2. Context Awareness: When the learner asks a follow-up question (e.g. "Explain the first concept in more detail", "Give me a concrete example of that", "Explain it in simpler terms", "What are the exam points?"), use the conversation history to understand their intent, but ensure your factual explanations and examples are derived from and consistent with the [WORKSPACE SOURCES CONTEXT].
+2. Context & Page References:
+   - If the learner asks about a specific page or page range (e.g. "Explain page 7", "Summarize pages 5 to 8"), explain the exact text, equations, and definitions from that page/range.
+   - If the learner asks a follow-up question (e.g. "Explain the first concept in more detail", "Give me a concrete example of that", "Explain it in simpler terms"), use the conversation history to understand their intent, but ensure your factual explanations and examples are derived from and consistent with the [WORKSPACE SOURCES CONTEXT].
 3. Honesty & No Hallucinations: If the provided [WORKSPACE SOURCES CONTEXT] does not contain sufficient information to answer the question, state: "Your workspace sources do not contain enough information to answer that reliably." You may then offer a brief foundational conceptual overview while explicitly noting it is not directly in their notes.
 4. Citations: Only discuss concepts present in the retrieved passages. Do NOT invent citations or fabricate page numbers.
 5. Tone & Style: Be concise, clear, and pedagogically effective. Break complex algorithms or mechanisms down step-by-step.
@@ -71,6 +74,24 @@ class TutorService:
         """
         Generates an authoritative workspace inventory response directly from database rows.
         """
+        q_lower = query.lower()
+        if "topic" in q_lower:
+            if not documents:
+                text = (
+                    f"### 📋 Indexed Topics for **{workspace_name}**\n\n"
+                    "No topics are currently indexed yet because no documents have been uploaded to this workspace.\n\n"
+                    "Upload a course syllabus or textbook PDF to begin topic extraction."
+                )
+                return text, ["How do I upload resources?"]
+
+            doc_names = [d.get("filename", "Document") for d in documents]
+            text = (
+                f"### 📋 Indexed Topics & Knowledge Areas for **{workspace_name}**\n\n"
+                f"Topic extraction is grounded in your **{len(documents)} uploaded document(s)** ({', '.join(doc_names)}).\n\n"
+                "You can ask me to summarize any document, extract key exam definitions, or explore specific mechanisms."
+            )
+            return text, [f"Summarize {doc_names[0]}", "What are the main concepts in this PDF?"]
+
         if not documents:
             text = (
                 f"Your workspace **{workspace_name}** currently has no documents indexed.\n\n"
@@ -116,7 +137,9 @@ class TutorService:
         workspace_id: str,
         user_message: str,
         conversation_id: Optional[str] = None,
+        current_document_id: Optional[str] = None,
     ) -> TutorResponse:
+        request_id = str(uuid.uuid4())
         # 1. Verify workspace exists
         workspace = await workspace_repo.get_by_id(workspace_id)
         if not workspace:
@@ -130,24 +153,26 @@ class TutorService:
             conv_id, limit=settings.conversation_history_limit
         )
 
-        # 4. Check for WORKSPACE_METADATA intent
-        intent, target_doc_id, target_doc_name, resolved_ref, cleaned_q = (
-            await retrieval_service.resolve_document_and_intent(
-                workspace_id=workspace_id,
-                query=user_message,
-                recent_history=recent_history,
-            )
+        # 4. Retrieve relevant workspace chunks with deterministic query understanding & strategy routing
+        chunks, is_grounded, resolved = await retrieval_service.retrieve_relevant_chunks(
+            workspace_id=workspace_id,
+            query=user_message,
+            recent_history=recent_history,
+            current_document_id=current_document_id,
+            conversation_id=conv_id,
+            request_id=request_id,
         )
 
-        if intent == "WORKSPACE_METADATA":
-            docs = await document_repo.list_by_workspace(workspace_id)
-            metadata_answer, follow_ups = self._generate_metadata_response(
-                workspace_name=workspace.get("name", "Workspace"),
-                documents=docs,
-                query=user_message,
-            )
+        citations: List[TutorCitationSchema] = []
+        top_score = 0.0
 
-            # Persist user & assistant messages
+        # Case 1: Clarification or Boundary Message (e.g. out of range page, ambiguous document)
+        if resolved.clarification_message:
+            answer_text = resolved.clarification_message
+            follow_ups = [
+                "What sources are in this workspace?",
+                "What topics are currently indexed?",
+            ]
             await tutor_repo.add_message(
                 conversation_id=conv_id,
                 workspace_id=workspace_id,
@@ -158,7 +183,51 @@ class TutorService:
                 conversation_id=conv_id,
                 workspace_id=workspace_id,
                 role="assistant",
-                content=metadata_answer,
+                content=answer_text,
+                citations=[],
+                retrieval_metadata={
+                    "chunks_considered": 0,
+                    "grounded": False,
+                    "intent": resolved.intent,
+                },
+            )
+            now_str = datetime.now(timezone.utc).strftime("%I:%M %p")
+            return TutorResponse(
+                conversation_id=conv_id,
+                message=MessagePayload(
+                    id=msg_record["id"],
+                    role="assistant",
+                    content=answer_text,
+                    timestamp=now_str,
+                ),
+                citations=[],
+                retrieval=RetrievalMetadata(
+                    chunks_considered=0,
+                    grounded=False,
+                    top_similarity_score=None,
+                ),
+                suggested_follow_ups=follow_ups,
+            )
+
+        # Case 2: WORKSPACE_METADATA Intent
+        if resolved.intent == "WORKSPACE_METADATA":
+            docs = await document_repo.list_by_workspace(workspace_id)
+            answer_text, follow_ups = self._generate_metadata_response(
+                workspace_name=workspace.get("name", "Workspace"),
+                documents=docs,
+                query=user_message,
+            )
+            await tutor_repo.add_message(
+                conversation_id=conv_id,
+                workspace_id=workspace_id,
+                role="user",
+                content=user_message,
+            )
+            msg_record = await tutor_repo.add_message(
+                conversation_id=conv_id,
+                workspace_id=workspace_id,
+                role="assistant",
+                content=answer_text,
                 citations=[],
                 retrieval_metadata={
                     "chunks_considered": 0,
@@ -167,14 +236,13 @@ class TutorService:
                     "document_count": len(docs),
                 },
             )
-
             now_str = datetime.now(timezone.utc).strftime("%I:%M %p")
             return TutorResponse(
                 conversation_id=conv_id,
                 message=MessagePayload(
                     id=msg_record["id"],
                     role="assistant",
-                    content=metadata_answer,
+                    content=answer_text,
                     timestamp=now_str,
                 ),
                 citations=[],
@@ -186,19 +254,7 @@ class TutorService:
                 suggested_follow_ups=follow_ups,
             )
 
-        # 5. Retrieve relevant workspace chunks with conversation awareness
-        chunks, is_grounded, intent, target_doc_id, resolved_ref = (
-            await retrieval_service.retrieve_relevant_chunks(
-                workspace_id=workspace_id,
-                query=user_message,
-                recent_history=recent_history,
-                conversation_id=conv_id,
-            )
-        )
-
-        citations: List[TutorCitationSchema] = []
-        top_score = 0.0
-
+        # Case 3: Grounded or Ungrounded Content Generation
         if is_grounded:
             for c in chunks:
                 citations.append(
@@ -213,7 +269,6 @@ class TutorService:
                 )
             top_score = max((c.similarity_score for c in chunks), default=0.0)
 
-        # 6. Persist user message
         await tutor_repo.add_message(
             conversation_id=conv_id,
             workspace_id=workspace_id,
@@ -221,17 +276,15 @@ class TutorService:
             content=user_message,
         )
 
-        # 7. Generate answer
         answer_text, follow_ups = await self._generate_response(
             workspace_name=workspace.get("name", "Workspace"),
             user_message=user_message,
             chunks=chunks,
             is_grounded=is_grounded,
             recent_history=recent_history,
-            resolved_reference=resolved_ref,
+            resolved=resolved,
         )
 
-        # 8. Persist assistant message
         msg_record = await tutor_repo.add_message(
             conversation_id=conv_id,
             workspace_id=workspace_id,
@@ -242,13 +295,12 @@ class TutorService:
                 "chunks_considered": len(chunks),
                 "grounded": is_grounded,
                 "top_similarity_score": top_score if is_grounded else None,
-                "intent": intent,
-                "resolved_reference": resolved_ref,
+                "intent": resolved.intent,
+                "resolved_reference": resolved.resolved_reference,
             },
         )
 
         now_str = datetime.now(timezone.utc).strftime("%I:%M %p")
-
         return TutorResponse(
             conversation_id=conv_id,
             message=MessagePayload(
@@ -273,7 +325,7 @@ class TutorService:
         chunks: List[RetrievedChunk],
         is_grounded: bool,
         recent_history: List[Dict[str, Any]],
-        resolved_reference: Optional[str] = None,
+        resolved: ResolvedQuery,
     ) -> Tuple[str, List[str]]:
         # If no chunks passed threshold, produce strict ungrounded refusal response
         if not is_grounded or not chunks:
@@ -306,8 +358,12 @@ class TutorService:
             history_str = "RECENT CONVERSATION HISTORY:\n" + "\n".join(history_lines) + "\n\n"
 
         ref_instruction = ""
-        if resolved_reference:
-            ref_instruction = f"CONTEXTUAL REFERENCE FOCUS: The learner's question refers to '{resolved_reference}'. Ground your explanation specifically in the provided source passages related to {resolved_reference}.\n\n"
+        if resolved.intent == "PAGE_REFERENCE" and resolved.page_number:
+            ref_instruction = f"PAGE INSTRUCTION: The learner specifically asked about Page {resolved.page_number} of {resolved.target_document_name or 'the document'}. Explain the exact concepts and mechanisms from that page.\n\n"
+        elif resolved.intent == "PAGE_RANGE_REFERENCE" and resolved.page_start and resolved.page_end:
+            ref_instruction = f"PAGE RANGE INSTRUCTION: The learner requested an explanation of Pages {resolved.page_start} through {resolved.page_end} of {resolved.target_document_name or 'the document'}. Summarize and explain the content from these pages.\n\n"
+        elif resolved.intent == "CONTEXTUAL_FOLLOWUP" and resolved.resolved_reference:
+            ref_instruction = f"CONTEXTUAL REFERENCE FOCUS: The learner's question refers to '{resolved.resolved_reference}'. Ground your explanation specifically in the provided source passages related to {resolved.resolved_reference}.\n\n"
 
         prompt = (
             f"{TUTOR_SYSTEM_PROMPT}\n\n"
@@ -340,7 +396,12 @@ class TutorService:
         summary_chunks_text = "\n\n".join(
             [f"**From {c.document_name} (Page {c.page_number})**:\n{c.text}" for c in chunks[:5]]
         )
-        focus_header = f" regarding **{resolved_reference}**" if resolved_reference else ""
+        focus_header = f" regarding **{resolved.resolved_reference}**" if resolved.resolved_reference else ""
+        if resolved.intent == "PAGE_REFERENCE" and resolved.page_number:
+            focus_header = f" for **Page {resolved.page_number}**"
+        elif resolved.intent == "PAGE_RANGE_REFERENCE" and resolved.page_start:
+            focus_header = f" for **Pages {resolved.page_start}–{resolved.page_end}**"
+
         grounded_answer = (
             f"Based on your indexed workspace resource **{chunks[0].document_name}**{focus_header}:\n\n"
             f"{summary_chunks_text}\n\n"

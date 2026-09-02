@@ -265,6 +265,172 @@ class ChunkRepository:
 
         return results
 
+    async def get_chunks_by_page(
+        self,
+        workspace_id: str,
+        document_id: str,
+        page_number: int,
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieves all chunks for a specific page of a document.
+        STRICTLY SCOPED to workspace_id and document_id.
+        """
+        results: List[Dict[str, Any]] = []
+        pool = await get_db_pool()
+
+        if pool:
+            try:
+                async with pool.acquire() as conn:
+                    rows = await conn.fetch(
+                        """
+                        SELECT 
+                            c.id,
+                            c.workspace_id,
+                            c.document_id,
+                            c.chunk_index,
+                            c.page_number,
+                            c.heading,
+                            c.text,
+                            d.filename as document_name,
+                            d.title as document_title
+                        FROM document_chunks c
+                        JOIN documents d ON d.id = c.document_id
+                        WHERE c.workspace_id = $1
+                          AND c.document_id = $2
+                          AND c.page_number = $3
+                        ORDER BY c.chunk_index ASC
+                        """,
+                        workspace_id,
+                        uuid.UUID(document_id) if len(document_id) == 36 else document_id,
+                        page_number,
+                    )
+                    for r in rows:
+                        results.append(
+                            {
+                                "id": str(r["id"]),
+                                "workspace_id": r["workspace_id"],
+                                "document_id": str(r["document_id"]),
+                                "document_name": r["document_name"],
+                                "document_title": r["document_title"],
+                                "chunk_index": r["chunk_index"],
+                                "page_number": r["page_number"] or page_number,
+                                "heading": r["heading"],
+                                "text": r["text"],
+                                "similarity_score": 1.0,
+                            }
+                        )
+                    return results
+            except Exception as e:
+                logger.error(f"Error fetching page chunks from DB: {e}")
+
+        # In-memory fallback
+        matching = [
+            c for c in _memory_chunks.values()
+            if c["workspace_id"] == workspace_id
+            and str(c["document_id"]) == str(document_id)
+            and c.get("page_number", 1) == page_number
+        ]
+        matching.sort(key=lambda x: x.get("chunk_index", 0))
+        return [
+            {
+                "id": item["id"],
+                "workspace_id": item["workspace_id"],
+                "document_id": item["document_id"],
+                "document_name": item.get("document_name", "Workspace Document"),
+                "document_title": item.get("document_title", "Document"),
+                "chunk_index": item["chunk_index"],
+                "page_number": item.get("page_number", page_number),
+                "heading": item.get("heading"),
+                "text": item["text"],
+                "similarity_score": 1.0,
+            }
+            for item in matching
+        ]
+
+    async def get_chunks_by_page_range(
+        self,
+        workspace_id: str,
+        document_id: str,
+        start_page: int,
+        end_page: int,
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieves all chunks for a page range of a document.
+        STRICTLY SCOPED to workspace_id and document_id.
+        """
+        results: List[Dict[str, Any]] = []
+        pool = await get_db_pool()
+
+        if pool:
+            try:
+                async with pool.acquire() as conn:
+                    rows = await conn.fetch(
+                        """
+                        SELECT 
+                            c.id,
+                            c.workspace_id,
+                            c.document_id,
+                            c.chunk_index,
+                            c.page_number,
+                            c.heading,
+                            c.text,
+                            d.filename as document_name,
+                            d.title as document_title
+                        FROM document_chunks c
+                        JOIN documents d ON d.id = c.document_id
+                        WHERE c.workspace_id = $1
+                          AND c.document_id = $2
+                          AND c.page_number BETWEEN $3 AND $4
+                        ORDER BY c.page_number ASC, c.chunk_index ASC
+                        """,
+                        workspace_id,
+                        uuid.UUID(document_id) if len(document_id) == 36 else document_id,
+                        start_page,
+                        end_page,
+                    )
+                    for r in rows:
+                        results.append(
+                            {
+                                "id": str(r["id"]),
+                                "workspace_id": r["workspace_id"],
+                                "document_id": str(r["document_id"]),
+                                "document_name": r["document_name"],
+                                "document_title": r["document_title"],
+                                "chunk_index": r["chunk_index"],
+                                "page_number": r["page_number"] or start_page,
+                                "heading": r["heading"],
+                                "text": r["text"],
+                                "similarity_score": 1.0,
+                            }
+                        )
+                    return results
+            except Exception as e:
+                logger.error(f"Error fetching page range chunks from DB: {e}")
+
+        # In-memory fallback
+        matching = [
+            c for c in _memory_chunks.values()
+            if c["workspace_id"] == workspace_id
+            and str(c["document_id"]) == str(document_id)
+            and start_page <= c.get("page_number", 1) <= end_page
+        ]
+        matching.sort(key=lambda x: (x.get("page_number", 1), x.get("chunk_index", 0)))
+        return [
+            {
+                "id": item["id"],
+                "workspace_id": item["workspace_id"],
+                "document_id": item["document_id"],
+                "document_name": item.get("document_name", "Workspace Document"),
+                "document_title": item.get("document_title", "Document"),
+                "chunk_index": item["chunk_index"],
+                "page_number": item.get("page_number", start_page),
+                "heading": item.get("heading"),
+                "text": item["text"],
+                "similarity_score": 1.0,
+            }
+            for item in matching
+        ]
+
     async def delete_by_document(self, document_id: str) -> None:
         pool = await get_db_pool()
         if pool:

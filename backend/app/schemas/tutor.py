@@ -29,6 +29,7 @@ class RetrievalMetadata(BaseModel):
 class TutorRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=4000)
     conversation_id: Optional[str] = None
+    current_document_id: Optional[str] = None
 
 
 class TutorResponse(BaseModel):

@@ -42,6 +42,7 @@ async def ask_tutor(
             workspace_id=workspace_id,
             user_message=request.message,
             conversation_id=request.conversation_id,
+            current_document_id=request.current_document_id,
         )
         return response
     except ValueError as e:
