@@ -34,12 +34,19 @@ import {
 } from '@/lib/types/domain'
 import { tutorApiClient } from '@/lib/api/tutor-api-client'
 
-// Simulated in-memory storage for demo mutations & local fallback
-let workspacesState = [...demoWorkspaces]
-const documentsState = { ...demoDocumentsByWorkspace }
-const tutorMessagesState = { ...demoTutorMessagesByWorkspace }
-const studyPlansState = { ...demoStudyPlansByWorkspace }
-const activitiesState = { ...demoActivitiesByWorkspace }
+// In-memory workspace-scoped state tables
+let workspacesState: Workspace[] = [...demoWorkspaces]
+const documentsState: Record<string, WorkspaceDocument[]> = { ...demoDocumentsByWorkspace }
+const tutorMessagesState: Record<string, TutorMessage[]> = { ...demoTutorMessagesByWorkspace }
+const studyPlansState: Record<string, StudyPlan> = { ...demoStudyPlansByWorkspace }
+const activitiesState: Record<string, LearningActivity[]> = { ...demoActivitiesByWorkspace }
+const topicsState: Record<string, Topic[]> = { ...demoTopicsByWorkspace }
+const knowledgeGapsState: Record<string, KnowledgeGap[]> = { ...demoKnowledgeGapsByWorkspace }
+const readinessState: Record<string, LearningReadiness[]> = { ...demoReadinessByWorkspace }
+const recommendationsState: Record<string, AIRecommendation> = { ...demoRecommendationsByWorkspace }
+const roadmapsState: Record<string, Roadmap> = { ...demoRoadmapsByWorkspace }
+const quizzesState: Record<string, QuizQuestion[]> = { ...demoQuizzesByWorkspace }
+const flashcardDecksState: Record<string, FlashcardDeck[]> = { ...demoFlashcardDecksByWorkspace }
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -89,9 +96,18 @@ export const workspaceService = {
       lastActive: 'Just now',
       createdAt: new Date().toISOString().split('T')[0],
     }
+
     workspacesState = [newWs, ...workspacesState]
+
+    // Initialize completely clean, isolated workspace data
     documentsState[newId] = []
     tutorMessagesState[newId] = []
+    topicsState[newId] = []
+    knowledgeGapsState[newId] = []
+    readinessState[newId] = []
+    quizzesState[newId] = []
+    flashcardDecksState[newId] = []
+
     studyPlansState[newId] = {
       workspaceId: newId,
       dailyTargetMinutes: data.dailyTargetMinutes || 45,
@@ -100,6 +116,7 @@ export const workspaceService = {
       weekCompletedMinutes: 0,
       tasks: [],
     }
+
     activitiesState[newId] = [
       {
         id: `act_${Date.now()}`,
@@ -110,6 +127,7 @@ export const workspaceService = {
         timestamp: 'Just now',
       },
     ]
+
     return newWs
   },
 
@@ -129,15 +147,24 @@ export const workspaceService = {
     await delay(300)
     const initialLen = workspacesState.length
     workspacesState = workspacesState.filter((w) => w.id !== workspaceId)
+
+    // Complete cleanup of all workspace-keyed states
     delete documentsState[workspaceId]
     delete tutorMessagesState[workspaceId]
     delete studyPlansState[workspaceId]
     delete activitiesState[workspaceId]
+    delete topicsState[workspaceId]
+    delete knowledgeGapsState[workspaceId]
+    delete readinessState[workspaceId]
+    delete recommendationsState[workspaceId]
+    delete roadmapsState[workspaceId]
+    delete quizzesState[workspaceId]
+    delete flashcardDecksState[workspaceId]
+
     return workspacesState.length < initialLen
   },
 
   async removeDocument(workspaceId: string, documentId: string): Promise<boolean> {
-    // Attempt backend deletion
     await tutorApiClient.deleteDocument(documentId).catch(() => null)
 
     if (documentsState[workspaceId]) {
@@ -153,7 +180,6 @@ export const workspaceService = {
   },
 
   async getDocuments(workspaceId: string): Promise<WorkspaceDocument[]> {
-    // Attempt to query real backend first
     try {
       const backendDocs = await tutorApiClient.getWorkspaceDocuments(workspaceId)
       if (backendDocs && backendDocs.length > 0) {
@@ -177,83 +203,103 @@ export const workspaceService = {
       rawFile?: File
     }
   ): Promise<WorkspaceDocument> {
-    // If rawFile is provided, upload directly to FastAPI backend
+    let createdDoc: WorkspaceDocument
+
     if (file.rawFile) {
       try {
-        const doc = await tutorApiClient.uploadDocument(workspaceId, file.rawFile, file.title)
-        if (!documentsState[workspaceId]) {
-          documentsState[workspaceId] = []
-        }
-        documentsState[workspaceId] = [doc, ...documentsState[workspaceId]]
-        const ws = workspacesState.find((w) => w.id === workspaceId)
-        if (ws) ws.documentCount += 1
-        return doc
+        createdDoc = await tutorApiClient.uploadDocument(workspaceId, file.rawFile, file.title)
       } catch (err) {
         console.warn('Backend document upload failed, using local document indexing:', err)
+        createdDoc = {
+          id: `doc_${Date.now()}`,
+          workspaceId,
+          title: file.title,
+          filename: file.filename,
+          type: file.type,
+          sizeBytes: file.sizeBytes,
+          pagesCount: file.pagesCount,
+          status: 'ready',
+          chunksCount: Math.ceil(file.pagesCount * 1.8),
+          uploadedAt: new Date().toISOString().split('T')[0],
+          summary: 'Indexed semantic chunks ready for retrieval-augmented generation in AI Tutor.',
+        }
       }
-    }
-
-    await delay(300)
-    const newDoc: WorkspaceDocument = {
-      id: `doc_${Date.now()}`,
-      workspaceId,
-      title: file.title,
-      filename: file.filename,
-      type: file.type,
-      sizeBytes: file.sizeBytes,
-      pagesCount: file.pagesCount,
-      status: 'ready',
-      chunksCount: Math.ceil(file.pagesCount * 1.8),
-      uploadedAt: new Date().toISOString().split('T')[0],
-      summary: 'Indexed semantic chunks ready for retrieval-augmented generation in AI Tutor.',
+    } else {
+      await delay(300)
+      createdDoc = {
+        id: `doc_${Date.now()}`,
+        workspaceId,
+        title: file.title,
+        filename: file.filename,
+        type: file.type,
+        sizeBytes: file.sizeBytes,
+        pagesCount: file.pagesCount,
+        status: 'ready',
+        chunksCount: Math.ceil(file.pagesCount * 1.8),
+        uploadedAt: new Date().toISOString().split('T')[0],
+        summary: 'Indexed semantic chunks ready for retrieval-augmented generation in AI Tutor.',
+      }
     }
 
     if (!documentsState[workspaceId]) {
       documentsState[workspaceId] = []
     }
-    documentsState[workspaceId] = [newDoc, ...documentsState[workspaceId]]
+    documentsState[workspaceId] = [createdDoc, ...documentsState[workspaceId]]
 
     const ws = workspacesState.find((w) => w.id === workspaceId)
     if (ws) {
       ws.documentCount += 1
     }
 
-    return newDoc
+    // Record activity for this workspace
+    if (!activitiesState[workspaceId]) {
+      activitiesState[workspaceId] = []
+    }
+    activitiesState[workspaceId].unshift({
+      id: `act_${Date.now()}`,
+      workspaceId,
+      type: 'source_added',
+      title: 'Resource Indexed',
+      description: `Uploaded and indexed ${createdDoc.filename} (${createdDoc.pagesCount} pages).`,
+      timestamp: 'Just now',
+    })
+
+    return createdDoc
   },
 
   async getTopics(workspaceId: string): Promise<Topic[]> {
     await delay(120)
-    return demoTopicsByWorkspace[workspaceId] ? [...demoTopicsByWorkspace[workspaceId]] : []
+    return topicsState[workspaceId] ? [...topicsState[workspaceId]] : []
   },
 
   async getKnowledgeGaps(workspaceId: string): Promise<KnowledgeGap[]> {
     await delay(100)
-    return demoKnowledgeGapsByWorkspace[workspaceId] ? [...demoKnowledgeGapsByWorkspace[workspaceId]] : []
+    return knowledgeGapsState[workspaceId] ? [...knowledgeGapsState[workspaceId]] : []
   },
 
   async getLearningReadiness(workspaceId: string): Promise<LearningReadiness[]> {
     await delay(100)
-    return demoReadinessByWorkspace[workspaceId] ? [...demoReadinessByWorkspace[workspaceId]] : []
+    return readinessState[workspaceId] ? [...readinessState[workspaceId]] : []
   },
 
   async getRecommendation(workspaceId: string): Promise<AIRecommendation | null> {
     await delay(80)
-    return demoRecommendationsByWorkspace[workspaceId] ? { ...demoRecommendationsByWorkspace[workspaceId] } : null
+    return recommendationsState[workspaceId] ? { ...recommendationsState[workspaceId] } : null
   },
 
   async getRoadmap(workspaceId: string): Promise<Roadmap | null> {
     await delay(100)
-    return demoRoadmapsByWorkspace[workspaceId] ? { ...demoRoadmapsByWorkspace[workspaceId] } : null
+    return roadmapsState[workspaceId] ? { ...roadmapsState[workspaceId] } : null
   },
 
   async getQuizQuestions(workspaceId: string): Promise<QuizQuestion[]> {
     await delay(120)
-    return demoQuizzesByWorkspace[workspaceId] ? [...demoQuizzesByWorkspace[workspaceId]] : []
+    return quizzesState[workspaceId] ? [...quizzesState[workspaceId]] : []
   },
 
   async submitQuiz(workspaceId: string, answers: Record<string, string>): Promise<QuizResult> {
     await delay(350)
-    const questions = demoQuizzesByWorkspace[workspaceId] || []
+    const questions = quizzesState[workspaceId] || []
     let correctCount = 0
 
     questions.forEach((q) => {
@@ -265,7 +311,7 @@ export const workspaceService = {
     const total = questions.length || 1
     const accuracy = Math.round((correctCount / total) * 100)
 
-    return {
+    const result: QuizResult = {
       attemptId: `att_${Date.now()}`,
       score: correctCount,
       totalQuestions: total,
@@ -284,11 +330,27 @@ export const workspaceService = {
           ? 'Great performance! Your grasp of these core concepts is strong. Continue to advanced topics.'
           : 'Review identified weak concepts with AI Tutor before attempting the next milestone.',
     }
+
+    // Record activity for this workspace
+    if (!activitiesState[workspaceId]) {
+      activitiesState[workspaceId] = []
+    }
+    activitiesState[workspaceId].unshift({
+      id: `act_${Date.now()}`,
+      workspaceId,
+      type: 'quiz_completed',
+      title: 'Diagnostic Quiz Completed',
+      description: `Scored ${correctCount}/${total} (${accuracy}% accuracy).`,
+      timestamp: 'Just now',
+      scoreBadge: `${accuracy}% Score`,
+    })
+
+    return result
   },
 
   async getFlashcardDecks(workspaceId: string): Promise<FlashcardDeck[]> {
     await delay(120)
-    return demoFlashcardDecksByWorkspace[workspaceId] ? [...demoFlashcardDecksByWorkspace[workspaceId]] : []
+    return flashcardDecksState[workspaceId] ? [...flashcardDecksState[workspaceId]] : []
   },
 
   async getStudyPlan(workspaceId: string): Promise<StudyPlan | null> {
@@ -313,8 +375,8 @@ export const workspaceService = {
 
   async getActivities(workspaceId?: string): Promise<LearningActivity[]> {
     await delay(100)
-    if (workspaceId && activitiesState[workspaceId]) {
-      return [...activitiesState[workspaceId]]
+    if (workspaceId) {
+      return activitiesState[workspaceId] ? [...activitiesState[workspaceId]] : []
     }
     const all: LearningActivity[] = []
     Object.entries(activitiesState).forEach(([wsId, acts]) => {
@@ -357,33 +419,49 @@ export const workspaceService = {
     // 2. Local Grounded Synthesis Fallback
     await delay(400)
     const docs = documentsState[workspaceId] || []
-    const topDoc = docs[0] || {
-      id: 'doc_dsa_1',
-      filename: 'DSA_Core_Notes.pdf',
-      title: 'Data Structures & Algorithms',
-    }
+    const ws = workspacesState.find((w) => w.id === workspaceId)
+    const wsName = ws?.name || 'this workspace'
 
-    const assistantMsg: TutorMessage = {
-      id: `tm_a_${Date.now()}`,
-      workspaceId,
-      role: 'assistant',
-      content: `Grounded in **${topDoc.filename}** (Page 42):\n\nWhen analyzing **${userText}**, the source emphasizes the following principles:\n\n1. **Invariant Verification**: Check that boundary conditions and edge cases are enforced prior to recursive calls.\n2. **State Progression**: Ensure visited sets and active recursion stacks avoid duplicate cycles.\n3. **Termination**: Validate termination conditions to guarantee expected complexity.`,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      citations: [
-        {
-          id: `cit_${Date.now()}`,
-          documentId: topDoc.id,
-          documentName: topDoc.filename,
-          pageOrSlide: 42,
-          excerpt: 'Fundamental algorithm structure: Verify invariants, enforce state progression, and validate termination constraints.',
-          relevanceScore: 0.94,
-        },
-      ],
-      suggestedFollowUps: [
-        'Can you give a concrete step-by-step walkthrough?',
-        'What are the common edge cases and pitfall traps?',
-        'Quiz me on this concept right now',
-      ],
+    let assistantMsg: TutorMessage
+
+    if (docs.length === 0) {
+      // Empty workspace refusal behavior
+      assistantMsg = {
+        id: `tm_a_${Date.now()}`,
+        workspaceId,
+        role: 'assistant',
+        content: `Your workspace sources do not contain enough information to answer that reliably.\n\nI checked all indexed resources in **${wsName}**, but no documents have been uploaded yet. Please upload your lecture notes, syllabus, or textbook (PDF, DOCX, PPTX, or TXT) in the **Sources** tab to enable grounded tutoring.`,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        citations: [],
+        suggestedFollowUps: [
+          'How do I upload learning resources?',
+          'What file formats are supported?',
+        ],
+      }
+    } else {
+      const topDoc = docs[0]
+      assistantMsg = {
+        id: `tm_a_${Date.now()}`,
+        workspaceId,
+        role: 'assistant',
+        content: `Based on **${topDoc.filename}** (Page 1):\n\nWhen analyzing **${userText}**, your workspace resource highlights the following key points:\n\n1. **Core Concept**: Verified against the primary definitions in ${topDoc.title}.\n2. **Principles & Invariants**: Enforce state progression and review domain constraints.\n3. **Application**: Apply the methodology step-by-step to achieve high precision.`,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        citations: [
+          {
+            id: `cit_${Date.now()}`,
+            documentId: topDoc.id,
+            documentName: topDoc.filename,
+            pageOrSlide: 1,
+            excerpt: `Core principles and methodology extracted from ${topDoc.title}.`,
+            relevanceScore: 0.92,
+          },
+        ],
+        suggestedFollowUps: [
+          'Can you walk through a concrete example?',
+          'What are the common edge cases?',
+          'Quiz me on this concept',
+        ],
+      }
     }
 
     tutorMessagesState[workspaceId].push(assistantMsg)

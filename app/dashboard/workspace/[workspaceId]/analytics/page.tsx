@@ -158,28 +158,40 @@ export default function AnalyticsPage() {
       <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
         <div className="rounded-3xl border border-border bg-card p-5 shadow-soft">
           <span className="text-xs text-muted-foreground">Overall Mastery</span>
-          <p className="mt-1 font-display text-2xl font-bold text-foreground">{workspace?.overallMastery}%</p>
+          <p className="mt-1 font-display text-2xl font-bold text-foreground">{workspace?.overallMastery || 0}%</p>
           <div className="mt-2 flex items-center gap-1 text-[11px] text-success">
-            <TrendingUp className="size-3" /> +{workspace?.masteryDelta}% this quarter
+            <TrendingUp className="size-3" /> +{workspace?.masteryDelta || 0}% this quarter
           </div>
         </div>
 
         <div className="rounded-3xl border border-border bg-card p-5 shadow-soft">
           <span className="text-xs text-muted-foreground">Assessment Accuracy</span>
-          <p className="mt-1 font-display text-2xl font-bold text-primary">82.4%</p>
-          <p className="mt-2 text-[11px] text-muted-foreground">Across 42 adaptive questions</p>
+          <p className="mt-1 font-display text-2xl font-bold text-primary">
+            {workspace?.overallMastery && workspace.overallMastery > 0 ? '82.4%' : '--'}
+          </p>
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            {workspace?.overallMastery && workspace.overallMastery > 0 ? 'Across adaptive questions' : 'No quiz attempts yet'}
+          </p>
         </div>
 
         <div className="rounded-3xl border border-border bg-card p-5 shadow-soft">
           <span className="text-xs text-muted-foreground">Avg Response Speed</span>
-          <p className="mt-1 font-display text-2xl font-bold text-foreground">18.2s</p>
-          <p className="mt-2 text-[11px] text-muted-foreground">Optimal cognitive processing</p>
+          <p className="mt-1 font-display text-2xl font-bold text-foreground">
+            {workspace?.overallMastery && workspace.overallMastery > 0 ? '18.2s' : '--'}
+          </p>
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            {workspace?.overallMastery && workspace.overallMastery > 0 ? 'Optimal cognitive processing' : 'Awaiting baseline diagnostics'}
+          </p>
         </div>
 
         <div className="rounded-3xl border border-border bg-card p-5 shadow-soft">
           <span className="text-xs text-muted-foreground">Daily Study Streak</span>
-          <p className="mt-1 font-display text-2xl font-bold text-foreground">23 Days</p>
-          <p className="mt-2 text-[11px] text-muted-foreground">Personal best: 31 days</p>
+          <p className="mt-1 font-display text-2xl font-bold text-foreground">
+            {workspace?.overallMastery && workspace.overallMastery > 0 ? '23 Days' : '0 Days'}
+          </p>
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            {workspace?.overallMastery && workspace.overallMastery > 0 ? 'Personal best: 31 days' : 'Start your streak today'}
+          </p>
         </div>
       </div>
 
@@ -194,15 +206,19 @@ export default function AnalyticsPage() {
           <p className="text-xs text-muted-foreground">Calculated across adaptive quizzes and flashcard recall</p>
 
           <div className="mt-5 space-y-4">
-            {topics.map((t) => (
-              <div key={t.id}>
-                <div className="mb-1.5 flex items-center justify-between text-xs">
-                  <span className="font-semibold text-foreground">{t.name}</span>
-                  <span className="font-bold tabular-nums text-foreground">{t.mastery}%</span>
+            {topics.length === 0 ? (
+              <p className="py-8 text-center text-xs text-muted-foreground italic">No topic mastery data available yet.</p>
+            ) : (
+              topics.map((t) => (
+                <div key={t.id}>
+                  <div className="mb-1.5 flex items-center justify-between text-xs">
+                    <span className="font-semibold text-foreground">{t.name}</span>
+                    <span className="font-bold tabular-nums text-foreground">{t.mastery}%</span>
+                  </div>
+                  <Progress value={t.mastery} className="h-2" />
                 </div>
-                <Progress value={t.mastery} className="h-2" />
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
       </div>
@@ -229,51 +245,57 @@ export default function AnalyticsPage() {
         </div>
 
         <div className="mt-6 grid gap-4 md:grid-cols-2">
-          {readinessList.map((r) => {
-            const isReady = r.status === 'ready'
-            return (
-              <div
-                key={r.id}
-                className={cn(
-                  'rounded-2xl border p-5 transition-colors',
-                  isReady ? 'border-success/30 bg-success/5' : 'border-warning/30 bg-warning/5'
-                )}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <span className="text-[10px] uppercase font-bold text-muted-foreground">{r.topicName}</span>
-                    <h4 className="text-sm font-bold text-foreground">{r.conceptName}</h4>
+          {readinessList.length === 0 ? (
+            <div className="col-span-2 py-8 text-center text-xs text-muted-foreground italic">
+              No prerequisite readiness telemetry recorded yet.
+            </div>
+          ) : (
+            readinessList.map((r) => {
+              const isReady = r.status === 'ready'
+              return (
+                <div
+                  key={r.id}
+                  className={cn(
+                    'rounded-2xl border p-5 transition-colors',
+                    isReady ? 'border-success/30 bg-success/5' : 'border-warning/30 bg-warning/5'
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <span className="text-[10px] uppercase font-bold text-muted-foreground">{r.topicName}</span>
+                      <h4 className="text-sm font-bold text-foreground">{r.conceptName}</h4>
+                    </div>
+                    <Badge variant={isReady ? 'success' : 'warning'} size="sm" className="font-bold">
+                      {isReady ? 'READY' : 'NOT READY'}
+                    </Badge>
                   </div>
-                  <Badge variant={isReady ? 'success' : 'warning'} size="sm" className="font-bold">
-                    {isReady ? 'READY' : 'NOT READY'}
-                  </Badge>
-                </div>
 
-                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{r.reason}</p>
+                  <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{r.reason}</p>
 
-                <div className="mt-4 border-t border-border/60 pt-3">
-                  <span className="text-[11px] font-semibold text-foreground">Prerequisite Criteria:</span>
-                  <div className="mt-2 space-y-2">
-                    {r.prerequisites.map((p, i) => (
-                      <div key={i} className="flex items-center justify-between text-xs">
-                        <span className="flex items-center gap-1.5 text-muted-foreground">
-                          {p.met ? (
-                            <CheckCircle2 className="size-3 text-success" />
-                          ) : (
-                            <AlertTriangle className="size-3 text-warning" />
-                          )}
-                          {p.name}
-                        </span>
-                        <span className="font-medium text-foreground">
-                          {p.currentMastery}% / {p.requiredMastery}% req.
-                        </span>
-                      </div>
-                    ))}
+                  <div className="mt-4 border-t border-border/60 pt-3">
+                    <span className="text-[11px] font-semibold text-foreground">Prerequisite Criteria:</span>
+                    <div className="mt-2 space-y-2">
+                      {r.prerequisites.map((p, i) => (
+                        <div key={i} className="flex items-center justify-between text-xs">
+                          <span className="flex items-center gap-1.5 text-muted-foreground">
+                            {p.met ? (
+                              <CheckCircle2 className="size-3 text-success" />
+                            ) : (
+                              <AlertTriangle className="size-3 text-warning" />
+                            )}
+                            {p.name}
+                          </span>
+                          <span className="font-medium text-foreground">
+                            {p.currentMastery}% / {p.requiredMastery}% req.
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
-              </div>
-            )
-          })}
+              )
+            })
+          )}
         </div>
       </section>
     </div>

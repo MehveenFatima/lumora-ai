@@ -37,9 +37,7 @@ export function CreateWorkspaceModal({ isOpen, onClose }: CreateWorkspaceModalPr
   const [targetDate, setTargetDate] = useState('2026-07-31')
   const [dailyMinutes, setDailyMinutes] = useState(45)
   const [description, setDescription] = useState('')
-  const [uploadedFiles, setUploadedFiles] = useState<Array<{ name: string; size: string }>>([
-    { name: 'Course_Syllabus_and_Notes.pdf', size: '4.2 MB' },
-  ])
+  const [uploadedFiles, setUploadedFiles] = useState<Array<{ name: string; size: string }>>([])
 
   if (!isOpen) return null
 

@@ -67,10 +67,24 @@ export default function AdaptiveQuizPage() {
 
   if (questions.length === 0) {
     return (
-      <div className="flex h-full w-full items-center justify-center p-8">
-        <div className="text-center">
-          <Zap className="mx-auto size-8 text-muted-foreground" />
-          <p className="mt-2 text-sm text-muted-foreground">Preparing adaptive quiz questions for {workspace?.name}...</p>
+      <div className="mx-auto w-full max-w-2xl px-4 py-16 text-center">
+        <div className="rounded-3xl border border-dashed border-border bg-card/50 p-10">
+          <Zap className="mx-auto size-10 text-muted-foreground/60" />
+          <h2 className="mt-4 font-display text-lg font-semibold text-foreground">
+            No Quiz Questions Available Yet
+          </h2>
+          <p className="mt-2 text-xs text-muted-foreground leading-relaxed max-w-md mx-auto">
+            Upload lecture slides, textbooks, or notes in the Sources tab to automatically generate adaptive diagnostic quizzes for {workspace?.name || 'this workspace'}.
+          </p>
+          <div className="mt-6 flex justify-center gap-3">
+            <Link
+              href={`/dashboard/workspace/${workspaceId}/sources`}
+              className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-xs font-semibold text-primary-foreground shadow-glow"
+            >
+              <span>Manage Learning Sources</span>
+              <ArrowRight className="size-3.5" />
+            </Link>
+          </div>
         </div>
       </div>
     )

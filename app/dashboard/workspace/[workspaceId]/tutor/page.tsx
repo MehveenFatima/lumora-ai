@@ -179,6 +179,36 @@ export default function AiTutorPage() {
 
         {/* Message Thread */}
         <div className="flex-1 space-y-5 overflow-y-auto p-4 md:p-6">
+          {messages.length === 0 && !isTyping && (
+            <div className="flex h-full flex-col items-center justify-center py-12 text-center animate-in fade-in duration-200">
+              <div className="mx-auto flex size-14 items-center justify-center rounded-2xl bg-primary/10 text-primary shadow-glow">
+                <Sparkles className="size-7" />
+              </div>
+              <h3 className="mt-4 font-display text-base font-semibold text-foreground">
+                AI Tutor — {workspace?.name || 'Workspace'}
+              </h3>
+              <p className="mt-1.5 max-w-md text-xs text-muted-foreground leading-relaxed">
+                {documents.length > 0
+                  ? `Ask any question grounded in your ${documents.length} indexed workspace resources. LumoraAI will retrieve relevant passages and provide citations.`
+                  : `No documents uploaded to this workspace yet. Upload lecture notes or textbooks in the Sources tab, or ask a question to get started.`}
+              </p>
+              <div className="mt-6 flex flex-wrap justify-center gap-2">
+                <button
+                  onClick={() => handleSendMessage('Give me a high-level conceptual overview of the key topics in this workspace.')}
+                  className="rounded-full border border-border bg-card px-3.5 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
+                >
+                  💡 Conceptual Overview
+                </button>
+                <button
+                  onClick={() => handleSendMessage('What are the foundational prerequisite concepts I should review first?')}
+                  className="rounded-full border border-border bg-card px-3.5 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
+                >
+                  🎯 Prerequisite Foundations
+                </button>
+              </div>
+            </div>
+          )}
+
           {messages.map((m) => {
             const isUser = m.role === 'user'
             return (

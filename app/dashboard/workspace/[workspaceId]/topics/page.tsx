@@ -110,10 +110,28 @@ export default function TopicsPage() {
       </div>
 
       {/* Main 2-Column Layout: Topic Cards & Selected Topic Detail Drawer */}
-      <div className="mt-6 grid gap-6 lg:grid-cols-12">
-        {/* Left Column: Topics Grid */}
-        <div className="space-y-4 lg:col-span-7">
-          {filteredTopics.map((topic) => {
+      {topics.length === 0 ? (
+        <div className="mt-8 rounded-3xl border border-dashed border-border bg-card/40 p-12 text-center">
+          <BookOpen className="mx-auto size-10 text-muted-foreground/60" />
+          <h3 className="mt-3 font-display text-base font-semibold text-foreground">No Topics Indexed Yet</h3>
+          <p className="mt-1 text-xs text-muted-foreground max-w-md mx-auto">
+            Upload your syllabus, lecture slides, or textbook notes in the Sources tab to automatically extract curriculum topics and concepts.
+          </p>
+          <div className="mt-5 flex justify-center">
+            <Link
+              href={`/dashboard/workspace/${workspaceId}/sources`}
+              className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-xs font-semibold text-primary-foreground shadow-glow"
+            >
+              <span>Manage Learning Sources</span>
+              <ChevronRight className="size-3.5" />
+            </Link>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-6 grid gap-6 lg:grid-cols-12">
+          {/* Left Column: Topics Grid */}
+          <div className="space-y-4 lg:col-span-7">
+            {filteredTopics.map((topic) => {
             const isSelected = selectedTopic?.id === topic.id
             const isStrong = topic.status === 'strong'
             const isDeveloping = topic.status === 'developing'
@@ -265,6 +283,7 @@ export default function TopicsPage() {
           )}
         </div>
       </div>
+      )}
     </div>
   )
 }

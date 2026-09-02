@@ -77,10 +77,24 @@ export default function FlashcardsPage() {
 
   if (!currentDeck || currentCards.length === 0) {
     return (
-      <div className="flex h-full w-full items-center justify-center p-8">
-        <div className="text-center">
-          <Layers className="mx-auto size-8 text-muted-foreground" />
-          <p className="mt-2 text-sm text-muted-foreground">No flashcards available for this workspace yet.</p>
+      <div className="mx-auto w-full max-w-2xl px-4 py-16 text-center">
+        <div className="rounded-3xl border border-dashed border-border bg-card/50 p-10">
+          <Layers className="mx-auto size-10 text-muted-foreground/60" />
+          <h2 className="mt-4 font-display text-lg font-semibold text-foreground">
+            No Flashcard Decks Available Yet
+          </h2>
+          <p className="mt-2 text-xs text-muted-foreground leading-relaxed max-w-md mx-auto">
+            Upload course notes or slides in the Sources tab to generate spaced repetition decks for {workspace?.name || 'this workspace'}.
+          </p>
+          <div className="mt-6 flex justify-center gap-3">
+            <Link
+              href={`/dashboard/workspace/${workspaceId}/sources`}
+              className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-xs font-semibold text-primary-foreground shadow-glow"
+            >
+              <span>Manage Learning Sources</span>
+              <ArrowRight className="size-3.5" />
+            </Link>
+          </div>
         </div>
       </div>
     )
