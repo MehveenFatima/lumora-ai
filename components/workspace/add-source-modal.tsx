@@ -171,6 +171,7 @@ export function AddSourceModal({
               type: fType,
               sizeBytes: file.size,
               pagesCount: estimatedPages,
+              rawFile: file,
             })
 
             setTimeout(() => {
