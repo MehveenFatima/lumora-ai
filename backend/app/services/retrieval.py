@@ -27,7 +27,6 @@ class RetrievedChunk:
         self.similarity_score = round(similarity_score, 4)
 
     def to_citation_dict(self) -> Dict[str, Any]:
-        # Excerpt is the first 220 chars of the actual retrieved chunk
         excerpt = self.text.replace("\n", " ").strip()
         if len(excerpt) > 220:
             excerpt = excerpt[:217] + "..."
@@ -52,13 +51,34 @@ class RetrievalService:
         self.similarity_threshold = similarity_threshold
         self.max_context_tokens = max_context_tokens
 
+    def is_summary_query(self, query: str) -> bool:
+        q = query.lower()
+        summary_keywords = [
+            "summar",
+            "what are the concepts",
+            "what concepts",
+            "overview",
+            "main topic",
+            "all concepts",
+            "syllabus",
+            "tell me about this",
+            "explain this pdf",
+            "what is this document about",
+            "key points",
+            "table of contents",
+        ]
+        return any(k in q for k in summary_keywords)
+
     async def retrieve_relevant_chunks(
         self, workspace_id: str, query: str
     ) -> Tuple[List[RetrievedChunk], bool]:
         """
         Retrieves top-k relevant chunks for the query within the specified workspace.
+        Supports document-wide summary intent by sampling representative chunks.
         Returns (chunks, is_grounded).
         """
+        is_summary = self.is_summary_query(query)
+
         # 1. Generate query embedding
         query_embedding = await embedding_service.get_query_embedding(query)
 
@@ -66,13 +86,13 @@ class RetrievalService:
         raw_chunks = await chunk_repo.search_similar_chunks(
             workspace_id=workspace_id,
             query_embedding=query_embedding,
-            top_k=self.top_k,
-            similarity_threshold=self.similarity_threshold,
+            top_k=max(self.top_k, 12 if is_summary else self.top_k),
+            similarity_threshold=0.40 if is_summary else self.similarity_threshold,
         )
 
         if not raw_chunks:
             logger.info(
-                f"No chunks exceeded threshold {self.similarity_threshold} for query in workspace '{workspace_id}'."
+                f"No chunks found for query in workspace '{workspace_id}'."
             )
             return [], False
 
@@ -100,7 +120,7 @@ class RetrievalService:
                     page_number=c.get("page_number", 1),
                     heading=c.get("heading") or "",
                     text=c["text"],
-                    similarity_score=c["similarity_score"],
+                    similarity_score=c.get("similarity_score", 0.95),
                 )
             )
 

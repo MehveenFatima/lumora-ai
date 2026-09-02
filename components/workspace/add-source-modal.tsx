@@ -139,49 +139,41 @@ export function AddSourceModal({
 
     const fType = getFileType(file.name)
     const title = file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' ')
-    const estimatedPages = Math.max(12, Math.round(file.size / (150 * 1024)))
+    const estimatedPages = Math.max(1, Math.round(file.size / (150 * 1024)))
 
-    // Step 1: Uploading
-    setStage('uploading')
-    setProgressPercent(20)
+    try {
+      setStage('uploading')
+      setProgressPercent(30)
 
-    setTimeout(() => {
-      // Step 2: Processing
-      setStage('processing')
-      setProgressPercent(45)
+      setStage('extracting')
+      setProgressPercent(60)
+
+      const newDoc = await workspaceService.addDocument(workspaceId, {
+        title,
+        filename: file.name,
+        type: fType,
+        sizeBytes: file.size,
+        pagesCount: estimatedPages,
+        rawFile: file,
+      })
+
+      setStage('indexing')
+      setProgressPercent(90)
 
       setTimeout(() => {
-        // Step 3: Extracting
-        setStage('extracting')
-        setProgressPercent(70)
+        setStage('ready')
+        setProgressPercent(100)
 
         setTimeout(() => {
-          // Step 4: Indexing
-          setStage('indexing')
-          setProgressPercent(90)
-
-          setTimeout(async () => {
-            // Step 5: Ready
-            setStage('ready')
-            setProgressPercent(100)
-
-            const newDoc = await workspaceService.addDocument(workspaceId, {
-              title,
-              filename: file.name,
-              type: fType,
-              sizeBytes: file.size,
-              pagesCount: estimatedPages,
-              rawFile: file,
-            })
-
-            setTimeout(() => {
-              onSourceAdded(newDoc)
-              onClose()
-            }, 600)
-          }, 600)
-        }, 500)
-      }, 500)
-    }, 500)
+          onSourceAdded(newDoc)
+          onClose()
+        }, 400)
+      }, 300)
+    } catch (err: any) {
+      console.error('Failed to add document source:', err)
+      setValidationError(err.message || 'Failed to upload document.')
+      setStage('idle')
+    }
   }
 
   const formatFileSize = (bytes: number) => {

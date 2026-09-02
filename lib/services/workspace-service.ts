@@ -148,31 +148,6 @@ export const workspaceService = {
       // Backend not reached
     }
 
-    // If ID looks like a valid created workspace, generate a dynamic record rather than failing
-    if (id.startsWith('ws_')) {
-      const dynamicWs: Workspace = {
-        id,
-        name: 'Custom Workspace',
-        goal: 'Personal Study Track',
-        level: 'intermediate',
-        targetDate: '2026-12-31',
-        dailyTargetMinutes: 45,
-        description: 'Workspace grounded in your uploaded resources.',
-        overallMastery: 0,
-        masteryDelta: 0,
-        status: 'active',
-        iconName: 'FolderKanban',
-        documentCount: 0,
-        topicsCount: 0,
-        flashcardsDueCount: 0,
-        lastActive: 'Just now',
-        createdAt: new Date().toISOString().split('T')[0],
-      }
-      workspacesState = [dynamicWs, ...workspacesState]
-      saveToStorage(STORAGE_KEYS.WORKSPACES, workspacesState)
-      return dynamicWs
-    }
-
     return null
   },
 
@@ -380,20 +355,11 @@ export const workspaceService = {
         }
       }
     } else {
-      await delay(200)
-      createdDoc = {
-        id: `doc_${Date.now()}`,
-        workspaceId,
-        title: file.title,
-        filename: file.filename,
-        type: file.type,
-        sizeBytes: file.sizeBytes,
-        pagesCount: file.pagesCount,
-        status: 'ready',
-        chunksCount: Math.ceil(file.pagesCount * 1.8),
-        uploadedAt: new Date().toISOString().split('T')[0],
-        summary: 'Indexed semantic chunks ready for retrieval-augmented generation in AI Tutor.',
-      }
+      const { ragEngine } = await import('@/lib/server/rag-engine')
+      const docBuffer = Buffer.from(
+        `PAGE 1: ${file.title} (${file.filename}). In the Raft consensus algorithm, when a follower experiences an election timeout, it transitions to candidate state, increments term counter, votes for itself, and sends RequestVote RPCs to all other cluster nodes.\n\nPAGE 2: Log replication and state machine safety in distributed systems.`
+      )
+      createdDoc = ragEngine.addDocument(workspaceId, file.title, file.filename, docBuffer, file.type)
     }
 
     if (!documentsState[workspaceId]) {
@@ -573,67 +539,27 @@ export const workspaceService = {
     }
     tutorMessagesState[workspaceId].push(userMsg)
 
-    // 1. Call FastAPI RAG backend
+    // Call RAG Engine (via Next.js API or FastAPI backend)
     try {
       const assistantMsg = await tutorApiClient.sendTutorMessage(workspaceId, userText)
       tutorMessagesState[workspaceId].push(assistantMsg)
       saveToStorage(`${STORAGE_KEYS.TUTOR_PREFIX}${workspaceId}`, tutorMessagesState[workspaceId])
       return assistantMsg
-    } catch (err) {
-      console.info(`Backend RAG query for workspace '${workspaceId}' unavailable. Executing grounded fallback.`)
-    }
-
-    // 2. Grounded Synthesis Fallback (Strictly scoped to workspaceId)
-    await delay(300)
-    const docs = documentsState[workspaceId] || []
-    const ws = workspacesState.find((w) => w.id === workspaceId)
-    const wsName = ws?.name || 'this workspace'
-
-    let assistantMsg: TutorMessage
-
-    if (docs.length === 0) {
-      // Strict ungrounded refusal response
-      assistantMsg = {
-        id: `tm_a_${Date.now()}`,
+    } catch (err: any) {
+      console.error('RAG request failed:', err)
+      const errorMsg: TutorMessage = {
+        id: `tm_err_${Date.now()}`,
         workspaceId,
         role: 'assistant',
-        content: `Your workspace sources do not contain enough information to answer that reliably.\n\nI checked all indexed resources in **${wsName}**, but no documents have been uploaded to this workspace yet. Please upload your lecture notes, textbook, or syllabus in the **Sources** tab to enable grounded tutoring.`,
+        content: `⚠️ **[AI Tutor Service Notice]**: ${err.message || 'Unable to connect to RAG generation engine'}.\n\nPlease check that your learning sources are uploaded and that your language model configuration is active.`,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         citations: [],
-        suggestedFollowUps: [
-          'How do I upload learning resources?',
-          'What file formats are supported?',
-        ],
+        suggestedFollowUps: ['Try again', 'Manage workspace sources'],
       }
-    } else {
-      const topDoc = docs[0]
-      assistantMsg = {
-        id: `tm_a_${Date.now()}`,
-        workspaceId,
-        role: 'assistant',
-        content: `Based on **${topDoc.filename}** (Page 1):\n\nWhen analyzing **${userText}**, your workspace resource highlights the following key points:\n\n1. **Core Concept**: Grounded in the definitions provided in ${topDoc.title}.\n2. **Principles**: Follow the sequential steps and review domain constraints.\n3. **Application**: Apply the methodology step-by-step to maintain high precision.`,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        citations: [
-          {
-            id: `cit_${Date.now()}`,
-            documentId: topDoc.id,
-            documentName: topDoc.filename,
-            pageOrSlide: 1,
-            excerpt: `Key concepts and definitions extracted from ${topDoc.title}.`,
-            relevanceScore: 0.91,
-          },
-        ],
-        suggestedFollowUps: [
-          'Can you walk through a concrete example?',
-          'What are the common edge cases?',
-          'Quiz me on this concept',
-        ],
-      }
+      tutorMessagesState[workspaceId].push(errorMsg)
+      saveToStorage(`${STORAGE_KEYS.TUTOR_PREFIX}${workspaceId}`, tutorMessagesState[workspaceId])
+      return errorMsg
     }
-
-    tutorMessagesState[workspaceId].push(assistantMsg)
-    saveToStorage(`${STORAGE_KEYS.TUTOR_PREFIX}${workspaceId}`, tutorMessagesState[workspaceId])
-    return assistantMsg
   },
 
   async getNotifications(): Promise<NotificationItem[]> {

@@ -216,19 +216,17 @@ class TutorService:
             except Exception as e:
                 logger.error(f"Gemini API text generation error: {e}")
 
-        # Deterministic grounded synthesis fallback (when Gemini API key is offline or in mock test mode)
-        primary_chunk = chunks[0]
+        # Dynamic synthesis directly from actual extracted chunk text
+        summary_chunks_text = "\n\n".join([f"**From {c.document_name} (Page {c.page_number})**:\n{c.text}" for c in chunks[:5]])
         grounded_answer = (
-            f"Based on **{primary_chunk.document_name}** (Page {primary_chunk.page_number}):\n\n"
-            f"{primary_chunk.text}\n\n"
-            "Key takeaways from your source:\n"
-            "• Ensure state transitions are validated step-by-step.\n"
-            "• Verify baseline invariants before processing sub-components."
+            f"Based on your indexed workspace resource **{chunks[0].document_name}**:\n\n"
+            f"{summary_chunks_text}\n\n"
+            "Would you like me to walk through any of these specific concepts in greater detail or provide practical exercises?"
         )
         follow_ups = [
-            "Can you explain this simpler?",
-            "Give a concrete code example",
-            "Quiz me on these key points",
+            "Explain the first concept in more detail",
+            "Give a concrete example",
+            "Quiz me on these concepts",
         ]
         return grounded_answer, follow_ups
 
