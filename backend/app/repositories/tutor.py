@@ -109,13 +109,14 @@ class TutorRepository:
                         SELECT id, role, content, citations, created_at
                         FROM tutor_messages
                         WHERE conversation_id = $1
-                        ORDER BY created_at ASC
+                        ORDER BY created_at DESC
                         LIMIT $2
                         """,
                         uuid.UUID(conversation_id),
                         limit,
                     )
                     if rows:
+                        chrono_rows = list(reversed(rows))
                         return [
                             {
                                 "id": str(r["id"]),
@@ -124,7 +125,7 @@ class TutorRepository:
                                 "citations": r["citations"] if isinstance(r["citations"], list) else json.loads(r["citations"] or "[]"),
                                 "created_at": r["created_at"],
                             }
-                            for r in rows
+                            for r in chrono_rows
                         ]
             except Exception as e:
                 logger.error(f"Error fetching conversation messages: {e}")

@@ -53,20 +53,111 @@ class RetrievalService:
         self.similarity_threshold = similarity_threshold
         self.max_context_tokens = max_context_tokens
 
-    async def resolve_document_and_intent(
-        self, workspace_id: str, query: str
-    ) -> Tuple[str, Optional[str], Optional[str], str]:
+    def extract_concepts_from_history(
+        self, recent_history: Optional[List[Dict[str, Any]]]
+    ) -> Tuple[List[str], Optional[str], Optional[str]]:
         """
-        Resolves query intent and matches any referenced document in the workspace.
-        Returns (intent, target_document_id, target_document_name, cleaned_query).
+        Extracts structured concepts and last referenced document from the most recent assistant messages.
+        Returns (concepts_list, last_document_id, last_document_name).
+        """
+        if not recent_history:
+            return [], None, None
+
+        last_assistant_msg = ""
+        last_doc_id = None
+        last_doc_name = None
+
+        for msg in reversed(recent_history):
+            if msg.get("role") == "assistant" and not last_assistant_msg:
+                last_assistant_msg = msg.get("content", "")
+                citations = msg.get("citations", [])
+                if citations and isinstance(citations, list) and len(citations) > 0:
+                    last_doc_id = str(citations[0].get("document_id"))
+                    last_doc_name = citations[0].get("document_name")
+
+        if not last_assistant_msg:
+            return [], last_doc_id, last_doc_name
+
+        concepts: List[str] = []
+
+        # 1. Numbered items: "1. SSL Handshake Protocol: ..." or "1. **SSL Handshake Protocol**"
+        numbered = re.findall(
+            r"(?:^|\n)\s*(?:\d+[\.\)]|\([0-9]+\))\s*(?:\*\*)?([^\n\:\-\*]+?)(?:\*\*)?(?:\:|\s*\-|\s*—|\n|$)",
+            last_assistant_msg,
+        )
+        for c in numbered:
+            clean_c = c.strip(" *#-_`").strip()
+            if len(clean_c) >= 3 and clean_c.lower() not in [
+                "core concept",
+                "principles",
+                "application",
+                "step",
+                "note",
+                "summary",
+                "overview",
+                "conclusion",
+            ]:
+                concepts.append(clean_c)
+
+        # 2. Bold headers: "**SSL Handshake Protocol**"
+        if not concepts:
+            bold_items = re.findall(r"\*\*([^\*\n]+?)\*\*", last_assistant_msg)
+            for b in bold_items:
+                clean_b = b.strip()
+                if (
+                    len(clean_b) >= 3
+                    and len(clean_b.split()) <= 7
+                    and not clean_b.lower().startswith("from ")
+                    and not clean_b.lower().startswith("source")
+                    and not clean_b.lower().startswith("based on")
+                ):
+                    concepts.append(clean_b)
+
+        # 3. Bullet points: "- SSL Handshake: ..." or "* SSL Handshake: ..."
+        if not concepts:
+            bullets = re.findall(
+                r"(?:^|\n)\s*[\-\*•]\s*([^\n\:\-]+?)(?:\:|\s*\-|\n|$)",
+                last_assistant_msg,
+            )
+            for b in bullets:
+                clean_b = b.strip(" *#-_`").strip()
+                if len(clean_b) >= 3:
+                    concepts.append(clean_b)
+
+        return concepts, last_doc_id, last_doc_name
+
+    async def resolve_document_and_intent(
+        self,
+        workspace_id: str,
+        query: str,
+        recent_history: Optional[List[Dict[str, Any]]] = None,
+    ) -> Tuple[str, Optional[str], Optional[str], Optional[str], str]:
+        """
+        Resolves query intent and matches any referenced document or concept reference.
+        Returns:
+            (intent, target_document_id, target_document_name, resolved_reference, cleaned_query)
         """
         q_lower = query.lower().strip()
         docs = await document_repo.list_by_workspace(workspace_id)
 
         target_doc_id = None
         target_doc_name = None
+        resolved_reference = None
 
-        # 1. Filename / Title matching
+        # 1. Check for WORKSPACE_METADATA intent
+        metadata_patterns = [
+            r"what (sources|documents|files|topics|materials) (are|do i have|exist|are indexed|are uploaded|are in this workspace|in this workspace)",
+            r"how many (sources|documents|files|topics|pages) (are|do i have|exist|indexed|uploaded)",
+            r"(show|list|tell) (me )?(all )?(available )?(sources|documents|files|topics|indexed)",
+            r"what is (currently )?(indexed|in this workspace|uploaded)",
+            r"which documents (are ready|do i have|are available)",
+            r"what topics are (currently )?indexed",
+            r"what files have i uploaded",
+        ]
+        if any(re.search(pat, q_lower) for pat in metadata_patterns):
+            return "WORKSPACE_METADATA", None, None, None, query
+
+        # 2. Match Explicit Filename or Title in Query
         for d in docs:
             fn = d.get("filename", "").lower()
             title = d.get("title", "").lower()
@@ -82,9 +173,9 @@ class RetrievalService:
                 target_doc_name = d.get("filename")
                 break
 
-        # 2. Anaphoric resolution ("this pdf", "this document", "it", "the file")
+        # 3. Anaphoric document matching if single document in workspace
         if not target_doc_id and len(docs) == 1:
-            anaphoric = [
+            doc_anaphors = [
                 "this pdf",
                 "this document",
                 "this source",
@@ -92,21 +183,65 @@ class RetrievalService:
                 "the document",
                 "the pdf",
                 "the file",
-                "summarize it",
-                "explain it",
-                "from it",
-                "about it",
             ]
-            if any(term in q_lower for term in anaphoric) or "summar" in q_lower:
+            if any(term in q_lower for term in doc_anaphors):
                 target_doc_id = str(docs[0].get("id"))
                 target_doc_name = docs[0].get("filename")
 
-        # 3. Clean query
+        # 4. Check for CONTEXTUAL_FOLLOWUP (references to prior conversational turns)
+        history_concepts, last_doc_id, last_doc_name = self.extract_concepts_from_history(recent_history)
+        if not target_doc_id and last_doc_id:
+            # Inherit active document from recent conversation if it belongs to current workspace
+            if any(str(d.get("id")) == last_doc_id for d in docs):
+                target_doc_id = last_doc_id
+                target_doc_name = last_doc_name
+
+        followup_patterns = [
+            r"\b(first|1st)\s+(concept|point|topic|item|algorithm|section|protocol|part)\b",
+            r"\b(second|2nd)\s+(concept|point|topic|item|algorithm|section|protocol|part)\b",
+            r"\b(third|3rd)\s+(concept|point|topic|item|algorithm|section|protocol|part)\b",
+            r"\b(fourth|4th)\s+(concept|point|topic|item|algorithm|section|protocol|part)\b",
+            r"\b(last)\s+(concept|point|topic|item|algorithm|section|protocol|part)\b",
+            r"\bexplain\s+(the\s+)?(first|second|third|fourth|last)\b",
+            r"\b(concrete\s+)?example\s+of\s+(that|this|it|the\s+first|the\s+second)\b",
+            r"\b(explain|simplify|break\s+down)\s+(it|that|this)\b",
+            r"\b(simpler|simple)\s+terms\b",
+            r"\b(what\s+you\s+just\s+explained|we\s+just\s+discussed|you\s+just\s+mentioned)\b",
+            r"\bexam\s+points\s+(from|about|on)\b",
+            r"\bwhy\s+is\s+(that|this|it)\s+(important|used|needed)\b",
+            r"\bhow\s+does\s+(that|this|it)\s+work\b",
+        ]
+
+        is_followup = bool(recent_history) and any(re.search(pat, q_lower) for pat in followup_patterns)
+
+        if is_followup and history_concepts:
+            # Ordinal resolution
+            if re.search(r"\b(first|1st)\b", q_lower) and len(history_concepts) >= 1:
+                resolved_reference = history_concepts[0]
+            elif re.search(r"\b(second|2nd)\b", q_lower) and len(history_concepts) >= 2:
+                resolved_reference = history_concepts[1]
+            elif re.search(r"\b(third|3rd)\b", q_lower) and len(history_concepts) >= 3:
+                resolved_reference = history_concepts[2]
+            elif re.search(r"\b(fourth|4th)\b", q_lower) and len(history_concepts) >= 4:
+                resolved_reference = history_concepts[3]
+            elif re.search(r"\b(last)\b", q_lower):
+                resolved_reference = history_concepts[-1]
+            else:
+                # Default to primary concept in recent turn
+                resolved_reference = history_concepts[0]
+
+            cleaned_query = query
+            if target_doc_name:
+                cleaned_query = re.sub(re.escape(target_doc_name), "", cleaned_query, flags=re.IGNORECASE).strip()
+
+            return "CONTEXTUAL_FOLLOWUP", target_doc_id, target_doc_name, resolved_reference, cleaned_query
+
+        # 5. Clean query
         cleaned_query = query
         if target_doc_name:
             cleaned_query = re.sub(re.escape(target_doc_name), "", cleaned_query, flags=re.IGNORECASE).strip()
 
-        # 4. Intent classification
+        # 6. Summary Intent
         summary_keywords = [
             "summar",
             "what are the concepts",
@@ -128,23 +263,36 @@ class RetrievalService:
         )
 
         intent = "DOCUMENT_SUMMARY" if is_summary else "SPECIFIC_CONCEPT"
-        return intent, target_doc_id, target_doc_name, cleaned_query
+        return intent, target_doc_id, target_doc_name, None, cleaned_query
 
     async def retrieve_relevant_chunks(
-        self, workspace_id: str, query: str
-    ) -> Tuple[List[RetrievedChunk], bool]:
+        self,
+        workspace_id: str,
+        query: str,
+        recent_history: Optional[List[Dict[str, Any]]] = None,
+        conversation_id: Optional[str] = None,
+    ) -> Tuple[List[RetrievedChunk], bool, str, Optional[str], Optional[str]]:
         """
         Retrieves relevant chunks within the specified workspace.
-        Supports explicit document reference and document-wide summary aggregation.
+        Supports:
+        - WORKSPACE_METADATA
+        - CONTEXTUAL_FOLLOWUP (concept resolution from history)
+        - DOCUMENT_SUMMARY (representative multi-page chunk sampling)
+        - SPECIFIC_CONCEPT (pgvector semantic similarity)
         """
-        intent, target_doc_id, target_doc_name, cleaned_query = (
-            await self.resolve_document_and_intent(workspace_id, query)
+        intent, target_doc_id, target_doc_name, resolved_ref, cleaned_query = (
+            await self.resolve_document_and_intent(workspace_id, query, recent_history)
         )
 
-        effective_query = cleaned_query if cleaned_query else query
+        # Build effective semantic search query
+        if intent == "CONTEXTUAL_FOLLOWUP" and resolved_ref:
+            effective_query = f"{resolved_ref} {cleaned_query}".strip()
+        else:
+            effective_query = cleaned_query if cleaned_query else query
+
         raw_chunks: List[Dict[str, Any]] = []
 
-        # If document summary intent with resolved target document, sample across all pages
+        # 1. If document summary intent with resolved target document, sample across all pages
         if intent == "DOCUMENT_SUMMARY" and target_doc_id:
             raw_chunks = await chunk_repo.get_sampled_chunks_by_document(
                 workspace_id=workspace_id,
@@ -152,28 +300,40 @@ class RetrievalService:
                 limit=8,
             )
 
-        # Fallback to vector search if no summary chunks or specific concept intent
-        if not raw_chunks:
+        # 2. If contextual follow-up with resolved reference and document, perform targeted keyword/concept matching
+        if intent == "CONTEXTUAL_FOLLOWUP" and resolved_ref and target_doc_id:
+            doc_chunks = await chunk_repo.get_sampled_chunks_by_document(
+                workspace_id=workspace_id,
+                document_id=target_doc_id,
+                limit=15,
+            )
+            ref_words = [w.lower() for w in re.split(r"[\s\:\-\_\,]+", resolved_ref) if len(w) >= 3]
+            matching_chunks = []
+            for dc in doc_chunks:
+                chunk_text_lower = dc["text"].lower()
+                chunk_heading_lower = (dc.get("heading") or "").lower()
+                matches = sum(1 for rw in ref_words if rw in chunk_text_lower or rw in chunk_heading_lower)
+                if matches > 0:
+                    matching_chunks.append({**dc, "similarity_score": min(0.98, 0.88 + (0.03 * matches))})
+
+            if matching_chunks:
+                raw_chunks = sorted(matching_chunks, key=lambda x: x["similarity_score"], reverse=True)[:5]
+
+        # 3. Fallback to vector search if no chunks retrieved yet
+        if not raw_chunks and intent != "WORKSPACE_METADATA":
             query_embedding = await embedding_service.get_query_embedding(effective_query)
             raw_chunks = await chunk_repo.search_similar_chunks(
                 workspace_id=workspace_id,
                 query_embedding=query_embedding,
                 top_k=max(self.top_k, 12 if intent == "DOCUMENT_SUMMARY" else self.top_k),
-                similarity_threshold=0.40 if intent == "DOCUMENT_SUMMARY" else self.similarity_threshold,
+                similarity_threshold=0.35 if intent in ["DOCUMENT_SUMMARY", "CONTEXTUAL_FOLLOWUP"] else self.similarity_threshold,
             )
 
-            # If target doc resolved, restrict to it
+            # If target doc resolved, prioritize its chunks
             if target_doc_id and raw_chunks:
                 doc_filtered = [c for c in raw_chunks if str(c.get("document_id")) == str(target_doc_id)]
                 if doc_filtered:
                     raw_chunks = doc_filtered
-
-        if not raw_chunks:
-            logger.info(
-                f"[RAG Diagnostic] workspace_id: '{workspace_id}' | intent: '{intent}' | "
-                f"target_doc: '{target_doc_name or 'None'}' | chunks_retrieved: 0 | pages: [] | scores: [] | model: '{settings.gemini_model}'"
-            )
-            return [], False
 
         # Deduplicate and construct RetrievedChunk objects
         retrieved: List[RetrievedChunk] = []
@@ -204,16 +364,21 @@ class RetrievalService:
             )
 
         retrieved_pages = sorted(list(set(c.page_number for c in retrieved)))
-        retrieved_scores = [c.similarity_score for c in retrieved]
 
         logger.info(
-            f"[RAG Diagnostic] workspace_id: '{workspace_id}' | intent: '{intent}' | "
-            f"target_doc: '{target_doc_name or 'None'}' | chunks_retrieved: {len(retrieved)} | "
-            f"pages: {retrieved_pages} | scores: {retrieved_scores} | model: '{settings.gemini_model}'"
+            f"[RAG Diagnostic] workspace_id: '{workspace_id}' | "
+            f"conversation_id: '{conversation_id or 'none'}' | "
+            f"intent: '{intent}' | "
+            f"resolved_document_id: '{target_doc_id or 'none'}' | "
+            f"resolved_reference: '{resolved_ref or 'none'}' | "
+            f"semantic_query: '{effective_query[:60]}' | "
+            f"retrieved_chunk_count: {len(retrieved)} | "
+            f"retrieved_pages: {retrieved_pages} | "
+            f"Gemini_model: '{settings.gemini_model}'"
         )
 
         is_grounded = len(retrieved) > 0
-        return retrieved, is_grounded
+        return retrieved, is_grounded, intent, target_doc_id, resolved_ref
 
 
 retrieval_service = RetrievalService()
