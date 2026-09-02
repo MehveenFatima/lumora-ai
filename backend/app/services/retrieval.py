@@ -1,4 +1,5 @@
 from typing import List, Dict, Any, Tuple, Optional
+import re
 from backend.app.repositories.chunks import chunk_repo
 from backend.app.repositories.documents import document_repo
 from backend.app.services.embeddings import embedding_service
@@ -60,12 +61,12 @@ class RetrievalService:
         Returns (intent, target_document_id, target_document_name, cleaned_query).
         """
         q_lower = query.lower().strip()
-        docs = await document_repo.get_by_workspace(workspace_id)
+        docs = await document_repo.list_by_workspace(workspace_id)
 
         target_doc_id = None
         target_doc_name = None
 
-        # 1. Filename matching
+        # 1. Filename / Title matching
         for d in docs:
             fn = d.get("filename", "").lower()
             title = d.get("title", "").lower()
@@ -75,13 +76,13 @@ class RetrievalService:
                 fn in q_lower
                 or fn_no_ext in q_lower
                 or (len(fn_no_ext) >= 4 and fn_no_ext.split()[0] in q_lower)
-                or title in q_lower
+                or (title and title in q_lower)
             ):
-                target_doc_id = d.get("id")
+                target_doc_id = str(d.get("id"))
                 target_doc_name = d.get("filename")
                 break
 
-        # 2. Anaphoric resolution ("this pdf", "this document", "it")
+        # 2. Anaphoric resolution ("this pdf", "this document", "it", "the file")
         if not target_doc_id and len(docs) == 1:
             anaphoric = [
                 "this pdf",
@@ -97,13 +98,12 @@ class RetrievalService:
                 "about it",
             ]
             if any(term in q_lower for term in anaphoric) or "summar" in q_lower:
-                target_doc_id = docs[0].get("id")
+                target_doc_id = str(docs[0].get("id"))
                 target_doc_name = docs[0].get("filename")
 
         # 3. Clean query
         cleaned_query = query
         if target_doc_name:
-            import re
             cleaned_query = re.sub(re.escape(target_doc_name), "", cleaned_query, flags=re.IGNORECASE).strip()
 
         # 4. Intent classification
@@ -142,32 +142,40 @@ class RetrievalService:
         )
 
         effective_query = cleaned_query if cleaned_query else query
-        is_summary = intent == "DOCUMENT_SUMMARY"
+        raw_chunks: List[Dict[str, Any]] = []
 
-        # 1. Generate query embedding
-        query_embedding = await embedding_service.get_query_embedding(effective_query)
+        # If document summary intent with resolved target document, sample across all pages
+        if intent == "DOCUMENT_SUMMARY" and target_doc_id:
+            raw_chunks = await chunk_repo.get_sampled_chunks_by_document(
+                workspace_id=workspace_id,
+                document_id=target_doc_id,
+                limit=8,
+            )
 
-        # 2. Query vector index
-        raw_chunks = await chunk_repo.search_similar_chunks(
-            workspace_id=workspace_id,
-            query_embedding=query_embedding,
-            top_k=max(self.top_k, 12 if is_summary else self.top_k),
-            similarity_threshold=0.40 if is_summary else self.similarity_threshold,
-        )
+        # Fallback to vector search if no summary chunks or specific concept intent
+        if not raw_chunks:
+            query_embedding = await embedding_service.get_query_embedding(effective_query)
+            raw_chunks = await chunk_repo.search_similar_chunks(
+                workspace_id=workspace_id,
+                query_embedding=query_embedding,
+                top_k=max(self.top_k, 12 if intent == "DOCUMENT_SUMMARY" else self.top_k),
+                similarity_threshold=0.40 if intent == "DOCUMENT_SUMMARY" else self.similarity_threshold,
+            )
 
-        # If specific document target was resolved, filter to that document
-        if target_doc_id and raw_chunks:
-            doc_filtered = [c for c in raw_chunks if str(c.get("document_id")) == str(target_doc_id)]
-            if doc_filtered:
-                raw_chunks = doc_filtered
+            # If target doc resolved, restrict to it
+            if target_doc_id and raw_chunks:
+                doc_filtered = [c for c in raw_chunks if str(c.get("document_id")) == str(target_doc_id)]
+                if doc_filtered:
+                    raw_chunks = doc_filtered
 
         if not raw_chunks:
             logger.info(
-                f"[RAG Retrieval] No chunks found for workspace '{workspace_id}' (intent={intent})."
+                f"[RAG Diagnostic] workspace_id: '{workspace_id}' | intent: '{intent}' | "
+                f"target_doc: '{target_doc_name or 'None'}' | chunks_retrieved: 0 | pages: [] | scores: [] | model: '{settings.gemini_model}'"
             )
             return [], False
 
-        # 3. Deduplicate and construct RetrievedChunk objects
+        # Deduplicate and construct RetrievedChunk objects
         retrieved: List[RetrievedChunk] = []
         seen_texts = set()
         total_words = 0
@@ -185,15 +193,24 @@ class RetrievalService:
             total_words += chunk_words
             retrieved.append(
                 RetrievedChunk(
-                    id=c["id"],
-                    document_id=c["document_id"],
-                    document_name=c.get("document_name", "Workspace Document"),
+                    id=str(c["id"]),
+                    document_id=str(c["document_id"]),
+                    document_name=c.get("document_name", target_doc_name or "Workspace Document"),
                     page_number=c.get("page_number", 1),
                     heading=c.get("heading") or "",
                     text=c["text"],
                     similarity_score=c.get("similarity_score", 0.95),
                 )
             )
+
+        retrieved_pages = sorted(list(set(c.page_number for c in retrieved)))
+        retrieved_scores = [c.similarity_score for c in retrieved]
+
+        logger.info(
+            f"[RAG Diagnostic] workspace_id: '{workspace_id}' | intent: '{intent}' | "
+            f"target_doc: '{target_doc_name or 'None'}' | chunks_retrieved: {len(retrieved)} | "
+            f"pages: {retrieved_pages} | scores: {retrieved_scores} | model: '{settings.gemini_model}'"
+        )
 
         is_grounded = len(retrieved) > 0
         return retrieved, is_grounded
