@@ -36,7 +36,7 @@ import { cn } from '@/lib/utils'
 
 export default function AiTutorPage() {
   const params = useParams()
-  const workspaceId = (params?.workspaceId as string) || 'dsa'
+  const workspaceId = params?.workspaceId as string
 
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [documents, setDocuments] = useState<WorkspaceDocument[]>([])
@@ -49,6 +49,8 @@ export default function AiTutorPage() {
   const chatBottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    if (!workspaceId) return
+
     async function loadTutorData() {
       const [ws, docs, msgs] = await Promise.all([
         workspaceService.getWorkspaceById(workspaceId),

@@ -28,13 +28,15 @@ import { cn } from '@/lib/utils'
 
 export default function StudyPlanPage() {
   const params = useParams()
-  const workspaceId = (params?.workspaceId as string) || 'dsa'
+  const workspaceId = params?.workspaceId as string
 
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [studyPlan, setStudyPlan] = useState<StudyPlan | null>(null)
   const [activeTab, setActiveTab] = useState<'today' | 'this_week' | 'upcoming'>('today')
 
   useEffect(() => {
+    if (!workspaceId) return
+
     async function loadPlan() {
       const [ws, sp] = await Promise.all([
         workspaceService.getWorkspaceById(workspaceId),

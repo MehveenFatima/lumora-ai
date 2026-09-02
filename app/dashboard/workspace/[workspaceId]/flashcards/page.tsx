@@ -28,7 +28,7 @@ import { cn } from '@/lib/utils'
 
 export default function FlashcardsPage() {
   const params = useParams()
-  const workspaceId = (params?.workspaceId as string) || 'dsa'
+  const workspaceId = params?.workspaceId as string
 
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [decks, setDecks] = useState<FlashcardDeck[]>([])
@@ -39,6 +39,8 @@ export default function FlashcardsPage() {
   const [deckCompleted, setDeckCompleted] = useState(false)
 
   useEffect(() => {
+    if (!workspaceId) return
+
     async function loadFlashcards() {
       const [ws, dks] = await Promise.all([
         workspaceService.getWorkspaceById(workspaceId),

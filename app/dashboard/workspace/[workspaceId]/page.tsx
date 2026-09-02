@@ -40,7 +40,7 @@ import { cn } from '@/lib/utils'
 
 export default function WorkspaceLandingPage() {
   const params = useParams()
-  const workspaceId = (params?.workspaceId as string) || 'dsa'
+  const workspaceId = params?.workspaceId as string
 
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [topics, setTopics] = useState<Topic[]>([])
@@ -56,6 +56,8 @@ export default function WorkspaceLandingPage() {
   const [roadmapModalOpen, setRoadmapModalOpen] = useState(false)
 
   useEffect(() => {
+    if (!workspaceId) return
+
     async function loadWorkspaceData() {
       setLoading(true)
       try {

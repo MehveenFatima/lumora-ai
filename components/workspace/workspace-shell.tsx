@@ -1,11 +1,12 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { X } from 'lucide-react'
 import { Workspace, NotificationItem } from '@/lib/types/domain'
 import { WorkspaceSidebar } from './workspace-sidebar'
 import { WorkspaceHeader } from './workspace-header'
 import { CreateWorkspaceModal } from './create-workspace-modal'
+import { workspaceService } from '@/lib/services/workspace-service'
 
 interface WorkspaceShellProps {
   workspaces: Workspace[]
@@ -15,13 +16,35 @@ interface WorkspaceShellProps {
 }
 
 export function WorkspaceShell({
-  workspaces,
-  currentWorkspace,
+  workspaces: initialWorkspaces,
+  currentWorkspace: initialCurrentWorkspace,
   notifications = [],
   children,
 }: WorkspaceShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [createModalOpen, setCreateModalOpen] = useState(false)
+
+  const [workspaces, setWorkspaces] = useState<Workspace[]>(initialWorkspaces)
+  const [currentWorkspace, setCurrentWorkspace] = useState<Workspace>(initialCurrentWorkspace)
+
+  useEffect(() => {
+    async function syncClientState() {
+      try {
+        const all = await workspaceService.getWorkspaces()
+        if (all.length > 0) {
+          setWorkspaces(all)
+        }
+        const active = await workspaceService.getWorkspaceById(initialCurrentWorkspace.id)
+        if (active) {
+          setCurrentWorkspace(active)
+        }
+      } catch {
+        // Fallback to initial
+      }
+    }
+
+    syncClientState()
+  }, [initialCurrentWorkspace.id])
 
   return (
     <div className="flex h-dvh w-full overflow-hidden bg-background">

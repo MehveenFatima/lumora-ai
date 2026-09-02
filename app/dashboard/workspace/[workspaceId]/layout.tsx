@@ -1,6 +1,6 @@
-import { notFound } from 'next/navigation'
 import { workspaceService } from '@/lib/services/workspace-service'
 import { WorkspaceShell } from '@/components/workspace/workspace-shell'
+import { Workspace } from '@/lib/types/domain'
 
 interface WorkspaceLayoutProps {
   children: React.ReactNode
@@ -10,28 +10,37 @@ interface WorkspaceLayoutProps {
 export default async function WorkspaceLayout({ children, params }: WorkspaceLayoutProps) {
   const { workspaceId } = await params
   const workspaces = await workspaceService.getWorkspaces()
-  const currentWorkspace = await workspaceService.getWorkspaceById(workspaceId)
+  let currentWorkspace = await workspaceService.getWorkspaceById(workspaceId)
   const notifications = await workspaceService.getNotifications()
 
   if (!currentWorkspace) {
-    // If not found, redirect to first valid workspace or 404
-    if (workspaces.length > 0) {
-      return (
-        <WorkspaceShell
-          workspaces={workspaces}
-          currentWorkspace={workspaces[0]}
-          notifications={notifications}
-        >
-          {children}
-        </WorkspaceShell>
-      )
+    currentWorkspace = {
+      id: workspaceId,
+      name: 'Workspace',
+      goal: 'Learning Track',
+      level: 'intermediate',
+      targetDate: '2026-12-31',
+      dailyTargetMinutes: 45,
+      description: 'Workspace grounded in your uploaded resources.',
+      overallMastery: 0,
+      masteryDelta: 0,
+      status: 'active',
+      iconName: 'FolderKanban',
+      documentCount: 0,
+      topicsCount: 0,
+      flashcardsDueCount: 0,
+      lastActive: 'Just now',
+      createdAt: new Date().toISOString().split('T')[0],
     }
-    notFound()
   }
+
+  const allWorkspaces = workspaces.some((w) => w.id === currentWorkspace!.id)
+    ? workspaces
+    : [currentWorkspace, ...workspaces]
 
   return (
     <WorkspaceShell
-      workspaces={workspaces}
+      workspaces={allWorkspaces}
       currentWorkspace={currentWorkspace}
       notifications={notifications}
     >

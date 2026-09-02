@@ -32,7 +32,7 @@ import { cn } from '@/lib/utils'
 
 export default function TopicsPage() {
   const params = useParams()
-  const workspaceId = (params?.workspaceId as string) || 'dsa'
+  const workspaceId = params?.workspaceId as string
 
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [topics, setTopics] = useState<Topic[]>([])
@@ -41,6 +41,8 @@ export default function TopicsPage() {
   const [statusFilter, setStatusFilter] = useState<string>('all')
 
   useEffect(() => {
+    if (!workspaceId) return
+
     async function loadTopics() {
       const [ws, top] = await Promise.all([
         workspaceService.getWorkspaceById(workspaceId),

@@ -23,13 +23,15 @@ import { cn } from '@/lib/utils'
 
 export default function ActivityPage() {
   const params = useParams()
-  const workspaceId = (params?.workspaceId as string) || 'dsa'
+  const workspaceId = params?.workspaceId as string
 
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [activities, setActivities] = useState<LearningActivity[]>([])
   const [filterType, setFilterType] = useState<string>('all')
 
   useEffect(() => {
+    if (!workspaceId) return
+
     async function loadActivity() {
       const [ws, acts] = await Promise.all([
         workspaceService.getWorkspaceById(workspaceId),

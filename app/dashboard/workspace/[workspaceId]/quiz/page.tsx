@@ -32,7 +32,7 @@ import { cn } from '@/lib/utils'
 export default function AdaptiveQuizPage() {
   const params = useParams()
   const router = useRouter()
-  const workspaceId = (params?.workspaceId as string) || 'dsa'
+  const workspaceId = params?.workspaceId as string
 
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [questions, setQuestions] = useState<QuizQuestion[]>([])
@@ -44,6 +44,8 @@ export default function AdaptiveQuizPage() {
   const [timerSeconds, setTimerSeconds] = useState(0)
 
   useEffect(() => {
+    if (!workspaceId) return
+
     async function loadQuizData() {
       const [ws, qs] = await Promise.all([
         workspaceService.getWorkspaceById(workspaceId),

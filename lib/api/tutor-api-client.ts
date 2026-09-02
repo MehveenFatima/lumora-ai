@@ -1,4 +1,4 @@
-import { TutorMessage, TutorCitation, WorkspaceDocument } from '@/lib/types/domain'
+import { TutorMessage, TutorCitation, WorkspaceDocument, Workspace } from '@/lib/types/domain'
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
@@ -28,6 +28,128 @@ export interface BackendTutorResponse {
 }
 
 export const tutorApiClient = {
+  // WORKSPACE API METHODS
+  async createWorkspace(data: {
+    id?: string
+    name: string
+    goal: string
+    level: string
+    targetDate?: string
+    dailyTargetMinutes?: number
+    description?: string
+    iconName?: string
+  }): Promise<Workspace> {
+    const url = `${API_BASE_URL}/api/v1/workspaces`
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: data.id,
+        name: data.name,
+        goal: data.goal,
+        level: data.level,
+        target_date: data.targetDate,
+        daily_target_minutes: data.dailyTargetMinutes,
+        description: data.description,
+        icon_name: data.iconName,
+      }),
+    })
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.detail || `Failed to create workspace on backend (HTTP ${response.status})`)
+    }
+
+    const ws = await response.json()
+    return {
+      id: ws.id,
+      name: ws.name,
+      goal: ws.goal,
+      level: ws.level,
+      targetDate: ws.target_date || '2026-12-31',
+      dailyTargetMinutes: ws.daily_target_minutes || 45,
+      description: ws.description || '',
+      overallMastery: ws.overall_mastery || 0,
+      masteryDelta: ws.mastery_delta || 0,
+      status: ws.status || 'active',
+      iconName: ws.icon_name || 'FolderKanban',
+      documentCount: ws.document_count || 0,
+      topicsCount: 0,
+      flashcardsDueCount: 0,
+      lastActive: 'Just now',
+      createdAt: ws.created_at ? ws.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
+    }
+  },
+
+  async getWorkspaces(): Promise<Workspace[]> {
+    const url = `${API_BASE_URL}/api/v1/workspaces`
+    try {
+      const response = await fetch(url)
+      if (!response.ok) return []
+      const data = await response.json()
+      return (data.workspaces || []).map((ws: any) => ({
+        id: ws.id,
+        name: ws.name,
+        goal: ws.goal,
+        level: ws.level,
+        targetDate: ws.target_date || '2026-12-31',
+        dailyTargetMinutes: ws.daily_target_minutes || 45,
+        description: ws.description || '',
+        overallMastery: ws.overall_mastery || 0,
+        masteryDelta: ws.mastery_delta || 0,
+        status: ws.status || 'active',
+        iconName: ws.icon_name || 'FolderKanban',
+        documentCount: ws.document_count || 0,
+        topicsCount: 0,
+        flashcardsDueCount: 0,
+        lastActive: 'Recently',
+        createdAt: ws.created_at ? ws.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
+      }))
+    } catch {
+      return []
+    }
+  },
+
+  async getWorkspaceById(workspaceId: string): Promise<Workspace | null> {
+    const url = `${API_BASE_URL}/api/v1/workspaces/${workspaceId}`
+    try {
+      const response = await fetch(url)
+      if (!response.ok) return null
+      const ws = await response.json()
+      return {
+        id: ws.id,
+        name: ws.name,
+        goal: ws.goal,
+        level: ws.level,
+        targetDate: ws.target_date || '2026-12-31',
+        dailyTargetMinutes: ws.daily_target_minutes || 45,
+        description: ws.description || '',
+        overallMastery: ws.overall_mastery || 0,
+        masteryDelta: ws.mastery_delta || 0,
+        status: ws.status || 'active',
+        iconName: ws.icon_name || 'FolderKanban',
+        documentCount: ws.document_count || 0,
+        topicsCount: 0,
+        flashcardsDueCount: 0,
+        lastActive: 'Just now',
+        createdAt: ws.created_at ? ws.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
+      }
+    } catch {
+      return null
+    }
+  },
+
+  async deleteWorkspace(workspaceId: string): Promise<boolean> {
+    const url = `${API_BASE_URL}/api/v1/workspaces/${workspaceId}`
+    try {
+      const response = await fetch(url, { method: 'DELETE' })
+      return response.ok
+    } catch {
+      return false
+    }
+  },
+
+  // TUTOR & RAG CHAT
   async sendTutorMessage(
     workspaceId: string,
     message: string,
@@ -86,6 +208,7 @@ export const tutorApiClient = {
     }
   },
 
+  // DOCUMENT INGESTION
   async uploadDocument(
     workspaceId: string,
     file: File,

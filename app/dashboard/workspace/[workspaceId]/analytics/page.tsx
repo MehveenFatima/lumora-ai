@@ -115,13 +115,15 @@ export function MasteryChartCard() {
 
 export default function AnalyticsPage() {
   const params = useParams()
-  const workspaceId = (params?.workspaceId as string) || 'dsa'
+  const workspaceId = params?.workspaceId as string
 
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [topics, setTopics] = useState<Topic[]>([])
   const [readinessList, setReadinessList] = useState<LearningReadiness[]>([])
 
   useEffect(() => {
+    if (!workspaceId) return
+
     async function loadAnalytics() {
       const [ws, top, rdy] = await Promise.all([
         workspaceService.getWorkspaceById(workspaceId),

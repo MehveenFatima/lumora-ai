@@ -30,7 +30,7 @@ import { cn } from '@/lib/utils'
 
 export default function SourcesPage() {
   const params = useParams()
-  const workspaceId = (params?.workspaceId as string) || 'dsa'
+  const workspaceId = params?.workspaceId as string
 
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [documents, setDocuments] = useState<WorkspaceDocument[]>([])
@@ -40,6 +40,8 @@ export default function SourcesPage() {
   const [toastMessage, setToastMessage] = useState<string | null>(null)
 
   useEffect(() => {
+    if (!workspaceId) return
+
     async function loadDocs() {
       const [ws, docs] = await Promise.all([
         workspaceService.getWorkspaceById(workspaceId),

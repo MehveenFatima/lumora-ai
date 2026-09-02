@@ -34,6 +34,34 @@ import {
 } from '@/lib/types/domain'
 import { tutorApiClient } from '@/lib/api/tutor-api-client'
 
+// Persistent storage keys
+const STORAGE_KEYS = {
+  WORKSPACES: 'lumora_workspaces_v1',
+  DOCUMENTS_PREFIX: 'lumora_ws_docs_',
+  TUTOR_PREFIX: 'lumora_ws_tutor_',
+  STUDY_PLAN_PREFIX: 'lumora_ws_plan_',
+  ACTIVITIES_PREFIX: 'lumora_ws_activity_',
+}
+
+function loadFromStorage<T>(key: string, fallback: T): T {
+  if (typeof window === 'undefined') return fallback
+  try {
+    const item = localStorage.getItem(key)
+    return item ? JSON.parse(item) : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function saveToStorage<T>(key: string, data: T): void {
+  if (typeof window === 'undefined') return
+  try {
+    localStorage.setItem(key, JSON.stringify(data))
+  } catch {
+    // Ignore storage errors
+  }
+}
+
 // In-memory workspace-scoped state tables
 let workspacesState: Workspace[] = [...demoWorkspaces]
 const documentsState: Record<string, WorkspaceDocument[]> = { ...demoDocumentsByWorkspace }
@@ -52,19 +80,100 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 export const workspaceService = {
   async getUser(): Promise<User> {
-    await delay(100)
+    await delay(50)
     return { ...demoUser }
   },
 
   async getWorkspaces(): Promise<Workspace[]> {
-    await delay(150)
+    // 1. Check local storage
+    const stored = loadFromStorage<Workspace[]>(STORAGE_KEYS.WORKSPACES, [])
+    if (stored && stored.length > 0) {
+      // Merge with demo workspaces
+      const ids = new Set(stored.map((w) => w.id))
+      const combined = [...stored]
+      demoWorkspaces.forEach((dw) => {
+        if (!ids.has(dw.id)) {
+          combined.push(dw)
+        }
+      })
+      workspacesState = combined
+    }
+
+    // 2. Attempt to sync from backend
+    try {
+      const backendWorkspaces = await tutorApiClient.getWorkspaces()
+      if (backendWorkspaces && backendWorkspaces.length > 0) {
+        const ids = new Set(backendWorkspaces.map((w) => w.id))
+        const merged = [...backendWorkspaces]
+        workspacesState.forEach((w) => {
+          if (!ids.has(w.id)) {
+            merged.push(w)
+          }
+        })
+        workspacesState = merged
+        saveToStorage(STORAGE_KEYS.WORKSPACES, workspacesState)
+      }
+    } catch {
+      // Offline fallback
+    }
+
+    await delay(50)
     return [...workspacesState]
   },
 
   async getWorkspaceById(id: string): Promise<Workspace | null> {
-    await delay(100)
-    const found = workspacesState.find((w) => w.id === id)
-    return found ? { ...found } : null
+    if (!id) return null
+
+    // First ensure workspaces are loaded from storage
+    if (typeof window !== 'undefined') {
+      const stored = loadFromStorage<Workspace[]>(STORAGE_KEYS.WORKSPACES, [])
+      if (stored.length > 0) {
+        const found = stored.find((w) => w.id === id)
+        if (found) return { ...found }
+      }
+    }
+
+    const foundInMem = workspacesState.find((w) => w.id === id)
+    if (foundInMem) return { ...foundInMem }
+
+    // Try backend
+    try {
+      const fromBackend = await tutorApiClient.getWorkspaceById(id)
+      if (fromBackend) {
+        workspacesState = [fromBackend, ...workspacesState.filter((w) => w.id !== id)]
+        saveToStorage(STORAGE_KEYS.WORKSPACES, workspacesState)
+        return fromBackend
+      }
+    } catch {
+      // Backend not reached
+    }
+
+    // If ID looks like a valid created workspace, generate a dynamic record rather than failing
+    if (id.startsWith('ws_')) {
+      const dynamicWs: Workspace = {
+        id,
+        name: 'Custom Workspace',
+        goal: 'Personal Study Track',
+        level: 'intermediate',
+        targetDate: '2026-12-31',
+        dailyTargetMinutes: 45,
+        description: 'Workspace grounded in your uploaded resources.',
+        overallMastery: 0,
+        masteryDelta: 0,
+        status: 'active',
+        iconName: 'FolderKanban',
+        documentCount: 0,
+        topicsCount: 0,
+        flashcardsDueCount: 0,
+        lastActive: 'Just now',
+        createdAt: new Date().toISOString().split('T')[0],
+      }
+      workspacesState = [dynamicWs, ...workspacesState]
+      saveToStorage(STORAGE_KEYS.WORKSPACES, workspacesState)
+      return dynamicWs
+    }
+
+    return null
   },
 
   async createWorkspace(data: {
@@ -76,7 +185,6 @@ export const workspaceService = {
     description: string
     iconName?: string
   }): Promise<Workspace> {
-    await delay(300)
     const newId = `ws_${Date.now()}`
     const newWs: Workspace = {
       id: newId,
@@ -98,6 +206,7 @@ export const workspaceService = {
     }
 
     workspacesState = [newWs, ...workspacesState]
+    saveToStorage(STORAGE_KEYS.WORKSPACES, workspacesState)
 
     // Initialize completely clean, isolated workspace data
     documentsState[newId] = []
@@ -128,11 +237,32 @@ export const workspaceService = {
       },
     ]
 
+    // Save initial workspace-scoped caches
+    saveToStorage(`${STORAGE_KEYS.DOCUMENTS_PREFIX}${newId}`, [])
+    saveToStorage(`${STORAGE_KEYS.TUTOR_PREFIX}${newId}`, [])
+    saveToStorage(`${STORAGE_KEYS.ACTIVITIES_PREFIX}${newId}`, activitiesState[newId])
+    saveToStorage(`${STORAGE_KEYS.STUDY_PLAN_PREFIX}${newId}`, studyPlansState[newId])
+
+    // Sync to backend
+    try {
+      await tutorApiClient.createWorkspace({
+        id: newId,
+        name: newWs.name,
+        goal: newWs.goal,
+        level: newWs.level,
+        targetDate: newWs.targetDate,
+        dailyTargetMinutes: newWs.dailyTargetMinutes,
+        description: newWs.description,
+        iconName: newWs.iconName,
+      })
+    } catch (err) {
+      console.warn('Could not sync created workspace to backend:', err)
+    }
+
     return newWs
   },
 
   async searchWorkspaces(query: string): Promise<Workspace[]> {
-    await delay(80)
     const q = query.trim().toLowerCase()
     if (!q) return [...workspacesState]
     return workspacesState.filter(
@@ -144,9 +274,9 @@ export const workspaceService = {
   },
 
   async deleteWorkspace(workspaceId: string): Promise<boolean> {
-    await delay(300)
     const initialLen = workspacesState.length
     workspacesState = workspacesState.filter((w) => w.id !== workspaceId)
+    saveToStorage(STORAGE_KEYS.WORKSPACES, workspacesState)
 
     // Complete cleanup of all workspace-keyed states
     delete documentsState[workspaceId]
@@ -161,6 +291,16 @@ export const workspaceService = {
     delete quizzesState[workspaceId]
     delete flashcardDecksState[workspaceId]
 
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem(`${STORAGE_KEYS.DOCUMENTS_PREFIX}${workspaceId}`)
+      localStorage.removeItem(`${STORAGE_KEYS.TUTOR_PREFIX}${workspaceId}`)
+      localStorage.removeItem(`${STORAGE_KEYS.ACTIVITIES_PREFIX}${workspaceId}`)
+      localStorage.removeItem(`${STORAGE_KEYS.STUDY_PLAN_PREFIX}${workspaceId}`)
+    }
+
+    // Sync deletion to backend
+    tutorApiClient.deleteWorkspace(workspaceId).catch(() => null)
+
     return workspacesState.length < initialLen
   },
 
@@ -170,9 +310,12 @@ export const workspaceService = {
     if (documentsState[workspaceId]) {
       const initialLen = documentsState[workspaceId].length
       documentsState[workspaceId] = documentsState[workspaceId].filter((d) => d.id !== documentId)
+      saveToStorage(`${STORAGE_KEYS.DOCUMENTS_PREFIX}${workspaceId}`, documentsState[workspaceId])
+
       const ws = workspacesState.find((w) => w.id === workspaceId)
       if (ws) {
         ws.documentCount = Math.max(0, ws.documentCount - 1)
+        saveToStorage(STORAGE_KEYS.WORKSPACES, workspacesState)
       }
       return documentsState[workspaceId].length < initialLen
     }
@@ -180,15 +323,27 @@ export const workspaceService = {
   },
 
   async getDocuments(workspaceId: string): Promise<WorkspaceDocument[]> {
+    if (!workspaceId) return []
+
+    // 1. Try backend
     try {
       const backendDocs = await tutorApiClient.getWorkspaceDocuments(workspaceId)
       if (backendDocs && backendDocs.length > 0) {
+        documentsState[workspaceId] = backendDocs
+        saveToStorage(`${STORAGE_KEYS.DOCUMENTS_PREFIX}${workspaceId}`, backendDocs)
         return backendDocs
       }
     } catch {
-      // Fallback to local memory state
+      // Backend offline
     }
-    await delay(80)
+
+    // 2. Try storage
+    const stored = loadFromStorage<WorkspaceDocument[]>(`${STORAGE_KEYS.DOCUMENTS_PREFIX}${workspaceId}`, [])
+    if (stored.length > 0) {
+      documentsState[workspaceId] = stored
+      return stored
+    }
+
     return documentsState[workspaceId] ? [...documentsState[workspaceId]] : []
   },
 
@@ -225,7 +380,7 @@ export const workspaceService = {
         }
       }
     } else {
-      await delay(300)
+      await delay(200)
       createdDoc = {
         id: `doc_${Date.now()}`,
         workspaceId,
@@ -245,10 +400,12 @@ export const workspaceService = {
       documentsState[workspaceId] = []
     }
     documentsState[workspaceId] = [createdDoc, ...documentsState[workspaceId]]
+    saveToStorage(`${STORAGE_KEYS.DOCUMENTS_PREFIX}${workspaceId}`, documentsState[workspaceId])
 
     const ws = workspacesState.find((w) => w.id === workspaceId)
     if (ws) {
       ws.documentCount += 1
+      saveToStorage(STORAGE_KEYS.WORKSPACES, workspacesState)
     }
 
     // Record activity for this workspace
@@ -263,42 +420,42 @@ export const workspaceService = {
       description: `Uploaded and indexed ${createdDoc.filename} (${createdDoc.pagesCount} pages).`,
       timestamp: 'Just now',
     })
+    saveToStorage(`${STORAGE_KEYS.ACTIVITIES_PREFIX}${workspaceId}`, activitiesState[workspaceId])
 
     return createdDoc
   },
 
   async getTopics(workspaceId: string): Promise<Topic[]> {
-    await delay(120)
+    if (!workspaceId) return []
     return topicsState[workspaceId] ? [...topicsState[workspaceId]] : []
   },
 
   async getKnowledgeGaps(workspaceId: string): Promise<KnowledgeGap[]> {
-    await delay(100)
+    if (!workspaceId) return []
     return knowledgeGapsState[workspaceId] ? [...knowledgeGapsState[workspaceId]] : []
   },
 
   async getLearningReadiness(workspaceId: string): Promise<LearningReadiness[]> {
-    await delay(100)
+    if (!workspaceId) return []
     return readinessState[workspaceId] ? [...readinessState[workspaceId]] : []
   },
 
   async getRecommendation(workspaceId: string): Promise<AIRecommendation | null> {
-    await delay(80)
+    if (!workspaceId) return null
     return recommendationsState[workspaceId] ? { ...recommendationsState[workspaceId] } : null
   },
 
   async getRoadmap(workspaceId: string): Promise<Roadmap | null> {
-    await delay(100)
+    if (!workspaceId) return null
     return roadmapsState[workspaceId] ? { ...roadmapsState[workspaceId] } : null
   },
 
   async getQuizQuestions(workspaceId: string): Promise<QuizQuestion[]> {
-    await delay(120)
+    if (!workspaceId) return []
     return quizzesState[workspaceId] ? [...quizzesState[workspaceId]] : []
   },
 
   async submitQuiz(workspaceId: string, answers: Record<string, string>): Promise<QuizResult> {
-    await delay(350)
     const questions = quizzesState[workspaceId] || []
     let correctCount = 0
 
@@ -331,7 +488,6 @@ export const workspaceService = {
           : 'Review identified weak concepts with AI Tutor before attempting the next milestone.',
     }
 
-    // Record activity for this workspace
     if (!activitiesState[workspaceId]) {
       activitiesState[workspaceId] = []
     }
@@ -344,17 +500,20 @@ export const workspaceService = {
       timestamp: 'Just now',
       scoreBadge: `${accuracy}% Score`,
     })
+    saveToStorage(`${STORAGE_KEYS.ACTIVITIES_PREFIX}${workspaceId}`, activitiesState[workspaceId])
 
     return result
   },
 
   async getFlashcardDecks(workspaceId: string): Promise<FlashcardDeck[]> {
-    await delay(120)
+    if (!workspaceId) return []
     return flashcardDecksState[workspaceId] ? [...flashcardDecksState[workspaceId]] : []
   },
 
   async getStudyPlan(workspaceId: string): Promise<StudyPlan | null> {
-    await delay(100)
+    if (!workspaceId) return null
+    const stored = loadFromStorage<StudyPlan | null>(`${STORAGE_KEYS.STUDY_PLAN_PREFIX}${workspaceId}`, null)
+    if (stored) return stored
     return studyPlansState[workspaceId] ? { ...studyPlansState[workspaceId] } : null
   },
 
@@ -369,13 +528,15 @@ export const workspaceService = {
         } else {
           plan.todayCompletedMinutes = Math.max(0, plan.todayCompletedMinutes - task.estimatedMinutes)
         }
+        saveToStorage(`${STORAGE_KEYS.STUDY_PLAN_PREFIX}${workspaceId}`, plan)
       }
     }
   },
 
   async getActivities(workspaceId?: string): Promise<LearningActivity[]> {
-    await delay(100)
     if (workspaceId) {
+      const stored = loadFromStorage<LearningActivity[]>(`${STORAGE_KEYS.ACTIVITIES_PREFIX}${workspaceId}`, [])
+      if (stored.length > 0) return stored
       return activitiesState[workspaceId] ? [...activitiesState[workspaceId]] : []
     }
     const all: LearningActivity[] = []
@@ -389,7 +550,12 @@ export const workspaceService = {
   },
 
   async getTutorMessages(workspaceId: string): Promise<TutorMessage[]> {
-    await delay(100)
+    if (!workspaceId) return []
+    const stored = loadFromStorage<TutorMessage[]>(`${STORAGE_KEYS.TUTOR_PREFIX}${workspaceId}`, [])
+    if (stored.length > 0) {
+      tutorMessagesState[workspaceId] = stored
+      return stored
+    }
     return tutorMessagesState[workspaceId] ? [...tutorMessagesState[workspaceId]] : []
   },
 
@@ -407,17 +573,18 @@ export const workspaceService = {
     }
     tutorMessagesState[workspaceId].push(userMsg)
 
-    // 1. Attempt to call FastAPI RAG backend
+    // 1. Call FastAPI RAG backend
     try {
       const assistantMsg = await tutorApiClient.sendTutorMessage(workspaceId, userText)
       tutorMessagesState[workspaceId].push(assistantMsg)
+      saveToStorage(`${STORAGE_KEYS.TUTOR_PREFIX}${workspaceId}`, tutorMessagesState[workspaceId])
       return assistantMsg
     } catch (err) {
-      console.info('Using local grounded citation synthesis for workspace:', workspaceId)
+      console.info(`Backend RAG query for workspace '${workspaceId}' unavailable. Executing grounded fallback.`)
     }
 
-    // 2. Local Grounded Synthesis Fallback
-    await delay(400)
+    // 2. Grounded Synthesis Fallback (Strictly scoped to workspaceId)
+    await delay(300)
     const docs = documentsState[workspaceId] || []
     const ws = workspacesState.find((w) => w.id === workspaceId)
     const wsName = ws?.name || 'this workspace'
@@ -425,12 +592,12 @@ export const workspaceService = {
     let assistantMsg: TutorMessage
 
     if (docs.length === 0) {
-      // Empty workspace refusal behavior
+      // Strict ungrounded refusal response
       assistantMsg = {
         id: `tm_a_${Date.now()}`,
         workspaceId,
         role: 'assistant',
-        content: `Your workspace sources do not contain enough information to answer that reliably.\n\nI checked all indexed resources in **${wsName}**, but no documents have been uploaded yet. Please upload your lecture notes, syllabus, or textbook (PDF, DOCX, PPTX, or TXT) in the **Sources** tab to enable grounded tutoring.`,
+        content: `Your workspace sources do not contain enough information to answer that reliably.\n\nI checked all indexed resources in **${wsName}**, but no documents have been uploaded to this workspace yet. Please upload your lecture notes, textbook, or syllabus in the **Sources** tab to enable grounded tutoring.`,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         citations: [],
         suggestedFollowUps: [
@@ -444,7 +611,7 @@ export const workspaceService = {
         id: `tm_a_${Date.now()}`,
         workspaceId,
         role: 'assistant',
-        content: `Based on **${topDoc.filename}** (Page 1):\n\nWhen analyzing **${userText}**, your workspace resource highlights the following key points:\n\n1. **Core Concept**: Verified against the primary definitions in ${topDoc.title}.\n2. **Principles & Invariants**: Enforce state progression and review domain constraints.\n3. **Application**: Apply the methodology step-by-step to achieve high precision.`,
+        content: `Based on **${topDoc.filename}** (Page 1):\n\nWhen analyzing **${userText}**, your workspace resource highlights the following key points:\n\n1. **Core Concept**: Grounded in the definitions provided in ${topDoc.title}.\n2. **Principles**: Follow the sequential steps and review domain constraints.\n3. **Application**: Apply the methodology step-by-step to maintain high precision.`,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         citations: [
           {
@@ -452,8 +619,8 @@ export const workspaceService = {
             documentId: topDoc.id,
             documentName: topDoc.filename,
             pageOrSlide: 1,
-            excerpt: `Core principles and methodology extracted from ${topDoc.title}.`,
-            relevanceScore: 0.92,
+            excerpt: `Key concepts and definitions extracted from ${topDoc.title}.`,
+            relevanceScore: 0.91,
           },
         ],
         suggestedFollowUps: [
@@ -465,11 +632,11 @@ export const workspaceService = {
     }
 
     tutorMessagesState[workspaceId].push(assistantMsg)
+    saveToStorage(`${STORAGE_KEYS.TUTOR_PREFIX}${workspaceId}`, tutorMessagesState[workspaceId])
     return assistantMsg
   },
 
   async getNotifications(): Promise<NotificationItem[]> {
-    await delay(80)
     return [...demoNotifications]
   },
 }
