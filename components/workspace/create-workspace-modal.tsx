@@ -37,7 +37,8 @@ export function CreateWorkspaceModal({ isOpen, onClose }: CreateWorkspaceModalPr
   const [targetDate, setTargetDate] = useState('2026-07-31')
   const [dailyMinutes, setDailyMinutes] = useState(45)
   const [description, setDescription] = useState('')
-  const [uploadedFiles, setUploadedFiles] = useState<Array<{ name: string; size: string }>>([])
+  const [uploadedFiles, setUploadedFiles] = useState<Array<{ name: string; size: string; file: File }>>([])
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   if (!isOpen) return null
 
@@ -49,6 +50,7 @@ export function CreateWorkspaceModal({ isOpen, onClose }: CreateWorkspaceModalPr
         {
           name: file.name,
           size: `${(file.size / (1024 * 1024)).toFixed(1)} MB`,
+          file,
         },
       ])
     }
@@ -57,6 +59,7 @@ export function CreateWorkspaceModal({ isOpen, onClose }: CreateWorkspaceModalPr
   const handleCreate = async () => {
     if (!name.trim()) return
     setIsSubmitting(true)
+    setErrorMessage(null)
 
     try {
       const created = await workspaceService.createWorkspace({
@@ -69,22 +72,24 @@ export function CreateWorkspaceModal({ isOpen, onClose }: CreateWorkspaceModalPr
         iconName: 'FolderKanban',
       })
 
-      // Add uploaded files as demo documents
+      // Add uploaded files to the newly created backend workspace
       for (const f of uploadedFiles) {
         await workspaceService.addDocument(created.id, {
-          title: f.name.replace(/\.[^/.]+$/, ''),
+          title: f.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' '),
           filename: f.name,
           type: 'pdf',
-          sizeBytes: 4500000,
-          pagesCount: 45,
+          sizeBytes: f.file.size,
+          pagesCount: Math.max(1, Math.round(f.file.size / (150 * 1024))),
+          rawFile: f.file,
         })
       }
 
       setIsSubmitting(false)
       onClose()
       router.push(`/dashboard/workspace/${created.id}`)
-    } catch (err) {
-      console.error(err)
+    } catch (err: any) {
+      console.error('Failed to create workspace on backend:', err)
+      setErrorMessage(err.message || 'Failed to create workspace on backend.')
       setIsSubmitting(false)
     }
   }
@@ -120,6 +125,12 @@ export function CreateWorkspaceModal({ isOpen, onClose }: CreateWorkspaceModalPr
             </p>
           </div>
         </div>
+
+        {errorMessage && (
+          <div className="mt-4 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
+            {errorMessage}
+          </div>
+        )}
 
         {step === 1 ? (
           <div className="mt-6 flex flex-col gap-4">

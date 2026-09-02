@@ -1,16 +1,4 @@
 import {
-  demoWorkspaces,
-  demoDocumentsByWorkspace,
-  demoTopicsByWorkspace,
-  demoKnowledgeGapsByWorkspace,
-  demoReadinessByWorkspace,
-  demoRecommendationsByWorkspace,
-  demoRoadmapsByWorkspace,
-  demoQuizzesByWorkspace,
-  demoFlashcardDecksByWorkspace,
-  demoStudyPlansByWorkspace,
-  demoActivitiesByWorkspace,
-  demoTutorMessagesByWorkspace,
   demoNotifications,
   demoUser,
 } from './demo-data'
@@ -31,124 +19,58 @@ import {
   TutorMessage,
   NotificationItem,
   User,
+  MasteryStatus,
 } from '@/lib/types/domain'
 import { tutorApiClient } from '@/lib/api/tutor-api-client'
 
-// Persistent storage keys
-const STORAGE_KEYS = {
-  WORKSPACES: 'lumora_workspaces_v1',
-  DOCUMENTS_PREFIX: 'lumora_ws_docs_',
-  TUTOR_PREFIX: 'lumora_ws_tutor_',
-  STUDY_PLAN_PREFIX: 'lumora_ws_plan_',
-  ACTIVITIES_PREFIX: 'lumora_ws_activity_',
-}
-
-function loadFromStorage<T>(key: string, fallback: T): T {
-  if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') return fallback
-  try {
-    const item = window.localStorage.getItem(key)
-    return item ? JSON.parse(item) : fallback
-  } catch {
-    return fallback
-  }
-}
-
-function saveToStorage<T>(key: string, data: T): void {
-  if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') return
-  try {
-    window.localStorage.setItem(key, JSON.stringify(data))
-  } catch {
-    // Ignore storage quota errors
-  }
-}
-
-// In-memory workspace-scoped state tables
-let workspacesState: Workspace[] = [...demoWorkspaces]
-const documentsState: Record<string, WorkspaceDocument[]> = { ...demoDocumentsByWorkspace }
-const tutorMessagesState: Record<string, TutorMessage[]> = { ...demoTutorMessagesByWorkspace }
-const studyPlansState: Record<string, StudyPlan> = { ...demoStudyPlansByWorkspace }
-const activitiesState: Record<string, LearningActivity[]> = { ...demoActivitiesByWorkspace }
-const topicsState: Record<string, Topic[]> = { ...demoTopicsByWorkspace }
-const knowledgeGapsState: Record<string, KnowledgeGap[]> = { ...demoKnowledgeGapsByWorkspace }
-const readinessState: Record<string, LearningReadiness[]> = { ...demoReadinessByWorkspace }
-const recommendationsState: Record<string, AIRecommendation> = { ...demoRecommendationsByWorkspace }
-const roadmapsState: Record<string, Roadmap> = { ...demoRoadmapsByWorkspace }
-const quizzesState: Record<string, QuizQuestion[]> = { ...demoQuizzesByWorkspace }
-const flashcardDecksState: Record<string, FlashcardDeck[]> = { ...demoFlashcardDecksByWorkspace }
-
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+// In-memory workspace-scoped state tables for client view caching
+let workspacesCache: Workspace[] = []
+const documentsCache: Record<string, WorkspaceDocument[]> = {}
+const tutorMessagesCache: Record<string, TutorMessage[]> = {}
+const studyPlansCache: Record<string, StudyPlan> = {}
+const activitiesCache: Record<string, LearningActivity[]> = {}
+const topicsCache: Record<string, Topic[]> = {}
+const knowledgeGapsCache: Record<string, KnowledgeGap[]> = {}
+const readinessCache: Record<string, LearningReadiness[]> = {}
+const recommendationsCache: Record<string, AIRecommendation> = {}
+const roadmapsCache: Record<string, Roadmap> = {}
+const quizzesCache: Record<string, QuizQuestion[]> = {}
+const flashcardDecksCache: Record<string, FlashcardDeck[]> = {}
 
 export const workspaceService = {
   async getUser(): Promise<User> {
-    await delay(50)
     return { ...demoUser }
   },
 
+  // 1. WORKSPACE METHODS (Authoritative Source: FastAPI + PostgreSQL)
   async getWorkspaces(): Promise<Workspace[]> {
-    // 1. Check local storage
-    const stored = loadFromStorage<Workspace[]>(STORAGE_KEYS.WORKSPACES, [])
-    if (stored && stored.length > 0) {
-      // Merge with demo workspaces
-      const ids = new Set(stored.map((w) => w.id))
-      const combined = [...stored]
-      demoWorkspaces.forEach((dw) => {
-        if (!ids.has(dw.id)) {
-          combined.push(dw)
-        }
-      })
-      workspacesState = combined
-    }
-
-    // 2. Attempt to sync from backend
     try {
       const backendWorkspaces = await tutorApiClient.getWorkspaces()
-      if (backendWorkspaces && backendWorkspaces.length > 0) {
-        const ids = new Set(backendWorkspaces.map((w) => w.id))
-        const merged = [...backendWorkspaces]
-        workspacesState.forEach((w) => {
-          if (!ids.has(w.id)) {
-            merged.push(w)
-          }
-        })
-        workspacesState = merged
-        saveToStorage(STORAGE_KEYS.WORKSPACES, workspacesState)
+      if (backendWorkspaces) {
+        workspacesCache = backendWorkspaces
+        return [...workspacesCache]
       }
-    } catch {
-      // Offline fallback
+    } catch (err) {
+      console.error('Failed to fetch workspaces from FastAPI backend:', err)
     }
-
-    await delay(50)
-    return [...workspacesState]
+    return [...workspacesCache]
   },
 
   async getWorkspaceById(id: string): Promise<Workspace | null> {
     if (!id) return null
 
-    // First ensure workspaces are loaded from storage
-    if (typeof window !== 'undefined') {
-      const stored = loadFromStorage<Workspace[]>(STORAGE_KEYS.WORKSPACES, [])
-      if (stored.length > 0) {
-        const found = stored.find((w) => w.id === id)
-        if (found) return { ...found }
-      }
-    }
-
-    const foundInMem = workspacesState.find((w) => w.id === id)
-    if (foundInMem) return { ...foundInMem }
-
-    // Try backend
     try {
       const fromBackend = await tutorApiClient.getWorkspaceById(id)
       if (fromBackend) {
-        workspacesState = [fromBackend, ...workspacesState.filter((w) => w.id !== id)]
-        saveToStorage(STORAGE_KEYS.WORKSPACES, workspacesState)
+        workspacesCache = [fromBackend, ...workspacesCache.filter((w) => w.id !== id)]
         return fromBackend
       }
-    } catch {
-      // Backend not reached
+      return null
+    } catch (err) {
+      console.error(`Failed to fetch workspace '${id}' from backend:`, err)
+      const found = workspacesCache.find((w) => w.id === id)
+      return found ? { ...found } : null
     }
-
-    return null
   },
 
   async createWorkspace(data: {
@@ -160,40 +82,29 @@ export const workspaceService = {
     description: string
     iconName?: string
   }): Promise<Workspace> {
-    const newId = `ws_${Date.now()}`
-    const newWs: Workspace = {
-      id: newId,
+    // 1. Authoritative Backend INSERT
+    const created = await tutorApiClient.createWorkspace({
       name: data.name,
       goal: data.goal,
       level: data.level,
-      targetDate: data.targetDate || '2026-12-31',
-      dailyTargetMinutes: data.dailyTargetMinutes || 45,
-      description: data.description || 'Custom learning workspace grounded in your uploaded documents.',
-      overallMastery: 0,
-      masteryDelta: 0,
-      status: 'active',
+      targetDate: data.targetDate,
+      dailyTargetMinutes: data.dailyTargetMinutes,
+      description: data.description,
       iconName: data.iconName || 'FolderKanban',
-      documentCount: 0,
-      topicsCount: 0,
-      flashcardsDueCount: 0,
-      lastActive: 'Just now',
-      createdAt: new Date().toISOString().split('T')[0],
-    }
+    })
 
-    workspacesState = [newWs, ...workspacesState]
-    saveToStorage(STORAGE_KEYS.WORKSPACES, workspacesState)
+    // 2. Cache in memory
+    workspacesCache = [created, ...workspacesCache.filter((w) => w.id !== created.id)]
+    documentsCache[created.id] = []
+    tutorMessagesCache[created.id] = []
+    topicsCache[created.id] = []
+    knowledgeGapsCache[created.id] = []
+    readinessCache[created.id] = []
+    quizzesCache[created.id] = []
+    flashcardDecksCache[created.id] = []
 
-    // Initialize completely clean, isolated workspace data
-    documentsState[newId] = []
-    tutorMessagesState[newId] = []
-    topicsState[newId] = []
-    knowledgeGapsState[newId] = []
-    readinessState[newId] = []
-    quizzesState[newId] = []
-    flashcardDecksState[newId] = []
-
-    studyPlansState[newId] = {
-      workspaceId: newId,
+    studyPlansCache[created.id] = {
+      workspaceId: created.id,
       dailyTargetMinutes: data.dailyTargetMinutes || 45,
       todayCompletedMinutes: 0,
       weeklyTargetMinutes: (data.dailyTargetMinutes || 45) * 5,
@@ -201,10 +112,10 @@ export const workspaceService = {
       tasks: [],
     }
 
-    activitiesState[newId] = [
+    activitiesCache[created.id] = [
       {
         id: `act_${Date.now()}`,
-        workspaceId: newId,
+        workspaceId: created.id,
         type: 'source_added',
         title: 'Workspace Created',
         description: `Created workspace "${data.name}" with goal: ${data.goal}`,
@@ -212,35 +123,14 @@ export const workspaceService = {
       },
     ]
 
-    // Save initial workspace-scoped caches
-    saveToStorage(`${STORAGE_KEYS.DOCUMENTS_PREFIX}${newId}`, [])
-    saveToStorage(`${STORAGE_KEYS.TUTOR_PREFIX}${newId}`, [])
-    saveToStorage(`${STORAGE_KEYS.ACTIVITIES_PREFIX}${newId}`, activitiesState[newId])
-    saveToStorage(`${STORAGE_KEYS.STUDY_PLAN_PREFIX}${newId}`, studyPlansState[newId])
-
-    // Sync to backend
-    try {
-      await tutorApiClient.createWorkspace({
-        id: newId,
-        name: newWs.name,
-        goal: newWs.goal,
-        level: newWs.level,
-        targetDate: newWs.targetDate,
-        dailyTargetMinutes: newWs.dailyTargetMinutes,
-        description: newWs.description,
-        iconName: newWs.iconName,
-      })
-    } catch (err) {
-      console.warn('Could not sync created workspace to backend:', err)
-    }
-
-    return newWs
+    return created
   },
 
   async searchWorkspaces(query: string): Promise<Workspace[]> {
     const q = query.trim().toLowerCase()
-    if (!q) return [...workspacesState]
-    return workspacesState.filter(
+    const all = await this.getWorkspaces()
+    if (!q) return all
+    return all.filter(
       (w) =>
         w.name.toLowerCase().includes(q) ||
         w.goal.toLowerCase().includes(q) ||
@@ -249,81 +139,42 @@ export const workspaceService = {
   },
 
   async deleteWorkspace(workspaceId: string): Promise<boolean> {
-    const initialLen = workspacesState.length
-    workspacesState = workspacesState.filter((w) => w.id !== workspaceId)
-    saveToStorage(STORAGE_KEYS.WORKSPACES, workspacesState)
+    const initialLen = workspacesCache.length
+    workspacesCache = workspacesCache.filter((w) => w.id !== workspaceId)
 
     // Complete cleanup of all workspace-keyed states
-    delete documentsState[workspaceId]
-    delete tutorMessagesState[workspaceId]
-    delete studyPlansState[workspaceId]
-    delete activitiesState[workspaceId]
-    delete topicsState[workspaceId]
-    delete knowledgeGapsState[workspaceId]
-    delete readinessState[workspaceId]
-    delete recommendationsState[workspaceId]
-    delete roadmapsState[workspaceId]
-    delete quizzesState[workspaceId]
-    delete flashcardDecksState[workspaceId]
+    delete documentsCache[workspaceId]
+    delete tutorMessagesCache[workspaceId]
+    delete studyPlansCache[workspaceId]
+    delete activitiesCache[workspaceId]
+    delete topicsCache[workspaceId]
+    delete knowledgeGapsCache[workspaceId]
+    delete readinessCache[workspaceId]
+    delete recommendationsCache[workspaceId]
+    delete roadmapsCache[workspaceId]
+    delete quizzesCache[workspaceId]
+    delete flashcardDecksCache[workspaceId]
 
-    if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
-      try {
-        window.localStorage.removeItem(`${STORAGE_KEYS.DOCUMENTS_PREFIX}${workspaceId}`)
-        window.localStorage.removeItem(`${STORAGE_KEYS.TUTOR_PREFIX}${workspaceId}`)
-        window.localStorage.removeItem(`${STORAGE_KEYS.ACTIVITIES_PREFIX}${workspaceId}`)
-        window.localStorage.removeItem(`${STORAGE_KEYS.STUDY_PLAN_PREFIX}${workspaceId}`)
-      } catch {
-        // Ignore errors
-      }
-    }
-
-    // Sync deletion to backend
-    tutorApiClient.deleteWorkspace(workspaceId).catch(() => null)
-
-    return workspacesState.length < initialLen
+    // Authoritative Backend DELETE
+    const backendDeleted = await tutorApiClient.deleteWorkspace(workspaceId).catch(() => false)
+    return backendDeleted || workspacesCache.length < initialLen
   },
 
-  async removeDocument(workspaceId: string, documentId: string): Promise<boolean> {
-    await tutorApiClient.deleteDocument(documentId).catch(() => null)
-
-    if (documentsState[workspaceId]) {
-      const initialLen = documentsState[workspaceId].length
-      documentsState[workspaceId] = documentsState[workspaceId].filter((d) => d.id !== documentId)
-      saveToStorage(`${STORAGE_KEYS.DOCUMENTS_PREFIX}${workspaceId}`, documentsState[workspaceId])
-
-      const ws = workspacesState.find((w) => w.id === workspaceId)
-      if (ws) {
-        ws.documentCount = Math.max(0, ws.documentCount - 1)
-        saveToStorage(STORAGE_KEYS.WORKSPACES, workspacesState)
-      }
-      return documentsState[workspaceId].length < initialLen
-    }
-    return false
-  },
-
+  // 2. DOCUMENT METHODS (Authoritative Source: FastAPI + Supabase PostgreSQL + Storage)
   async getDocuments(workspaceId: string): Promise<WorkspaceDocument[]> {
     if (!workspaceId) return []
 
-    // 1. Try backend
     try {
       const backendDocs = await tutorApiClient.getWorkspaceDocuments(workspaceId)
-      if (backendDocs && backendDocs.length > 0) {
-        documentsState[workspaceId] = backendDocs
-        saveToStorage(`${STORAGE_KEYS.DOCUMENTS_PREFIX}${workspaceId}`, backendDocs)
+      if (backendDocs) {
+        documentsCache[workspaceId] = backendDocs
         return backendDocs
       }
-    } catch {
-      // Backend offline
+    } catch (err) {
+      console.error(`Failed to fetch documents for workspace '${workspaceId}':`, err)
     }
 
-    // 2. Try storage
-    const stored = loadFromStorage<WorkspaceDocument[]>(`${STORAGE_KEYS.DOCUMENTS_PREFIX}${workspaceId}`, [])
-    if (stored.length > 0) {
-      documentsState[workspaceId] = stored
-      return stored
-    }
-
-    return documentsState[workspaceId] ? [...documentsState[workspaceId]] : []
+    return documentsCache[workspaceId] ? [...documentsCache[workspaceId]] : []
   },
 
   async addDocument(
@@ -337,204 +188,186 @@ export const workspaceService = {
       rawFile?: File
     }
   ): Promise<WorkspaceDocument> {
-    let createdDoc: WorkspaceDocument
-
-    if (file.rawFile) {
-      try {
-        createdDoc = await tutorApiClient.uploadDocument(workspaceId, file.rawFile, file.title)
-      } catch (err) {
-        console.warn('Backend document upload failed, using local document indexing:', err)
-        createdDoc = {
-          id: `doc_${Date.now()}`,
-          workspaceId,
-          title: file.title,
-          filename: file.filename,
-          type: file.type,
-          sizeBytes: file.sizeBytes,
-          pagesCount: file.pagesCount,
-          status: 'ready',
-          chunksCount: Math.ceil(file.pagesCount * 1.8),
-          uploadedAt: new Date().toISOString().split('T')[0],
-          summary: 'Indexed semantic chunks ready for retrieval-augmented generation in AI Tutor.',
-        }
-      }
-    } else {
-      createdDoc = {
-        id: `doc_${Date.now()}`,
-        workspaceId,
-        title: file.title,
-        filename: file.filename,
-        type: file.type,
-        sizeBytes: file.sizeBytes,
-        pagesCount: file.pagesCount,
-        status: 'ready',
-        chunksCount: Math.ceil(file.pagesCount * 1.8),
-        uploadedAt: new Date().toISOString().split('T')[0],
-        summary: 'Indexed semantic chunks ready for retrieval-augmented generation in AI Tutor.',
-      }
+    let rawFile = file.rawFile
+    if (!rawFile) {
+      const blob = new Blob([`Learning Resource: ${file.title}\nFilename: ${file.filename}`], { type: 'text/plain' })
+      rawFile = new File([blob], file.filename, { type: 'application/pdf' })
     }
 
-    if (!documentsState[workspaceId]) {
-      documentsState[workspaceId] = []
-    }
-    documentsState[workspaceId] = [createdDoc, ...documentsState[workspaceId]]
-    saveToStorage(`${STORAGE_KEYS.DOCUMENTS_PREFIX}${workspaceId}`, documentsState[workspaceId])
+    const createdDoc = await tutorApiClient.uploadDocument(workspaceId, rawFile, file.title)
 
-    const ws = workspacesState.find((w) => w.id === workspaceId)
+    if (!documentsCache[workspaceId]) {
+      documentsCache[workspaceId] = []
+    }
+    documentsCache[workspaceId] = [createdDoc, ...documentsCache[workspaceId].filter((d) => d.id !== createdDoc.id)]
+
+    const ws = workspacesCache.find((w) => w.id === workspaceId)
     if (ws) {
       ws.documentCount += 1
-      saveToStorage(STORAGE_KEYS.WORKSPACES, workspacesState)
     }
-
-    // Record activity for this workspace
-    if (!activitiesState[workspaceId]) {
-      activitiesState[workspaceId] = []
-    }
-    activitiesState[workspaceId].unshift({
-      id: `act_${Date.now()}`,
-      workspaceId,
-      type: 'source_added',
-      title: 'Resource Indexed',
-      description: `Uploaded and indexed ${createdDoc.filename} (${createdDoc.pagesCount} pages).`,
-      timestamp: 'Just now',
-    })
-    saveToStorage(`${STORAGE_KEYS.ACTIVITIES_PREFIX}${workspaceId}`, activitiesState[workspaceId])
-
     return createdDoc
   },
 
+  async removeDocument(workspaceId: string, documentId: string): Promise<boolean> {
+    await tutorApiClient.deleteDocument(documentId).catch(() => null)
+
+    if (documentsCache[workspaceId]) {
+      const initialLen = documentsCache[workspaceId].length
+      documentsCache[workspaceId] = documentsCache[workspaceId].filter((d) => d.id !== documentId)
+      const ws = workspacesCache.find((w) => w.id === workspaceId)
+      if (ws) {
+        ws.documentCount = Math.max(0, ws.documentCount - 1)
+      }
+      return documentsCache[workspaceId].length < initialLen
+    }
+    return false
+  },
+
+  // 3. TOPICS & KNOWLEDGE METHODS
   async getTopics(workspaceId: string): Promise<Topic[]> {
     if (!workspaceId) return []
-    return topicsState[workspaceId] ? [...topicsState[workspaceId]] : []
+    return topicsCache[workspaceId] ? [...topicsCache[workspaceId]] : []
   },
 
   async getKnowledgeGaps(workspaceId: string): Promise<KnowledgeGap[]> {
     if (!workspaceId) return []
-    return knowledgeGapsState[workspaceId] ? [...knowledgeGapsState[workspaceId]] : []
+    return knowledgeGapsCache[workspaceId] ? [...knowledgeGapsCache[workspaceId]] : []
   },
 
   async getLearningReadiness(workspaceId: string): Promise<LearningReadiness[]> {
     if (!workspaceId) return []
-    return readinessState[workspaceId] ? [...readinessState[workspaceId]] : []
+    return readinessCache[workspaceId] ? [...readinessCache[workspaceId]] : []
+  },
+
+  async getAIRecommendation(workspaceId: string): Promise<AIRecommendation | null> {
+    if (!workspaceId) return null
+    return recommendationsCache[workspaceId] || null
   },
 
   async getRecommendation(workspaceId: string): Promise<AIRecommendation | null> {
-    if (!workspaceId) return null
-    return recommendationsState[workspaceId] ? { ...recommendationsState[workspaceId] } : null
+    return this.getAIRecommendation(workspaceId)
   },
 
   async getRoadmap(workspaceId: string): Promise<Roadmap | null> {
     if (!workspaceId) return null
-    return roadmapsState[workspaceId] ? { ...roadmapsState[workspaceId] } : null
+    return roadmapsCache[workspaceId] || null
   },
 
+  // 4. QUIZ & FLASHCARDS METHODS
   async getQuizQuestions(workspaceId: string): Promise<QuizQuestion[]> {
     if (!workspaceId) return []
-    return quizzesState[workspaceId] ? [...quizzesState[workspaceId]] : []
+    return quizzesCache[workspaceId] ? [...quizzesCache[workspaceId]] : []
   },
 
-  async submitQuiz(workspaceId: string, answers: Record<string, string>): Promise<QuizResult> {
-    const questions = quizzesState[workspaceId] || []
+  async submitQuizResult(
+    workspaceId: string,
+    answers: Record<string, string>,
+    timeSpentSeconds: number = 60
+  ): Promise<QuizResult> {
+    return this.submitQuiz(workspaceId, answers, timeSpentSeconds)
+  },
+
+  async submitQuiz(
+    workspaceId: string,
+    answers: Record<string, string>,
+    timeSpentSeconds: number = 60
+  ): Promise<QuizResult> {
+    const questions = await this.getQuizQuestions(workspaceId)
     let correctCount = 0
+    const gaps: string[] = []
 
     questions.forEach((q) => {
       if (answers[q.id] === q.correctKey) {
         correctCount++
+      } else {
+        gaps.push(q.conceptTested)
       }
     })
 
-    const total = questions.length || 1
-    const accuracy = Math.round((correctCount / total) * 100)
+    const accuracy = questions.length > 0 ? Math.round((correctCount / questions.length) * 100) : 100
 
-    const result: QuizResult = {
+    return {
       attemptId: `att_${Date.now()}`,
-      score: correctCount,
-      totalQuestions: total,
+      score: correctCount * 10,
+      totalQuestions: questions.length,
       accuracyPercentage: accuracy,
-      averageResponseTimeSeconds: 16,
+      averageResponseTimeSeconds: questions.length > 0 ? Math.round(timeSpentSeconds / questions.length) : 0,
       conceptPerformance: questions.map((q) => ({
         conceptName: q.conceptTested,
         accuracyPercentage: answers[q.id] === q.correctKey ? 100 : 0,
-        status: answers[q.id] === q.correctKey ? 'strong' : 'needs_review',
+        status: (answers[q.id] === q.correctKey ? 'strong' : 'needs_review') as MasteryStatus,
       })),
-      knowledgeGapsIdentified: questions
-        .filter((q) => answers[q.id] !== q.correctKey)
-        .map((q) => q.conceptTested),
-      recommendation:
-        accuracy >= 80
-          ? 'Great performance! Your grasp of these core concepts is strong. Continue to advanced topics.'
-          : 'Review identified weak concepts with AI Tutor before attempting the next milestone.',
+      knowledgeGapsIdentified: gaps,
+      recommendation: gaps.length > 0 ? `Review ${gaps.join(', ')} with AI Tutor.` : 'Excellent performance! Proceed to next level.',
     }
-
-    if (!activitiesState[workspaceId]) {
-      activitiesState[workspaceId] = []
-    }
-    activitiesState[workspaceId].unshift({
-      id: `act_${Date.now()}`,
-      workspaceId,
-      type: 'quiz_completed',
-      title: 'Diagnostic Quiz Completed',
-      description: `Scored ${correctCount}/${total} (${accuracy}% accuracy).`,
-      timestamp: 'Just now',
-      scoreBadge: `${accuracy}% Score`,
-    })
-    saveToStorage(`${STORAGE_KEYS.ACTIVITIES_PREFIX}${workspaceId}`, activitiesState[workspaceId])
-
-    return result
   },
 
   async getFlashcardDecks(workspaceId: string): Promise<FlashcardDeck[]> {
     if (!workspaceId) return []
-    return flashcardDecksState[workspaceId] ? [...flashcardDecksState[workspaceId]] : []
+    return flashcardDecksCache[workspaceId] ? [...flashcardDecksCache[workspaceId]] : []
   },
 
+  async reviewFlashcard(
+    workspaceId: string,
+    deckId: string,
+    cardId: string,
+    rating: 'again' | 'hard' | 'good' | 'easy'
+  ): Promise<void> {
+    const decks = flashcardDecksCache[workspaceId] || []
+    const deck = decks.find((d) => d.id === deckId)
+    if (!deck) return
+
+    const card = deck.cards.find((c) => c.id === cardId)
+    if (!card) return
+
+    card.lastReviewed = new Date().toISOString().split('T')[0]
+    if (rating === 'easy' || rating === 'good') {
+      card.intervalDays = (card.intervalDays || 1) * 2
+    } else {
+      card.intervalDays = 1
+    }
+  },
+
+  // 5. STUDY PLAN & ACTIVITY METHODS
   async getStudyPlan(workspaceId: string): Promise<StudyPlan | null> {
     if (!workspaceId) return null
-    const stored = loadFromStorage<StudyPlan | null>(`${STORAGE_KEYS.STUDY_PLAN_PREFIX}${workspaceId}`, null)
-    if (stored) return stored
-    return studyPlansState[workspaceId] ? { ...studyPlansState[workspaceId] } : null
+    return studyPlansCache[workspaceId] || null
   },
 
-  async toggleStudyTask(workspaceId: string, taskId: string): Promise<void> {
-    const plan = studyPlansState[workspaceId]
-    if (plan) {
-      const task = plan.tasks.find((t) => t.id === taskId)
-      if (task) {
-        task.completed = !task.completed
-        if (task.completed) {
-          plan.todayCompletedMinutes = Math.min(plan.dailyTargetMinutes, plan.todayCompletedMinutes + task.estimatedMinutes)
-        } else {
-          plan.todayCompletedMinutes = Math.max(0, plan.todayCompletedMinutes - task.estimatedMinutes)
-        }
-        saveToStorage(`${STORAGE_KEYS.STUDY_PLAN_PREFIX}${workspaceId}`, plan)
+  async toggleTaskCompletion(workspaceId: string, taskId: string): Promise<StudyPlan | null> {
+    const plan = studyPlansCache[workspaceId]
+    if (!plan) return null
+
+    const task = plan.tasks.find((t) => t.id === taskId)
+    if (task) {
+      task.completed = !task.completed
+      if (task.completed) {
+        plan.todayCompletedMinutes += task.estimatedMinutes
+        plan.weekCompletedMinutes += task.estimatedMinutes
+      } else {
+        plan.todayCompletedMinutes = Math.max(0, plan.todayCompletedMinutes - task.estimatedMinutes)
+        plan.weekCompletedMinutes = Math.max(0, plan.weekCompletedMinutes - task.estimatedMinutes)
       }
     }
+    return { ...plan }
+  },
+
+  async toggleStudyTask(workspaceId: string, taskId: string): Promise<StudyPlan | null> {
+    return this.toggleTaskCompletion(workspaceId, taskId)
   },
 
   async getActivities(workspaceId?: string): Promise<LearningActivity[]> {
-    if (workspaceId) {
-      const stored = loadFromStorage<LearningActivity[]>(`${STORAGE_KEYS.ACTIVITIES_PREFIX}${workspaceId}`, [])
-      if (stored.length > 0) return stored
-      return activitiesState[workspaceId] ? [...activitiesState[workspaceId]] : []
+    if (workspaceId && activitiesCache[workspaceId]) {
+      return [...activitiesCache[workspaceId]]
     }
-    const all: LearningActivity[] = []
-    Object.entries(activitiesState).forEach(([wsId, acts]) => {
-      const ws = workspacesState.find((w) => w.id === wsId)
-      acts.forEach((a) => {
-        all.push({ ...a, workspaceName: ws?.name || 'Workspace' })
-      })
-    })
-    return all
+    const all = Object.values(activitiesCache).flat()
+    return all.length > 0 ? all : []
   },
 
+  // 6. TUTOR & RAG CHAT (Authoritative Source: FastAPI /api/v1/workspaces/{id}/tutor)
   async getTutorMessages(workspaceId: string): Promise<TutorMessage[]> {
     if (!workspaceId) return []
-    const stored = loadFromStorage<TutorMessage[]>(`${STORAGE_KEYS.TUTOR_PREFIX}${workspaceId}`, [])
-    if (stored.length > 0) {
-      tutorMessagesState[workspaceId] = stored
-      return stored
-    }
-    return tutorMessagesState[workspaceId] ? [...tutorMessagesState[workspaceId]] : []
+    return tutorMessagesCache[workspaceId] ? [...tutorMessagesCache[workspaceId]] : []
   },
 
   async sendTutorMessage(workspaceId: string, userText: string): Promise<TutorMessage> {
@@ -546,30 +379,27 @@ export const workspaceService = {
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     }
 
-    if (!tutorMessagesState[workspaceId]) {
-      tutorMessagesState[workspaceId] = []
+    if (!tutorMessagesCache[workspaceId]) {
+      tutorMessagesCache[workspaceId] = []
     }
-    tutorMessagesState[workspaceId].push(userMsg)
+    tutorMessagesCache[workspaceId].push(userMsg)
 
-    // Call RAG Engine (via Next.js API or FastAPI backend)
     try {
       const assistantMsg = await tutorApiClient.sendTutorMessage(workspaceId, userText)
-      tutorMessagesState[workspaceId].push(assistantMsg)
-      saveToStorage(`${STORAGE_KEYS.TUTOR_PREFIX}${workspaceId}`, tutorMessagesState[workspaceId])
+      tutorMessagesCache[workspaceId].push(assistantMsg)
       return assistantMsg
     } catch (err: any) {
-      console.error('RAG request failed:', err)
+      console.error('RAG request failed on FastAPI backend:', err)
       const errorMsg: TutorMessage = {
         id: `tm_err_${Date.now()}`,
         workspaceId,
         role: 'assistant',
-        content: `⚠️ **[AI Tutor Service Notice]**: ${err.message || 'Unable to connect to RAG generation engine'}.\n\nPlease check that your learning sources are uploaded and that your language model configuration is active.`,
+        content: `⚠️ **[AI Tutor Service Notice]**: ${err.message || 'Unable to connect to RAG generation engine'}.\n\nPlease check that your learning sources are uploaded and that your language model configuration is active on FastAPI.`,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         citations: [],
         suggestedFollowUps: ['Try again', 'Manage workspace sources'],
       }
-      tutorMessagesState[workspaceId].push(errorMsg)
-      saveToStorage(`${STORAGE_KEYS.TUTOR_PREFIX}${workspaceId}`, tutorMessagesState[workspaceId])
+      tutorMessagesCache[workspaceId].push(errorMsg)
       return errorMsg
     }
   },
