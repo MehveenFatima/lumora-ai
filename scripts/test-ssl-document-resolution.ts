@@ -19,16 +19,14 @@ async function runSslAcceptanceTests() {
   
   // Clean in-memory storage mock
   const storage: Record<string, string> = {}
-  Object.defineProperty(globalThis, 'localStorage', {
-    value: {
+  ;(globalThis as any).window = {
+    localStorage: {
       getItem: (k: string) => storage[k] || null,
       setItem: (k: string, v: string) => { storage[k] = String(v) },
       removeItem: (k: string) => { delete storage[k] },
-      clear: () => { Object.keys(storage).forEach(k => delete storage[k]) },
+      clear: () => { Object.keys(storage).forEach((k) => delete storage[k]) },
     },
-    writable: true,
-    configurable: true,
-  })
+  }
 
   // 1. Ingest SSL-UNIT - 1 (1).pdf
   console.log('▶ STEP 2: Ingesting "SSL-UNIT - 1 (1).pdf" into workspace...')

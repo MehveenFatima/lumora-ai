@@ -14,16 +14,14 @@ async function runRealRagTests() {
   console.log('===============================================================\n')
 
   const storage: Record<string, string> = {}
-  Object.defineProperty(globalThis, 'localStorage', {
-    value: {
+  ;(globalThis as any).window = {
+    localStorage: {
       getItem: (k: string) => storage[k] || null,
       setItem: (k: string, v: string) => { storage[k] = String(v) },
       removeItem: (k: string) => { delete storage[k] },
       clear: () => { Object.keys(storage).forEach((k) => delete storage[k]) },
     },
-    writable: true,
-    configurable: true,
-  })
+  }
 
   const wsA = await workspaceService.createWorkspace({
     name: 'SSL & Secure Systems Track',

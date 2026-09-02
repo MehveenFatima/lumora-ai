@@ -5,7 +5,7 @@
 import { workspaceService } from '../lib/services/workspace-service'
 import { tutorApiClient } from '../lib/api/tutor-api-client'
 
-// Robust in-memory localStorage polyfill for Node environment
+// In-memory window storage polyfill for Node test environment
 const mockStorage: Record<string, string> = {}
 const storageObj = {
   getItem: (k: string) => mockStorage[k] || null,
@@ -15,11 +15,7 @@ const storageObj = {
   length: 0,
   key: (i: number) => Object.keys(mockStorage)[i] || null,
 }
-Object.defineProperty(globalThis, 'localStorage', {
-  value: storageObj,
-  writable: true,
-  configurable: true,
-})
+;(globalThis as any).window = { localStorage: storageObj }
 
 function assert(condition: boolean, msg: string) {
   if (!condition) {

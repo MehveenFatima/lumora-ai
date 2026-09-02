@@ -21,11 +21,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     try {
-      const stored = localStorage.getItem(STORAGE_KEY) as Theme | null
-      if (stored === 'light' || stored === 'dark' || stored === 'system') {
-        setThemeState(stored)
-      } else {
-        setThemeState('dark')
+      if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
+        const stored = window.localStorage.getItem(STORAGE_KEY) as Theme | null
+        if (stored === 'light' || stored === 'dark' || stored === 'system') {
+          setThemeState(stored)
+        } else {
+          setThemeState('dark')
+        }
       }
     } catch {
       setThemeState('dark')
@@ -66,7 +68,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const setTheme = (newTheme: Theme) => {
     setThemeState(newTheme)
     try {
-      localStorage.setItem(STORAGE_KEY, newTheme)
+      if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
+        window.localStorage.setItem(STORAGE_KEY, newTheme)
+      }
     } catch {
       // ignore
     }

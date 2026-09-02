@@ -44,9 +44,9 @@ const STORAGE_KEYS = {
 }
 
 function loadFromStorage<T>(key: string, fallback: T): T {
-  if (typeof localStorage === 'undefined') return fallback
+  if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') return fallback
   try {
-    const item = localStorage.getItem(key)
+    const item = window.localStorage.getItem(key)
     return item ? JSON.parse(item) : fallback
   } catch {
     return fallback
@@ -54,9 +54,9 @@ function loadFromStorage<T>(key: string, fallback: T): T {
 }
 
 function saveToStorage<T>(key: string, data: T): void {
-  if (typeof localStorage === 'undefined') return
+  if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') return
   try {
-    localStorage.setItem(key, JSON.stringify(data))
+    window.localStorage.setItem(key, JSON.stringify(data))
   } catch {
     // Ignore storage quota errors
   }
@@ -266,11 +266,15 @@ export const workspaceService = {
     delete quizzesState[workspaceId]
     delete flashcardDecksState[workspaceId]
 
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem(`${STORAGE_KEYS.DOCUMENTS_PREFIX}${workspaceId}`)
-      localStorage.removeItem(`${STORAGE_KEYS.TUTOR_PREFIX}${workspaceId}`)
-      localStorage.removeItem(`${STORAGE_KEYS.ACTIVITIES_PREFIX}${workspaceId}`)
-      localStorage.removeItem(`${STORAGE_KEYS.STUDY_PLAN_PREFIX}${workspaceId}`)
+    if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
+      try {
+        window.localStorage.removeItem(`${STORAGE_KEYS.DOCUMENTS_PREFIX}${workspaceId}`)
+        window.localStorage.removeItem(`${STORAGE_KEYS.TUTOR_PREFIX}${workspaceId}`)
+        window.localStorage.removeItem(`${STORAGE_KEYS.ACTIVITIES_PREFIX}${workspaceId}`)
+        window.localStorage.removeItem(`${STORAGE_KEYS.STUDY_PLAN_PREFIX}${workspaceId}`)
+      } catch {
+        // Ignore errors
+      }
     }
 
     // Sync deletion to backend
