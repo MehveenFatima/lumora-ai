@@ -3,7 +3,6 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
-  LayoutDashboard,
   MessagesSquare,
   Zap,
   Layers,
@@ -16,6 +15,7 @@ import {
   GraduationCap,
   Sparkles,
   ChevronRight,
+  Home,
 } from 'lucide-react'
 import { Workspace } from '@/lib/types/domain'
 import { Badge } from '@/components/ui/badge'
@@ -31,9 +31,9 @@ interface WorkspaceSidebarProps {
 export function WorkspaceSidebar({ workspace, onNavigate, className }: WorkspaceSidebarProps) {
   const pathname = usePathname()
   const basePath = `/dashboard/workspace/${workspace.id}`
+  const isRootActive = pathname === basePath
 
   const navItems = [
-    { label: 'Overview', href: basePath, icon: LayoutDashboard, exact: true },
     { label: 'AI Tutor', href: `${basePath}/tutor`, icon: MessagesSquare, badge: 'Grounded' },
     { label: 'Adaptive Quiz', href: `${basePath}/quiz`, icon: Zap },
     { label: 'Flashcards', href: `${basePath}/flashcards`, icon: Layers, badge: workspace.flashcardsDueCount > 0 ? `${workspace.flashcardsDueCount}` : undefined },
@@ -78,17 +78,14 @@ export function WorkspaceSidebar({ workspace, onNavigate, className }: Workspace
         </Link>
       </div>
 
-      {/* Primary Workspace Navigation */}
+      {/* Primary Workspace Navigation (8 Core Modules) */}
       <div className="mt-4 flex flex-1 flex-col overflow-y-auto">
         <div className="px-2 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-          Workspace Navigation
+          Workspace Modules
         </div>
         <nav className="flex flex-col gap-0.5" aria-label="Workspace pages">
           {navItems.map((item) => {
-            const isActive = item.exact
-              ? pathname === item.href
-              : pathname === item.href || pathname?.startsWith(`${item.href}/`)
-
+            const isActive = pathname === item.href || pathname?.startsWith(`${item.href}/`)
             const Icon = item.icon
 
             return (
@@ -130,27 +127,32 @@ export function WorkspaceSidebar({ workspace, onNavigate, className }: Workspace
         </nav>
       </div>
 
-      {/* Workspace Context Footer Card */}
+      {/* Workspace Command Center Return Card */}
       <div className="mt-auto pt-3 border-t border-sidebar-border/80">
-        <div className="rounded-xl border border-sidebar-border bg-card/60 p-3 shadow-soft">
+        <Link
+          href={basePath}
+          onClick={onNavigate}
+          className={cn(
+            'block rounded-xl border p-3 shadow-soft transition-all',
+            isRootActive
+              ? 'border-primary/40 bg-primary/5 ring-1 ring-primary/20'
+              : 'border-sidebar-border bg-card/60 hover:border-primary/30 hover:bg-card'
+          )}
+        >
           <div className="flex items-center justify-between text-xs">
             <span className="font-semibold text-foreground truncate max-w-[130px]">{workspace.name}</span>
-            <span className="text-[11px] font-medium tabular-nums text-primary">{workspace.overallMastery}%</span>
+            <span className="text-[11px] font-bold tabular-nums text-primary">{workspace.overallMastery}%</span>
           </div>
           <div className="mt-2">
             <Progress value={workspace.overallMastery} className="h-1.5" />
           </div>
           <div className="mt-2.5 flex items-center justify-between text-[11px] text-muted-foreground">
-            <span>{workspace.documentCount} sources indexed</span>
-            <Link
-              href={`${basePath}/sources`}
-              onClick={onNavigate}
-              className="text-primary hover:underline flex items-center gap-0.5"
-            >
-              Add <ChevronRight className="size-3" />
-            </Link>
+            <span>{workspace.documentCount} sources</span>
+            <span className="text-primary font-medium flex items-center gap-0.5">
+              Command Center <ChevronRight className="size-3" />
+            </span>
           </div>
-        </div>
+        </Link>
       </div>
     </aside>
   )

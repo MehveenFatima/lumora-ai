@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams } from 'next/navigation'
 import {
   Sparkles,
   ArrowRight,
@@ -19,11 +19,10 @@ import {
   ChevronRight,
   TrendingUp,
   TrendingDown,
-  Info,
   Map,
-  Plus,
-  Play,
-  RotateCcw,
+  CalendarCheck,
+  Check,
+  Flame,
 } from 'lucide-react'
 import { workspaceService } from '@/lib/services/workspace-service'
 import {
@@ -40,9 +39,8 @@ import { Progress } from '@/components/ui/progress'
 import { RoadmapDetailModal } from '@/components/workspace/roadmap-detail-modal'
 import { cn } from '@/lib/utils'
 
-export default function WorkspaceOverviewPage() {
+export default function WorkspaceLandingPage() {
   const params = useParams()
-  const router = useRouter()
   const workspaceId = (params?.workspaceId as string) || 'dsa'
 
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
@@ -54,7 +52,7 @@ export default function WorkspaceOverviewPage() {
   const [activities, setActivities] = useState<LearningActivity[]>([])
   const [loading, setLoading] = useState(true)
 
-  // Modals & Drawers
+  // Modals & Accordions
   const [showRationale, setShowRationale] = useState(false)
   const [roadmapModalOpen, setRoadmapModalOpen] = useState(false)
 
@@ -80,7 +78,7 @@ export default function WorkspaceOverviewPage() {
         setStudyPlan(sp)
         setActivities(act)
       } catch (err) {
-        console.error('Failed to load workspace overview:', err)
+        console.error('Failed to load workspace command center:', err)
       } finally {
         setLoading(false)
       }
@@ -94,7 +92,7 @@ export default function WorkspaceOverviewPage() {
       <div className="flex h-full w-full items-center justify-center p-8">
         <div className="flex flex-col items-center gap-3 text-center">
           <div className="size-10 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-          <p className="text-xs text-muted-foreground font-medium">Building workspace intelligence...</p>
+          <p className="text-xs text-muted-foreground font-medium">Loading workspace command center...</p>
         </div>
       </div>
     )
@@ -117,13 +115,13 @@ export default function WorkspaceOverviewPage() {
   const criticalGapTopics = topics.filter((t) => t.status === 'critical_gap')
 
   return (
-    <div className="mx-auto w-full max-w-[1360px] px-4 py-6 md:px-6 md:py-8">
-      {/* 1. Workspace Identity & Command Header */}
-      <div className="mb-6 flex flex-col justify-between gap-4 md:flex-row md:items-end">
+    <div className="mx-auto w-full max-w-[1360px] px-4 py-6 md:px-6 md:py-8 space-y-6">
+      {/* 1. Workspace Identity & High-Level Telemetry */}
+      <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
         <div>
           <div className="flex items-center gap-2">
-            <span className="text-xs font-medium uppercase tracking-wider text-primary">
-              Workspace Overview
+            <span className="text-xs font-semibold uppercase tracking-wider text-primary">
+              Workspace Command Center
             </span>
             <span className="text-muted-foreground">•</span>
             <span className="text-xs text-muted-foreground">{workspace.goal}</span>
@@ -131,17 +129,17 @@ export default function WorkspaceOverviewPage() {
           <h1 className="mt-1 font-display text-2xl font-semibold tracking-tight text-foreground md:text-3xl">
             {workspace.name}
           </h1>
-          <p className="mt-1 text-xs text-muted-foreground">
+          <p className="mt-1 text-xs text-muted-foreground max-w-2xl">
             {workspace.description}
           </p>
         </div>
 
-        {/* Quick Summary Pill Bar */}
+        {/* Quick Context Stats */}
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-2 rounded-2xl border border-border bg-card px-3.5 py-2 shadow-soft">
+          <div className="flex items-center gap-2.5 rounded-2xl border border-border bg-card px-3.5 py-2 shadow-soft">
             <Target className="size-4 text-primary" />
             <div>
-              <div className="text-[10px] text-muted-foreground">Overall Mastery</div>
+              <div className="text-[10px] text-muted-foreground">Mastery</div>
               <div className="text-xs font-bold text-foreground">{workspace.overallMastery}%</div>
             </div>
             <Badge variant="success" size="sm" className="ml-1 text-[10px]">
@@ -151,18 +149,18 @@ export default function WorkspaceOverviewPage() {
 
           <Link
             href={`/dashboard/workspace/${workspace.id}/sources`}
-            className="flex items-center gap-2 rounded-2xl border border-border bg-card px-3.5 py-2 shadow-soft transition-colors hover:bg-accent/40"
+            className="flex items-center gap-2.5 rounded-2xl border border-border bg-card px-3.5 py-2 shadow-soft transition-colors hover:border-primary/40 hover:bg-accent/40"
           >
             <FileText className="size-4 text-primary" />
             <div>
-              <div className="text-[10px] text-muted-foreground">Grounded Sources</div>
+              <div className="text-[10px] text-muted-foreground">Sources</div>
               <div className="text-xs font-bold text-foreground">{workspace.documentCount} Docs</div>
             </div>
           </Link>
 
           <Link
             href={`/dashboard/workspace/${workspace.id}/flashcards`}
-            className="flex items-center gap-2 rounded-2xl border border-border bg-card px-3.5 py-2 shadow-soft transition-colors hover:bg-accent/40"
+            className="flex items-center gap-2.5 rounded-2xl border border-border bg-card px-3.5 py-2 shadow-soft transition-colors hover:border-primary/40 hover:bg-accent/40"
           >
             <Layers className="size-4 text-warning" />
             <div>
@@ -173,9 +171,9 @@ export default function WorkspaceOverviewPage() {
         </div>
       </div>
 
-      {/* 2. AI RECOMMENDATION / NEXT BEST ACTION (HERO OF OVERVIEW) */}
+      {/* PRIORITY 1: "What should I do next?" → AI RECOMMENDATION */}
       {recommendation && (
-        <section className="mb-6 overflow-hidden rounded-3xl border border-primary/25 bg-gradient-to-br from-card via-card to-primary/5 p-5 shadow-card md:p-7">
+        <section className="overflow-hidden rounded-3xl border border-primary/30 bg-gradient-to-br from-card via-card to-primary/5 p-5 shadow-card md:p-7">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/70 pb-4">
             <div className="flex items-center gap-2">
               <span className="flex size-7 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-glow">
@@ -187,8 +185,8 @@ export default function WorkspaceOverviewPage() {
             </div>
 
             <div className="flex items-center gap-2">
-              <Badge variant="destructive" size="sm" className="text-[10px] font-semibold">
-                {recommendation.priority.toUpperCase()} PRIORITY
+              <Badge variant="destructive" size="sm" className="text-[10px] font-semibold uppercase">
+                {recommendation.priority} Priority
               </Badge>
               <span className="flex items-center gap-1 text-xs text-muted-foreground">
                 <Clock className="size-3.5" />
@@ -198,27 +196,27 @@ export default function WorkspaceOverviewPage() {
           </div>
 
           <div className="mt-4 grid gap-6 lg:grid-cols-3">
-            <div className="lg:col-span-2">
+            <div className="lg:col-span-2 space-y-2">
               <h2 className="font-display text-lg font-semibold text-foreground md:text-xl">
                 {recommendation.title}
               </h2>
-              <p className="mt-2 text-xs leading-relaxed text-muted-foreground md:text-sm">
+              <p className="text-xs leading-relaxed text-muted-foreground md:text-sm">
                 &ldquo;{recommendation.rationale}&rdquo;
               </p>
 
               {/* Rationale toggle panel */}
-              <div className="mt-3">
+              <div className="pt-2">
                 <button
                   onClick={() => setShowRationale(!showRationale)}
                   className="inline-flex items-center gap-1.5 text-xs font-medium text-primary transition-opacity hover:opacity-80"
                 >
                   <HelpCircle className="size-3.5" />
-                  <span>{showRationale ? 'Hide rationale' : 'Why am I seeing this recommendation?'}</span>
+                  <span>{showRationale ? 'Hide diagnostic rationale' : 'Why am I seeing this?'}</span>
                 </button>
 
                 {showRationale && (
                   <div className="mt-2 rounded-2xl border border-border bg-background/80 p-3.5 text-xs animate-in fade-in duration-150">
-                    <p className="font-semibold text-foreground">Algorithmic Diagnostic Drivers:</p>
+                    <p className="font-semibold text-foreground">Diagnostic Criteria & Signals:</p>
                     <ul className="mt-1.5 space-y-1 text-muted-foreground list-disc pl-4 text-[11px]">
                       {recommendation.dataPoints.map((dp, i) => (
                         <li key={i}>{dp}</li>
@@ -229,7 +227,7 @@ export default function WorkspaceOverviewPage() {
               </div>
             </div>
 
-            {/* Action Triggers */}
+            {/* Direct Action Triggers */}
             <div className="flex flex-col justify-center gap-2.5 rounded-2xl border border-border/80 bg-background/50 p-4">
               <Link
                 href={`/dashboard/workspace/${workspace.id}/tutor`}
@@ -250,11 +248,11 @@ export default function WorkspaceOverviewPage() {
         </section>
       )}
 
-      {/* Main Grid: 2 Columns */}
+      {/* Main Command Center Grid: 2 Columns */}
       <div className="grid gap-6 lg:grid-cols-12">
-        {/* Left Column: Knowledge Profile, Knowledge Gaps, Roadmap */}
+        {/* Left Column: Knowledge Profile, Knowledge Gaps, Adaptive Roadmap */}
         <div className="space-y-6 lg:col-span-8">
-          {/* 3. KNOWLEDGE PROFILE */}
+          {/* PRIORITY 2: "How am I doing?" → KNOWLEDGE PROFILE */}
           <section className="rounded-3xl border border-border bg-card p-5 shadow-soft md:p-6">
             <div className="flex items-center justify-between">
               <div>
@@ -262,7 +260,7 @@ export default function WorkspaceOverviewPage() {
                   Your Knowledge Profile
                 </h3>
                 <p className="text-xs text-muted-foreground">
-                  Estimated retention and mastery level across curriculum topics
+                  Curriculum topic mastery and cognitive readiness
                 </p>
               </div>
               <Link
@@ -286,7 +284,7 @@ export default function WorkspaceOverviewPage() {
                   {strongTopics.map((t) => (
                     <div key={t.id} className="flex items-center justify-between text-xs">
                       <span className="font-medium text-foreground truncate max-w-[140px]">{t.name}</span>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5">
                         <TrendingUp className="size-3 text-success" />
                         <span className="font-semibold tabular-nums text-foreground">{t.mastery}%</span>
                       </div>
@@ -325,7 +323,7 @@ export default function WorkspaceOverviewPage() {
                   {needsReviewTopics.map((t) => (
                     <div key={t.id} className="flex items-center justify-between text-xs">
                       <span className="font-medium text-foreground truncate max-w-[140px]">{t.name}</span>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5">
                         <TrendingDown className="size-3 text-warning" />
                         <span className="font-semibold tabular-nums text-foreground">{t.mastery}%</span>
                       </div>
@@ -354,7 +352,7 @@ export default function WorkspaceOverviewPage() {
             </div>
           </section>
 
-          {/* 4. KNOWLEDGE GAPS */}
+          {/* PRIORITY 3: "What do I need to improve?" → KNOWLEDGE GAPS */}
           <section className="rounded-3xl border border-border bg-card p-5 shadow-soft md:p-6">
             <div className="flex items-center justify-between">
               <div>
@@ -362,7 +360,7 @@ export default function WorkspaceOverviewPage() {
                   Identified Knowledge Gaps
                 </h3>
                 <p className="text-xs text-muted-foreground">
-                  Specific concepts where failure rates dropped below baseline
+                  Concepts diagnosed below passing threshold
                 </p>
               </div>
               <Badge variant="warning" size="sm">
@@ -371,7 +369,7 @@ export default function WorkspaceOverviewPage() {
             </div>
 
             <div className="mt-4 flex flex-col gap-3">
-              {knowledgeGaps.map((gap) => (
+              {knowledgeGaps.slice(0, 3).map((gap) => (
                 <div
                   key={gap.id}
                   className="rounded-2xl border border-border bg-background/50 p-4 transition-colors hover:border-primary/40"
@@ -418,7 +416,7 @@ export default function WorkspaceOverviewPage() {
             </div>
           </section>
 
-          {/* 5. ADAPTIVE ROADMAP (LIVES INSIDE OVERVIEW) */}
+          {/* PRIORITY 4: "Where am I going?" → ADAPTIVE ROADMAP */}
           {roadmap && (
             <section className="rounded-3xl border border-border bg-card p-5 shadow-soft md:p-6">
               <div className="flex items-center justify-between">
@@ -431,7 +429,7 @@ export default function WorkspaceOverviewPage() {
                       Adaptive Learning Roadmap
                     </h3>
                     <p className="text-xs text-muted-foreground">
-                      Dynamic milestone sequencing based on ongoing assessments
+                      Self-adjusting milestone sequence based on continuous diagnostics
                     </p>
                   </div>
                 </div>
@@ -444,7 +442,7 @@ export default function WorkspaceOverviewPage() {
                 </button>
               </div>
 
-              {/* Adaptation Callout */}
+              {/* Dynamic Adaptation Callout */}
               {roadmap.adaptation?.hasAdaptation && (
                 <div className="mt-4 rounded-2xl border border-primary/20 bg-primary/5 p-3.5 text-xs">
                   <div className="flex items-center gap-1.5 font-semibold text-primary">
@@ -457,8 +455,8 @@ export default function WorkspaceOverviewPage() {
                 </div>
               )}
 
-              {/* Visual Path Preview */}
-              <div className="mt-5 space-y-4">
+              {/* Compact Visual Path Preview */}
+              <div className="mt-5 space-y-3">
                 {roadmap.stages.slice(0, 2).map((stage) => (
                   <div key={stage.id} className="rounded-2xl border border-border/80 bg-background/50 p-4">
                     <div className="flex items-center justify-between text-xs font-semibold text-foreground">
@@ -497,7 +495,7 @@ export default function WorkspaceOverviewPage() {
 
         {/* Right Column: Today's Plan & Recent Activity */}
         <div className="space-y-6 lg:col-span-4">
-          {/* 6. TODAY'S PLAN */}
+          {/* PRIORITY 5: "What should I do today?" → TODAY'S PLAN */}
           {studyPlan && (
             <section className="rounded-3xl border border-border bg-card p-5 shadow-soft">
               <div className="flex items-center justify-between">
@@ -568,7 +566,7 @@ export default function WorkspaceOverviewPage() {
             </section>
           )}
 
-          {/* 7. RECENT ACTIVITY TIMELINE */}
+          {/* PRIORITY 6: "What have I done?" → RECENT ACTIVITY */}
           <section className="rounded-3xl border border-border bg-card p-5 shadow-soft">
             <div className="flex items-center justify-between border-b border-border pb-3">
               <h3 className="font-display text-sm font-semibold text-foreground">Recent Activity</h3>
@@ -596,7 +594,7 @@ export default function WorkspaceOverviewPage() {
         </div>
       </div>
 
-      {/* Full Roadmap Modal */}
+      {/* Full Roadmap Detail Modal */}
       {roadmap && (
         <RoadmapDetailModal
           isOpen={roadmapModalOpen}
