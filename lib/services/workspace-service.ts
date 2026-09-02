@@ -44,7 +44,7 @@ const STORAGE_KEYS = {
 }
 
 function loadFromStorage<T>(key: string, fallback: T): T {
-  if (typeof window === 'undefined') return fallback
+  if (typeof localStorage === 'undefined') return fallback
   try {
     const item = localStorage.getItem(key)
     return item ? JSON.parse(item) : fallback
@@ -54,11 +54,11 @@ function loadFromStorage<T>(key: string, fallback: T): T {
 }
 
 function saveToStorage<T>(key: string, data: T): void {
-  if (typeof window === 'undefined') return
+  if (typeof localStorage === 'undefined') return
   try {
     localStorage.setItem(key, JSON.stringify(data))
   } catch {
-    // Ignore storage errors
+    // Ignore storage quota errors
   }
 }
 
@@ -355,11 +355,19 @@ export const workspaceService = {
         }
       }
     } else {
-      const { ragEngine } = await import('@/lib/server/rag-engine')
-      const docBuffer = Buffer.from(
-        `PAGE 1: ${file.title} (${file.filename}). In the Raft consensus algorithm, when a follower experiences an election timeout, it transitions to candidate state, increments term counter, votes for itself, and sends RequestVote RPCs to all other cluster nodes.\n\nPAGE 2: Log replication and state machine safety in distributed systems.`
-      )
-      createdDoc = ragEngine.addDocument(workspaceId, file.title, file.filename, docBuffer, file.type)
+      createdDoc = {
+        id: `doc_${Date.now()}`,
+        workspaceId,
+        title: file.title,
+        filename: file.filename,
+        type: file.type,
+        sizeBytes: file.sizeBytes,
+        pagesCount: file.pagesCount,
+        status: 'ready',
+        chunksCount: Math.ceil(file.pagesCount * 1.8),
+        uploadedAt: new Date().toISOString().split('T')[0],
+        summary: 'Indexed semantic chunks ready for retrieval-augmented generation in AI Tutor.',
+      }
     }
 
     if (!documentsState[workspaceId]) {

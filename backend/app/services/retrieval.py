@@ -1,5 +1,6 @@
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from backend.app.repositories.chunks import chunk_repo
+from backend.app.repositories.documents import document_repo
 from backend.app.services.embeddings import embedding_service
 from backend.app.core.config import settings
 from backend.app.core.logging import get_logger
@@ -51,38 +52,102 @@ class RetrievalService:
         self.similarity_threshold = similarity_threshold
         self.max_context_tokens = max_context_tokens
 
-    def is_summary_query(self, query: str) -> bool:
-        q = query.lower()
+    async def resolve_document_and_intent(
+        self, workspace_id: str, query: str
+    ) -> Tuple[str, Optional[str], Optional[str], str]:
+        """
+        Resolves query intent and matches any referenced document in the workspace.
+        Returns (intent, target_document_id, target_document_name, cleaned_query).
+        """
+        q_lower = query.lower().strip()
+        docs = await document_repo.get_by_workspace(workspace_id)
+
+        target_doc_id = None
+        target_doc_name = None
+
+        # 1. Filename matching
+        for d in docs:
+            fn = d.get("filename", "").lower()
+            title = d.get("title", "").lower()
+            fn_no_ext = fn.rsplit(".", 1)[0] if "." in fn else fn
+
+            if (
+                fn in q_lower
+                or fn_no_ext in q_lower
+                or (len(fn_no_ext) >= 4 and fn_no_ext.split()[0] in q_lower)
+                or title in q_lower
+            ):
+                target_doc_id = d.get("id")
+                target_doc_name = d.get("filename")
+                break
+
+        # 2. Anaphoric resolution ("this pdf", "this document", "it")
+        if not target_doc_id and len(docs) == 1:
+            anaphoric = [
+                "this pdf",
+                "this document",
+                "this source",
+                "this file",
+                "the document",
+                "the pdf",
+                "the file",
+                "summarize it",
+                "explain it",
+                "from it",
+                "about it",
+            ]
+            if any(term in q_lower for term in anaphoric) or "summar" in q_lower:
+                target_doc_id = docs[0].get("id")
+                target_doc_name = docs[0].get("filename")
+
+        # 3. Clean query
+        cleaned_query = query
+        if target_doc_name:
+            import re
+            cleaned_query = re.sub(re.escape(target_doc_name), "", cleaned_query, flags=re.IGNORECASE).strip()
+
+        # 4. Intent classification
         summary_keywords = [
             "summar",
             "what are the concepts",
             "what concepts",
             "overview",
             "main topic",
+            "main concepts",
             "all concepts",
             "syllabus",
             "tell me about this",
             "explain this pdf",
             "what is this document about",
             "key points",
+            "important exam concepts",
             "table of contents",
         ]
-        return any(k in q for k in summary_keywords)
+        is_summary = any(k in q_lower for k in summary_keywords) or (
+            target_doc_name and ("summarize it" in q_lower or "summarize" in q_lower)
+        )
+
+        intent = "DOCUMENT_SUMMARY" if is_summary else "SPECIFIC_CONCEPT"
+        return intent, target_doc_id, target_doc_name, cleaned_query
 
     async def retrieve_relevant_chunks(
         self, workspace_id: str, query: str
     ) -> Tuple[List[RetrievedChunk], bool]:
         """
-        Retrieves top-k relevant chunks for the query within the specified workspace.
-        Supports document-wide summary intent by sampling representative chunks.
-        Returns (chunks, is_grounded).
+        Retrieves relevant chunks within the specified workspace.
+        Supports explicit document reference and document-wide summary aggregation.
         """
-        is_summary = self.is_summary_query(query)
+        intent, target_doc_id, target_doc_name, cleaned_query = (
+            await self.resolve_document_and_intent(workspace_id, query)
+        )
+
+        effective_query = cleaned_query if cleaned_query else query
+        is_summary = intent == "DOCUMENT_SUMMARY"
 
         # 1. Generate query embedding
-        query_embedding = await embedding_service.get_query_embedding(query)
+        query_embedding = await embedding_service.get_query_embedding(effective_query)
 
-        # 2. Query workspace-filtered vector index
+        # 2. Query vector index
         raw_chunks = await chunk_repo.search_similar_chunks(
             workspace_id=workspace_id,
             query_embedding=query_embedding,
@@ -90,9 +155,15 @@ class RetrievalService:
             similarity_threshold=0.40 if is_summary else self.similarity_threshold,
         )
 
+        # If specific document target was resolved, filter to that document
+        if target_doc_id and raw_chunks:
+            doc_filtered = [c for c in raw_chunks if str(c.get("document_id")) == str(target_doc_id)]
+            if doc_filtered:
+                raw_chunks = doc_filtered
+
         if not raw_chunks:
             logger.info(
-                f"No chunks found for query in workspace '{workspace_id}'."
+                f"[RAG Retrieval] No chunks found for workspace '{workspace_id}' (intent={intent})."
             )
             return [], False
 
