@@ -54,8 +54,11 @@ async def create_workspace(request: WorkspaceCreateRequest) -> WorkspaceResponse
 @router.get("/workspaces", response_model=WorkspaceListResponse)
 async def list_workspaces() -> WorkspaceListResponse:
     workspaces = await workspace_repo.list_all()
-    return WorkspaceListResponse(
-        workspaces=[
+    responses = []
+    for w in workspaces:
+        docs = await document_repo.list_by_workspace(w["id"])
+        doc_count = len(docs) if docs is not None else w.get("document_count", 0)
+        responses.append(
             WorkspaceResponse(
                 id=w["id"],
                 name=w["name"],
@@ -68,13 +71,14 @@ async def list_workspaces() -> WorkspaceListResponse:
                 mastery_delta=w.get("mastery_delta", 0),
                 status=w.get("status", "active"),
                 icon_name=w.get("icon_name", "FolderKanban"),
-                document_count=w.get("document_count", 0),
+                document_count=doc_count,
                 created_at=w.get("created_at"),
                 updated_at=w.get("updated_at"),
             )
-            for w in workspaces
-        ],
-        total_count=len(workspaces),
+        )
+    return WorkspaceListResponse(
+        workspaces=responses,
+        total_count=len(responses),
     )
 
 
@@ -86,6 +90,9 @@ async def get_workspace(workspace_id: str) -> WorkspaceResponse:
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Workspace '{workspace_id}' not found.",
         )
+    docs = await document_repo.list_by_workspace(workspace_id)
+    doc_count = len(docs) if docs is not None else ws.get("document_count", 0)
+
     return WorkspaceResponse(
         id=ws["id"],
         name=ws["name"],
@@ -98,7 +105,7 @@ async def get_workspace(workspace_id: str) -> WorkspaceResponse:
         mastery_delta=ws.get("mastery_delta", 0),
         status=ws.get("status", "active"),
         icon_name=ws.get("icon_name", "FolderKanban"),
-        document_count=ws.get("document_count", 0),
+        document_count=doc_count,
         created_at=ws.get("created_at"),
         updated_at=ws.get("updated_at"),
     )

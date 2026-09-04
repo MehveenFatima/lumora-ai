@@ -291,4 +291,88 @@ export const tutorApiClient = {
       return false
     }
   },
+
+  // 4. QUIZ API METHODS
+  async createQuizSession(
+    workspaceId: string,
+    data: { targetQuestionCount?: number; topic?: string; initialDifficulty?: number } = {}
+  ): Promise<any> {
+    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/quizzes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        target_question_count: data.targetQuestionCount || 5,
+        topic: data.topic,
+        initial_difficulty: data.initialDifficulty || 2,
+      }),
+    })
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.detail || `Failed to create quiz session (HTTP ${response.status})`)
+    }
+    return response.json()
+  },
+
+  async getQuizSession(workspaceId: string, quizId: string): Promise<any> {
+    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/quizzes/${quizId}`)
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.detail || `Failed to fetch quiz session (HTTP ${response.status})`)
+    }
+    return response.json()
+  },
+
+  async getQuizQuestion(workspaceId: string, quizId: string, questionId: string): Promise<any> {
+    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/quizzes/${quizId}/questions/${questionId}`)
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.detail || `Failed to fetch quiz question (HTTP ${response.status})`)
+    }
+    return response.json()
+  },
+
+  async submitQuizAttempt(
+    workspaceId: string,
+    quizId: string,
+    questionId: string,
+    data: { selectedOption: string; responseTimeMs: number }
+  ): Promise<any> {
+    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/quizzes/${quizId}/questions/${questionId}/attempt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        selected_option: data.selectedOption,
+        response_time_ms: data.responseTimeMs,
+      }),
+    })
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.detail || `Failed to submit quiz attempt (HTTP ${response.status})`)
+    }
+    return response.json()
+  },
+
+  async completeQuizSession(workspaceId: string, quizId: string): Promise<any> {
+    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/quizzes/${quizId}/complete`, {
+      method: 'POST',
+    })
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.detail || `Failed to complete quiz (HTTP ${response.status})`)
+    }
+    return response.json()
+  },
+
+  async getQuizHistory(workspaceId: string): Promise<any> {
+    try {
+      const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/quizzes/history`)
+      if (!response.ok) return { sessions: [], total_count: 0 }
+      return response.json()
+    } catch {
+      return { sessions: [], total_count: 0 }
+    }
+  },
 }

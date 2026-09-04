@@ -184,32 +184,84 @@ class RetrievalService:
         # Strategy F: SPECIFIC_CONCEPT (Hybrid keyword + pgvector retrieval)
         # -------------------------------------------------------------
         if not raw_chunks and not resolved.clarification_message and resolved.intent in ["SPECIFIC_CONCEPT", "CONTEXTUAL_FOLLOWUP"]:
-            # 1. If target document is resolved, attempt high-precision keyword/concept match
-            if resolved.target_document_id:
+            # 1. High-precision keyword / concept matching across workspace chunks
+            all_ws_docs = await document_repo.list_by_workspace(workspace_id)
+            target_docs = (
+                [d for d in all_ws_docs if str(d["id"]) == resolved.target_document_id]
+                if resolved.target_document_id
+                else all_ws_docs
+            )
+
+            query_words = [
+                w.lower()
+                for w in re.split(r"[\s\:\-\_\,\?\.\!\;]+", resolved.semantic_query)
+                if len(w) >= 3
+                and w.lower()
+                not in [
+                    "how",
+                    "what",
+                    "where",
+                    "when",
+                    "why",
+                    "from",
+                    "with",
+                    "this",
+                    "that",
+                    "the",
+                    "and",
+                    "for",
+                    "explain",
+                    "does",
+                    "say",
+                    "are",
+                    "is",
+                    "between",
+                ]
+            ]
+
+            matching_chunks = []
+            for doc in target_docs:
                 doc_chunks = await chunk_repo.get_sampled_chunks_by_document(
                     workspace_id=workspace_id,
-                    document_id=resolved.target_document_id,
+                    document_id=str(doc["id"]),
                     limit=25,
                 )
-                query_words = [
-                    w.lower()
-                    for w in re.split(r"[\s\:\-\_\,\?\.\!\;]+", resolved.semantic_query)
-                    if len(w) >= 3 and w.lower() not in ["how", "what", "where", "when", "why", "from", "with", "this", "that", "the", "and", "for", "explain", "does", "say"]
-                ]
-                matching_chunks = []
                 for dc in doc_chunks:
                     chunk_text_lower = dc["text"].lower()
                     chunk_heading_lower = (dc.get("heading") or "").lower()
-                    matches = sum(1 for qw in query_words if qw in chunk_text_lower or qw in chunk_heading_lower)
-                    if matches >= 2 or (len(query_words) == 1 and matches >= 1):
-                        matching_chunks.append({**dc, "similarity_score": min(0.99, 0.86 + (0.04 * matches))})
+                    matches = sum(
+                        1
+                        for qw in query_words
+                        if qw in chunk_text_lower or qw in chunk_heading_lower
+                    )
+                    if (
+                        matches >= 2
+                        or (len(query_words) == 1 and matches >= 1)
+                        or (
+                            any(
+                                qw in ["bfs", "dfs", "bst", "heap", "quicksort", "mergesort"]
+                                for qw in query_words
+                            )
+                            and matches >= 1
+                        )
+                    ):
+                        matching_chunks.append(
+                            {
+                                **dc,
+                                "similarity_score": min(0.99, 0.86 + (0.04 * matches)),
+                            }
+                        )
 
-                if matching_chunks:
-                    raw_chunks = sorted(matching_chunks, key=lambda x: x["similarity_score"], reverse=True)[:5]
+            if matching_chunks:
+                raw_chunks = sorted(
+                    matching_chunks, key=lambda x: x["similarity_score"], reverse=True
+                )[:5]
 
             # 2. Vector search across workspace
             if not raw_chunks:
-                query_embedding = await embedding_service.get_query_embedding(resolved.semantic_query)
+                query_embedding = await embedding_service.get_query_embedding(
+                    resolved.semantic_query
+                )
                 raw_chunks = await chunk_repo.search_similar_chunks(
                     workspace_id=workspace_id,
                     query_embedding=query_embedding,
@@ -217,7 +269,11 @@ class RetrievalService:
                     similarity_threshold=self.similarity_threshold,
                 )
                 if resolved.target_document_id and raw_chunks:
-                    filtered = [c for c in raw_chunks if str(c.get("document_id")) == resolved.target_document_id]
+                    filtered = [
+                        c
+                        for c in raw_chunks
+                        if str(c.get("document_id")) == resolved.target_document_id
+                    ]
                     if filtered:
                         raw_chunks = filtered
 

@@ -146,7 +146,12 @@ class WorkspaceRepository:
                         return dict(row)
             except Exception as e:
                 logger.error(f"Error getting workspace {workspace_id}: {e}")
-        return _memory_workspaces.get(workspace_id)
+        ws = _memory_workspaces.get(workspace_id)
+        if ws:
+            from backend.app.repositories.documents import document_repo
+            docs = await document_repo.list_by_workspace(workspace_id)
+            return {**ws, "document_count": len(docs)}
+        return None
 
     async def list_all(self) -> List[Dict[str, Any]]:
         pool = await get_db_pool()
@@ -158,7 +163,13 @@ class WorkspaceRepository:
                         return [dict(r) for r in rows]
             except Exception as e:
                 logger.error(f"Error listing workspaces: {e}")
-        return list(_memory_workspaces.values())
+        ws_list = list(_memory_workspaces.values())
+        from backend.app.repositories.documents import document_repo
+        result = []
+        for ws in ws_list:
+            docs = await document_repo.list_by_workspace(ws["id"])
+            result.append({**ws, "document_count": len(docs)})
+        return result
 
     async def delete(self, workspace_id: str) -> bool:
         pool = await get_db_pool()
