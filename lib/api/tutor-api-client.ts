@@ -26,32 +26,17 @@ export interface BackendTutorResponse {
 }
 
 async function apiFetch(path: string, options: RequestInit = {}): Promise<Response> {
-  const configuredBase = process.env.NEXT_PUBLIC_API_BASE_URL
-  const urlsToTry: string[] = []
+  const url = path.startsWith('/') ? path : `/${path}`
 
-  // 1. Try relative URL first (Next.js native API route handler)
-  urlsToTry.push(path)
-
-  // 2. Try configured base if specified
-  if (configuredBase) {
-    urlsToTry.unshift(`${configuredBase}${path}`)
-  } else {
-    urlsToTry.push(`http://localhost:8000${path}`)
+  try {
+    const res = await fetch(url, options)
+    return res
+  } catch (err: any) {
+    console.error(`apiFetch failed for endpoint ${url}:`, err)
+    throw new Error(
+      `Unable to reach backend via Next.js proxy at '${url}'. Please ensure FastAPI is running on http://127.0.0.1:8000 and Next.js dev server is running. (${err?.message || err})`
+    )
   }
-
-  let lastError: any = null
-  for (const url of urlsToTry) {
-    try {
-      const res = await fetch(url, options)
-      if (res.ok || res.status < 500) {
-        return res
-      }
-    } catch (err) {
-      lastError = err
-    }
-  }
-
-  throw lastError || new Error(`Failed to reach API endpoint: ${path}`)
 }
 
 export const tutorApiClient = {
