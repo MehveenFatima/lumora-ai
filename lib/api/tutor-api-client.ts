@@ -25,8 +25,19 @@ export interface BackendTutorResponse {
   suggested_follow_ups?: string[]
 }
 
+function getBaseUrl(): string {
+  if (typeof window !== 'undefined') {
+    // In browser: relative path for Next.js proxy rewrite
+    return ''
+  }
+  // In server-side Node.js / SSR: absolute URL to FastAPI backend
+  return process.env.BACKEND_API_URL || 'http://127.0.0.1:8000'
+}
+
 async function apiFetch(path: string, options: RequestInit = {}): Promise<Response> {
-  const url = path.startsWith('/') ? path : `/${path}`
+  const base = getBaseUrl()
+  const cleanPath = path.startsWith('/') ? path : `/${path}`
+  const url = path.startsWith('http') ? path : `${base}${cleanPath}`
 
   try {
     const res = await fetch(url, options)
@@ -34,7 +45,7 @@ async function apiFetch(path: string, options: RequestInit = {}): Promise<Respon
   } catch (err: any) {
     console.error(`apiFetch failed for endpoint ${url}:`, err)
     throw new Error(
-      `Unable to reach backend via Next.js proxy at '${url}'. Please ensure FastAPI is running on http://127.0.0.1:8000 and Next.js dev server is running. (${err?.message || err})`
+      `Unable to reach backend at '${url}'. Please ensure FastAPI is running on http://127.0.0.1:8000. (${err?.message || err})`
     )
   }
 }
