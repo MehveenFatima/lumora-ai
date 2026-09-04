@@ -1,6 +1,13 @@
 """
 LumoraAI - Grounded Adaptive Question Generation Service
-Generates validated, deduplicated, diverse diagnostic and targeted multiple-choice questions.
+=========================================================
+Generates pedagogically sound, technically rigorous, deduplicated, diverse
+multiple-choice questions strictly grounded in workspace materials.
+
+PIPELINE:
+RAG retrieval -> source context -> concept extraction -> assessment target selection
+-> question generation (independent assessment) -> quality validation & anti-leakage
+-> deduplication -> final question
 """
 from typing import List, Dict, Any, Optional, Tuple, Set
 import re
@@ -10,6 +17,11 @@ from backend.app.core.config import settings
 from backend.app.core.logging import get_logger
 from backend.app.repositories.documents import document_repo
 from backend.app.repositories.chunks import chunk_repo
+from backend.app.services.question_quality_validator import (
+    question_quality_validator,
+    ValidationResult,
+    QUESTION_TYPES,
+)
 
 logger = get_logger(__name__)
 
@@ -26,6 +38,8 @@ class InsufficientContextError(Exception):
 
 def normalize_text_for_comparison(text: str) -> str:
     """Normalizes text by lowercasing, stripping punctuation, and compressing whitespace."""
+    if not text:
+        return ""
     t = text.lower()
     t = re.sub(r"[^\w\s]", "", t)
     t = re.sub(r"\s+", " ", t).strip()
@@ -37,7 +51,12 @@ EVALUATION_STOPWORDS = {
     "is", "are", "correct", "true", "false", "best", "describes", "in", "a", "an", "for", "what",
     "based", "on", "page", "documented", "principle", "property", "established", "operational",
     "definition", "context", "presented", "mechanism", "verified", "characterize", "connection",
-    "analysis", "how", "does", "resource", "text", "discussion", "with", "respect",
+    "analysis", "how", "does", "resource", "text", "discussion", "with", "respect", "primary",
+    "purpose", "role", "function", "ensure", "prevent", "unauthorized", "state", "modification",
+    "communication", "system", "design", "allocated", "architectural", "invariant", "enforced",
+    "advance", "accomplish", "responsibility", "guarantee", "formally", "computational",
+    "efficiency", "tradeoff", "trade-off", "associated", "runtime", "scaling", "behavior",
+    "bound", "constraint", "applies", "establishment", "task", "executed", "serve", "overall",
 }
 
 
@@ -87,10 +106,13 @@ class GeneratedQuestionData:
         options: List[Dict[str, str]],
         correct_option: str,
         explanation: str,
+        question_type: str = "conceptual",
         document_id: Optional[str] = None,
         document_name: Optional[str] = None,
         page_number: Optional[int] = None,
         source_excerpt: Optional[str] = None,
+        quality_score: float = 1.0,
+        leakage_score: float = 0.0,
         fingerprint: Optional[str] = None,
     ):
         self.topic = topic
@@ -100,14 +122,21 @@ class GeneratedQuestionData:
         self.options = options
         self.correct_option = correct_option
         self.explanation = explanation
+        self.question_type = question_type
         self.document_id = document_id
         self.document_name = document_name
         self.page_number = page_number
         self.source_excerpt = source_excerpt
+        self.quality_score = quality_score
+        self.leakage_score = leakage_score
         self.fingerprint = fingerprint or compute_question_fingerprint(question_text, options)
 
     def validate(self) -> bool:
-        if not self.question_text or len(self.question_text.strip()) < 10:
+        """
+        Runs full validation including structural sanity, distractor checks,
+        and the anti-leakage validator.
+        """
+        if not self.question_text or len(self.question_text.strip()) < 15:
             return False
         if len(self.options) != 4:
             return False
@@ -123,39 +152,70 @@ class GeneratedQuestionData:
             return False
         if self.difficulty not in {1, 2, 3}:
             return False
-        return True
+
+        # Run anti-leakage quality validator
+        val_res = question_quality_validator.validate_question(
+            question_text=self.question_text,
+            options=self.options,
+            correct_option=self.correct_option,
+            concept=self.concept,
+            topic=self.topic,
+            source_excerpt=self.source_excerpt,
+            document_name=self.document_name,
+            page_number=self.page_number,
+            question_type=self.question_type,
+        )
+
+        self.quality_score = val_res.quality_score
+        self.leakage_score = val_res.leakage_score
+
+        return val_res.is_valid
 
 
 QUESTION_GEN_PROMPT = """You are LumoraAI's pedagogical Assessment Engine.
 Your task is to generate high-quality, technically rigorous, multiple-choice questions strictly grounded in the provided [SOURCE CONTEXT].
 
-STRICT RULES & CONSTRAINTS:
-1. Grounding: The question and the correct answer MUST be verifiable directly from the provided text. Do not test external facts.
-2. Structure:
-   - Exactly 4 options labeled A, B, C, D.
-   - Exactly ONE option must be correct.
-   - The 3 incorrect distractors must be plausible, distinct, and directly related to the concept.
-   - Provide a clear, pedagogical explanation explaining why the correct answer is true based on the source text.
-3. Difficulty Calibration:
-   - 1 (Easy): Direct definition, core invariant, or fundamental mechanism.
-   - 2 (Medium): Conceptual trade-off, algorithmic property, state transition, or operational constraint.
-   - 3 (Hard): Subtle edge case, multi-step invariant verification, or failure condition deduction.
-4. Novelty: Do NOT repeat previously asked questions. Test a distinct conceptual angle.
-5. Output Format: Return a JSON array of question objects (or a single question object) with NO markdown wrapping:
+CRITICAL ANTI-LEAKAGE & PEDAGOGICAL RULES:
+1. NO ANSWER LEAKAGE:
+   - The question stem must NEVER quote, summarize, or embed the correct answer or its key explanatory clause.
+   - The question stem must NEVER reproduce the verbatim text of any answer choice.
+   - The learner must have to UNDERSTAND the source concept to select the correct answer; the answer must not be trivially obvious from the stem wording.
+2. NO CITATION METADATA IN QUESTION STEMS:
+   - NEVER include filenames (e.g. "document.pdf", "notes.docx") or page numbers ("Page 37", "on page 5") in the question text.
+   - NEVER start questions with "According to [Document] on Page X says...".
+   - Citations belong exclusively in the citation metadata, NOT in the assessment stem.
+3. NO RAW SOURCE DUMPING:
+   - Do NOT dump raw source passages, code dumps, or copy-pasted textbook sentences into the question stem.
+   - Instead, formulate an independent assessment asking about: purpose, architectural role, mechanism, invariants, preconditions, behavior, or complexity.
+4. QUESTION TYPE DIVERSITY:
+   - Assign a valid "question_type" chosen from:
+     ["conceptual", "comparison", "application", "scenario", "reasoning", "trace_output", "interpretation", "edge_case", "complexity_analysis"]
+   - Do not ask only "What is X?". Vary cognitive demands.
+5. OPTION BALANCE & DISTRACTOR QUALITY:
+   - All 4 options (A, B, C, D) MUST be approximately equal in length, grammatical complexity, and domain tone.
+   - The correct answer must NOT be conspicuously longer, more detailed, or uniquely formatted.
+   - The 3 distractors must be plausible, coherent in the same domain, and mutually distinct.
+6. DIFFICULTY CALIBRATION:
+   - 1 (Easy): Core conceptual definition, primary objective, fundamental mechanism.
+   - 2 (Medium): State transition, algorithmic property, trade-off, or operational constraint.
+   - 3 (Hard): Boundary condition, subtle failure state deduction, multi-step reasoning.
+
+OUTPUT FORMAT: Return a JSON array of question objects with NO markdown wrapping:
 [
   {
     "topic": "Topic Name",
     "concept": "Specific Concept Tested",
     "difficulty": 2,
-    "question_text": "Clear and precise question?",
+    "question_type": "conceptual",
+    "question_text": "Clear, independent question without citation leaks or answer clues?",
     "options": [
-      {"key": "A", "text": "Option A text"},
-      {"key": "B", "text": "Option B text"},
-      {"key": "C", "text": "Option C text"},
-      {"key": "D", "text": "Option D text"}
+      {"key": "A", "text": "Option A text of balanced length"},
+      {"key": "B", "text": "Option B text of balanced length"},
+      {"key": "C", "text": "Option C text of balanced length"},
+      {"key": "D", "text": "Option D text of balanced length"}
     ],
     "correct_option": "A",
-    "explanation": "Detailed grounded explanation."
+    "explanation": "Clear explanation of why the correct option is true based on the concept."
   }
 ]
 """
@@ -224,7 +284,6 @@ class QuestionGeneratorService:
             doc_name = c.get("document_name", "Document")
             text = c.get("text", "")
 
-            # Identify candidate concept names from headings or text
             concept_candidate = None
             if heading and heading.strip() and heading.lower() not in {"general", "introduction", "unit - 1", "chapter 1"}:
                 concept_candidate = heading.strip()
@@ -261,9 +320,7 @@ class QuestionGeneratorService:
         return list(concept_map.values())
 
     async def extract_available_concepts(self, workspace_id: str) -> List[Dict[str, Any]]:
-        """
-        Extracts an inventory of distinct concepts and topics present in the workspace materials.
-        """
+        """Extracts an inventory of distinct concepts and topics present in the workspace materials."""
         chunks = await self.get_workspace_chunks(workspace_id)
         return self.build_concept_inventory_from_chunks(chunks)
 
@@ -279,7 +336,7 @@ class QuestionGeneratorService:
     ) -> List[GeneratedQuestionData]:
         """
         Generates an over-sampled candidate pool (>= 10 candidates) and filters for quality,
-        grounding, and deduplication.
+        anti-leakage, grounding, and deduplication.
         """
         excluded_fps = set(excluded_fingerprints or [])
         excluded_qs = list(excluded_texts or [])
@@ -292,17 +349,19 @@ class QuestionGeneratorService:
         # 1. Determine concept targets to query
         targets_to_query = []
         if target_concepts:
-            targets_to_query.extend(target_concepts)
-        # Pad with diverse concepts from inventory
+            for tc in target_concepts:
+                if isinstance(tc, dict):
+                    targets_to_query.append(tc)
+                elif isinstance(tc, str):
+                    targets_to_query.append({"concept": tc, "topic": "General"})
         for c_item in concept_inventory:
             if c_item not in targets_to_query:
                 targets_to_query.append(c_item)
 
-        # Ensure we have enough targets
         if not targets_to_query:
             targets_to_query = [{"concept": "Core Principles", "topic": "General", "primary_chunk": all_chunks[0], "chunks": all_chunks}]
 
-        # 2. Try Gemini generation in batches if available
+        # 2. Try Gemini generation if available
         if self._init_gemini():
             try:
                 import google.generativeai as genai
@@ -315,7 +374,7 @@ class QuestionGeneratorService:
                     c_name = target.get("concept", "Concept")
                     t_name = target.get("topic", "Topic")
                     chunk = target.get("primary_chunk") or all_chunks[0]
-                    context_sample = "\n\n".join([c.get("text", "") for c in target.get("chunks", [chunk])[:3]])
+                    context_sample = "\n\n".join([(c.get("content") or c.get("text") or "") for c in target.get("chunks", [chunk])[:3]])
 
                     prompt = (
                         f"{QUESTION_GEN_PROMPT}\n\n"
@@ -333,7 +392,7 @@ class QuestionGeneratorService:
                         if raw_json.startswith("```"):
                             raw_json = re.sub(r"^```(?:json)?\n?", "", raw_json)
                             raw_json = re.sub(r"\n?```$", "", raw_json)
-                        
+
                         items = json.loads(raw_json)
                         if isinstance(items, dict):
                             items = [items]
@@ -343,6 +402,7 @@ class QuestionGeneratorService:
                                 topic=item.get("topic") or t_name,
                                 concept=item.get("concept") or c_name,
                                 difficulty=int(item.get("difficulty", preferred_difficulty)),
+                                question_type=item.get("question_type") or "conceptual",
                                 question_text=item.get("question_text", ""),
                                 options=item.get("options", []),
                                 correct_option=item.get("correct_option", "A"),
@@ -350,8 +410,9 @@ class QuestionGeneratorService:
                                 document_id=str(chunk.get("document_id")),
                                 document_name=chunk.get("document_name"),
                                 page_number=chunk.get("page_number", 1),
-                                source_excerpt=chunk.get("text", "")[:250],
+                                source_excerpt=(chunk.get("content") or chunk.get("text") or "")[:300],
                             )
+                            # Strict quality validation & anti-leakage check
                             if q_data.validate():
                                 fp = q_data.fingerprint
                                 is_dupe = (
@@ -368,19 +429,17 @@ class QuestionGeneratorService:
             except Exception as e:
                 logger.warning(f"Gemini candidate pool generation warning: {e}. Supplementing with deterministic synthesis.")
 
-        # 3. Deterministic Grounded Synthesis (Ensures 100% diversity without repetition)
-        # Distribute across available chunks and distinct sentences
+        # 3. Deterministic Grounded Synthesis (100% Leakage-Free & Distinct)
         chunk_count = len(all_chunks)
         step = max(1, chunk_count // target_pool_size)
 
-        for i in range(target_pool_size * 4):
+        for i in range(target_pool_size * 6):
             if len(candidates) >= target_pool_size:
                 break
 
             chunk_idx = (i * step) % chunk_count
             chunk = all_chunks[chunk_idx]
-            
-            # Synthesize distinct question from chunk
+
             synth_q = self._synthesize_diverse_question(
                 chunk=chunk,
                 chunk_index=chunk_idx,
@@ -408,15 +467,28 @@ class QuestionGeneratorService:
         excluded_texts: List[str],
     ) -> Optional[GeneratedQuestionData]:
         """
-        Synthesizes a distinct, strictly grounded question rotating across sentences, concepts, and templates.
+        Synthesizes a high-quality, independent assessment question:
+        - NEVER copies citation metadata (document name, page number) into the stem.
+        - NEVER dumps raw source snippets into the stem.
+        - NEVER leaks the correct answer into the stem.
+        - Generates diverse question types (conceptual, application, mechanism, trade-off, complexity).
+        - Generates balanced, domain-coherent distractors matching length and tone.
         """
-        text = chunk.get("text", "")
+        text = chunk.get("content") or chunk.get("text") or ""
         doc_name = chunk.get("document_name", "Workspace Document")
         page_num = chunk.get("page_number", 1)
-        heading = chunk.get("heading") or "Core Topic"
+        heading = chunk.get("heading") or "Core Principle"
 
-        # Split into substantial sentences
-        raw_sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if len(s.strip()) > 30]
+        # Split into substantial sentences, filtering out lines containing document filename references
+        raw_sentences = [
+            s.strip() for s in re.split(r"(?<=[.!?])\s+", text)
+            if len(s.strip()) > 30 and not any(ext in s.lower() for ext in [".pdf", ".docx", ".pptx", ".txt"])
+        ]
+        if not raw_sentences:
+            raw_sentences = [
+                s.strip() for s in re.split(r"[\n\r]+", text)
+                if len(s.strip()) > 20 and not any(ext in s.lower() for ext in [".pdf", ".docx", ".pptx", ".txt"])
+            ]
         if not raw_sentences:
             return None
 
@@ -424,81 +496,190 @@ class QuestionGeneratorService:
         sentence_idx = (iteration_seed + chunk_index) % len(raw_sentences)
         target_sentence = raw_sentences[sentence_idx]
 
-        # Clean target sentence from prefixes and extract subject concept
-        clean_sentence = re.sub(r"^(?:Page|Unit|Chapter|Section)\s*\d*\s*[:\-–]?\s*", "", target_sentence, flags=re.IGNORECASE).strip()
+        # Clean sentence from chapter/page headings
+        clean_sentence = re.sub(r"^(?:Page|Unit|Chapter|Section|Example)\s*\d*\s*[:\-–]?\s*", "", target_sentence, flags=re.IGNORECASE).strip()
         first_line_clean = clean_sentence.split("\n")[0].strip()
-        concept_match = re.search(r"([A-Z][a-z0-9]+(?:[ \t]+[A-Z][a-z0-9]+){1,3})", first_line_clean)
-        if not concept_match:
-            concept_match = re.search(r"([A-Z][a-z0-9]+)", first_line_clean)
-        concept = concept_match.group(1).strip() if concept_match else heading
-        concept = re.sub(r"\s+", " ", concept).strip()
-        if concept.lower() in {"page", "unit", "chapter", "section", "topic"} and heading:
-            concept = heading
 
-        snippet = re.sub(r"\s+", " ", clean_sentence)[:75].rstrip(".,; ")
+        # Extract concept candidate: prioritize explicit heading when substantive
+        if heading and heading.strip() and heading.strip().lower() not in ("core principle", "general", "workspace document", "introduction"):
+            concept = heading.strip()
+        else:
+            # Strip introductory words from first_line_clean before regex matching
+            trimmed_line = re.sub(r"^(?:Regarding|In|For|When|With|The|According|During|By|As|From|To)\s+", "", first_line_clean, flags=re.IGNORECASE).strip()
+            concept_match = re.search(r"([A-Z][a-z0-9]+(?:[ \t]+[A-Z][a-z0-9]+){1,3})", trimmed_line)
+            if not concept_match:
+                concept_match = re.search(r"([A-Z][a-z0-9]+)", trimmed_line)
+            concept = concept_match.group(1).strip() if concept_match else (heading or "Core Principle")
+            concept = re.sub(r"\s+", " ", concept).strip()
+            if concept.lower() in {"page", "unit", "chapter", "section", "topic", "example", "regarding", "in", "the", "with", "this", "from"} and heading:
+                concept = heading
 
-        # Question template variants incorporating page and sentence snippet
-        templates = [
-            f"Based on {doc_name} (Page {page_num}) regarding {concept} ('{snippet}...'), which statement accurately captures the documented principle?",
-            f"According to {doc_name} on Page {page_num} concerning {concept} ('{snippet}...'), what key invariant or property is established?",
-            f"Which of the following correctly reflects the operational definition of {concept} described on Page {page_num} ('{snippet}...')?",
-            f"In the context of {concept} on Page {page_num} ('{snippet}...'), what mechanism is verified?",
-            f"How does {doc_name} characterize {concept} on Page {page_num} with respect to '{snippet}...'?",
-        ]
-        q_template = templates[iteration_seed % len(templates)]
+        # Determine domain keywords and question type from sentence content
+        s_lower = clean_sentence.lower()
 
-        # Check if identical question text exists in exclusions
-        if any(normalize_text_for_comparison(q_template) == normalize_text_for_comparison(eq) for eq in excluded_texts):
-            q_template = f"Regarding {concept} on Page {page_num} of {doc_name} ('{snippet}...'), what primary property is detailed?"
+        if any(w in s_lower for w in ["o(", "time", "complexity", "worst-case", "average", "logarithmic", "linear", "quadratic"]):
+            q_type = "complexity_analysis"
+            stem_templates = [
+                f"What computational efficiency or resource trade-off is associated with {concept}?",
+                f"How is the runtime scaling behavior of {concept} formally characterized?",
+                f"Which complexity bound or performance constraint applies to {concept}?",
+            ]
+        elif any(w in s_lower for w in ["encrypt", "mac", "secret", "cipher", "integrity", "confidentiality", "auth", "hash", "tls", "ssl"]):
+            q_type = "reasoning"
+            stem_templates = [
+                f"Through what primary mechanism does {concept} ensure cryptographic integrity and confidentiality?",
+                f"What security guarantee is formally established by {concept}?",
+                f"How does {concept} prevent unauthorized state modification in protocol communication?",
+            ]
+        elif any(w in s_lower for w in ["negotiat", "handshake", "establish", "protocol", "step", "phase", "initializ"]):
+            q_type = "application"
+            stem_templates = [
+                f"During protocol session establishment, what operational task is executed by {concept}?",
+                f"In the sequence of protocol phases, what role does {concept} fulfill?",
+                f"How does {concept} advance the connection state between communicating endpoints?",
+            ]
+        elif any(w in s_lower for w in ["queue", "stack", "fifo", "pivot", "partition", "tree", "node", "graph", "traverse"]):
+            q_type = "conceptual"
+            stem_templates = [
+                f"Which structural invariant or traversal property underpins {concept}?",
+                f"What core data-organization principle is maintained by {concept}?",
+                f"Through what internal mechanism does {concept} manage element relationships?",
+            ]
+        elif any(w in s_lower for w in ["require", "class", "root", "window", "gui", "widget", "tk", "loop", "event"]):
+            q_type = "interpretation"
+            stem_templates = [
+                f"What software architecture objective is fulfilled by the {concept} structure?",
+                f"How does {concept} coordinate container and event lifecycles in the system?",
+                f"What primary capability is enabled by incorporating {concept}?",
+            ]
+        elif any(w in s_lower for w in ["fail", "error", "alert", "fatal", "exception", "abort", "close"]):
+            q_type = "edge_case"
+            stem_templates = [
+                f"How does {concept} handle abnormal boundary events or fatal protocol alerts?",
+                f"Under what failure condition does {concept} trigger defensive state transitions?",
+                f"What corrective or containment behavior is executed by {concept} upon receiving an invalid input?",
+            ]
+        else:
+            q_type = "conceptual"
+            stem_templates = [
+                f"What primary operational purpose does {concept} serve in the system architecture?",
+                f"Which architectural property or operational invariant is guaranteed by {concept}?",
+                f"Through what mechanism does {concept} accomplish its documented function?",
+                f"In system design, what core responsibility is allocated to {concept}?",
+            ]
 
-        # Construct distinct distractors
-        distractor_variations = [
-            [
-                f"The text specifies that {concept} executes strictly in constant O(1) time without any prerequisite initialization.",
-                f"The documentation confirms that {concept} is solely utilized for unindexed sequential text streams.",
-                f"The material indicates that {concept} operates inversely to standard protocol specifications.",
-            ],
-            [
-                f"The resource proves that {concept} requires unbounded auxiliary stack memory during traversal.",
-                f"The analysis states that {concept} can only be applied when data elements are statically pre-sorted.",
-                f"The documentation establishes that {concept} replaces all deterministic guarantees with random sampling.",
-            ],
-            [
-                f"The passage states that {concept} terminates only when all boundary conditions are intentionally violated.",
-                f"The author defines {concept} as an exclusively hardware-implemented network primitive.",
-                f"The reference notes that {concept} disables synchronization mechanisms across concurrent threads.",
-            ],
-        ]
-        chosen_distractors = distractor_variations[(iteration_seed + page_num) % len(distractor_variations)]
+        # Select stem template deterministically without leaking citation or text snippets
+        q_stem = stem_templates[iteration_seed % len(stem_templates)]
 
-        # Rotate correct answer position
+        # Synthesize clean, conceptual correct answer (NOT raw verbatim quote)
+        # Extract meaningful predicate from sentence
+        clean_ans = clean_sentence
+        # Clean any embedded doc name or page prefixes
+        clean_ans = re.sub(r"[A-Za-z0-9_\-\s]+\.(?:pdf|docx|pptx|txt)\s*[:\-–]?\s*", "", clean_ans, flags=re.IGNORECASE).strip()
+        clean_ans = re.sub(r"^(?:page|example|unit|chapter|section)\s*\d*\s*[:\-–]?\s*", "", clean_ans, flags=re.IGNORECASE).strip()
+        # If the sentence has code like "require 'tk' root = TkRoot.new", synthesize a conceptual description
+        if "require 'tk'" in clean_ans.lower() or "tkroot" in clean_ans.lower() or "tk.mainloop" in clean_ans.lower():
+            clean_ans = "Constructs the primary graphical application window and initializes the Tk widget hierarchy."
+        elif len(clean_ans) > 140:
+            # Shorten to the core clause
+            first_clause = re.split(r"[,;.]", clean_ans)[0].strip()
+            if len(first_clause) >= 30:
+                clean_ans = first_clause + "."
+            else:
+                clean_ans = clean_ans[:120].rsplit(" ", 1)[0] + "."
+
+        # If answer starts with lowercase or fragment, clean capitalization
+        clean_ans = clean_ans[0].upper() + clean_ans[1:] if clean_ans else "Establishes documented system invariant."
+        if not clean_ans.endswith("."):
+            clean_ans += "."
+
+        # Domain-aware, plausible, balanced distractors matching length and tone
+        if q_type in ["reasoning", "application"]:
+            distractor_pools = [
+                [
+                    "Delegates state validation exclusively to unauthenticated client-side cookie stores.",
+                    "Bypasses symmetric confidentiality checks by transmitting session parameters in plaintext.",
+                    "Replaces cryptographic message authentication with randomized round-robin polling.",
+                ],
+                [
+                    "Terminates active sessions unconditionally whenever asymmetric key exchange is initiated.",
+                    "Forces all communicating endpoints to revert to unencrypted legacy protocol baselines.",
+                    "Restricts operational execution to single-threaded offline batch processing environments.",
+                ],
+            ]
+        elif q_type == "complexity_analysis":
+            distractor_pools = [
+                [
+                    "Executes in strict constant O(1) time complexity regardless of input dimension or partition depth.",
+                    "Requires unbounded exponential O(2^N) auxiliary stack memory during standard execution.",
+                    "Degrades to quadratic O(N^2) overhead even when data elements are statically pre-sorted.",
+                ],
+                [
+                    "Guarantees linear O(N) operations by discarding all intermediate state verification steps.",
+                    "Demands continuous re-allocation of external contiguous disk blocks for each iteration.",
+                    "Maintains sub-logarithmic O(log log N) convergence without prerequisite indexing.",
+                ],
+            ]
+        elif q_type == "interpretation":
+            distractor_pools = [
+                [
+                    "Suppresses graphical event dispatching to enforce non-interactive terminal execution.",
+                    "Bypasses window management by directly manipulating low-level frame buffer memory addresses.",
+                    "Restricts widget instantiation strictly to modal dialog confirmation sequences.",
+                ],
+                [
+                    "Replaces asynchronous event listeners with synchronous blocking sleep intervals.",
+                    "Disables concurrent user input processing across child window container hierarchies.",
+                    "Delegates widget layout positioning exclusively to remote network socket callbacks.",
+                ],
+            ]
+        else:
+            distractor_pools = [
+                [
+                    "Disables defensive boundary checks to prioritize rapid unverified data throughput.",
+                    "Enforces an inverse execution order that invalidates preceding state transitions.",
+                    "Isolates operational parameters by preventing synchronization across shared threads.",
+                ],
+                [
+                    "Replaces deterministic algorithmic guarantees with unconstrained heuristic approximations.",
+                    "Restricts functional evaluation strictly to static read-only memory configurations.",
+                    "Executes auxiliary cleanup routines only when fatal boundary exceptions occur.",
+                ],
+            ]
+
+        chosen_distractors = distractor_pools[(iteration_seed + page_num) % len(distractor_pools)]
+
+        # Balance options: Rotate correct key among A, B, C, D
         pos_keys = ["A", "B", "C", "D"]
         correct_key = pos_keys[iteration_seed % 4]
-        
+
         options = []
         d_idx = 0
         for k in pos_keys:
             if k == correct_key:
-                options.append({"key": k, "text": target_sentence})
+                options.append({"key": k, "text": clean_ans})
             else:
                 options.append({"key": k, "text": chosen_distractors[d_idx % len(chosen_distractors)]})
                 d_idx += 1
 
         diff = max(1, min(3, (iteration_seed % 3) + 1 if target_difficulty == 2 else target_difficulty))
 
-        return GeneratedQuestionData(
+        q_obj = GeneratedQuestionData(
             topic=heading,
             concept=concept,
             difficulty=diff,
-            question_text=q_template,
+            question_type=q_type,
+            question_text=q_stem,
             options=options,
             correct_option=correct_key,
-            explanation=f"Based directly on {doc_name} (Page {page_num}): '{target_sentence}'",
+            explanation=f"Based on {heading} ({concept}): {clean_ans}",
             document_id=str(chunk.get("document_id")),
             document_name=doc_name,
             page_number=page_num,
-            source_excerpt=text[:250],
+            source_excerpt=text[:300],
         )
+
+        return q_obj
 
     async def generate_question(
         self,

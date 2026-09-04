@@ -202,6 +202,8 @@ class QuizRepository:
         citation_metadata: Optional[Dict[str, Any]] = None,
         generation_metadata: Optional[Dict[str, Any]] = None,
         fingerprint: Optional[str] = None,
+        question_type: Optional[str] = "conceptual",
+        quality_score: Optional[float] = 1.0,
     ) -> Dict[str, Any]:
         question_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
@@ -223,6 +225,8 @@ class QuizRepository:
             "citation_metadata": citation_metadata or {},
             "generation_metadata": generation_metadata or {},
             "fingerprint": fingerprint,
+            "question_type": question_type or "conceptual",
+            "quality_score": quality_score if quality_score is not None else 1.0,
             "created_at": now,
         }
 
@@ -233,8 +237,8 @@ class QuizRepository:
                     await conn.execute(
                         """
                         INSERT INTO quiz_questions
-                        (id, quiz_session_id, workspace_id, question_index, topic, concept, difficulty, question_text, options, correct_option, explanation, document_id, page_number, source_excerpt, citation_metadata, generation_metadata, created_at, fingerprint)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+                        (id, quiz_session_id, workspace_id, question_index, topic, concept, difficulty, question_text, options, correct_option, explanation, document_id, page_number, source_excerpt, citation_metadata, generation_metadata, created_at, fingerprint, question_type, quality_score)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
                         """,
                         uuid.UUID(question_id),
                         uuid.UUID(quiz_session_id) if len(quiz_session_id) == 36 else quiz_session_id,
@@ -254,16 +258,18 @@ class QuizRepository:
                         json.dumps(generation_metadata or {}),
                         now,
                         fingerprint,
+                        question_type or "conceptual",
+                        float(quality_score) if quality_score is not None else 1.0,
                     )
             except Exception as e:
-                # Fallback if fingerprint column not yet present
+                # Fallback if question_type/quality_score column not yet present
                 try:
                     async with pool.acquire() as conn:
                         await conn.execute(
                             """
                             INSERT INTO quiz_questions
-                            (id, quiz_session_id, workspace_id, question_index, topic, concept, difficulty, question_text, options, correct_option, explanation, document_id, page_number, source_excerpt, citation_metadata, generation_metadata, created_at)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+                            (id, quiz_session_id, workspace_id, question_index, topic, concept, difficulty, question_text, options, correct_option, explanation, document_id, page_number, source_excerpt, citation_metadata, generation_metadata, created_at, fingerprint)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
                             """,
                             uuid.UUID(question_id),
                             uuid.UUID(quiz_session_id) if len(quiz_session_id) == 36 else quiz_session_id,
@@ -282,9 +288,38 @@ class QuizRepository:
                             json.dumps(citation_metadata or {}),
                             json.dumps(generation_metadata or {}),
                             now,
+                            fingerprint,
                         )
                 except Exception as inner_e:
-                    logger.error(f"Error creating quiz question in DB: {inner_e}")
+                    # Second fallback if fingerprint column not yet present
+                    try:
+                        async with pool.acquire() as conn:
+                            await conn.execute(
+                                """
+                                INSERT INTO quiz_questions
+                                (id, quiz_session_id, workspace_id, question_index, topic, concept, difficulty, question_text, options, correct_option, explanation, document_id, page_number, source_excerpt, citation_metadata, generation_metadata, created_at)
+                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+                                """,
+                                uuid.UUID(question_id),
+                                uuid.UUID(quiz_session_id) if len(quiz_session_id) == 36 else quiz_session_id,
+                                workspace_id,
+                                question_index,
+                                topic,
+                                concept,
+                                difficulty,
+                                question_text,
+                                json.dumps(options),
+                                correct_option,
+                                explanation,
+                                uuid.UUID(document_id) if document_id and len(document_id) == 36 else None,
+                                page_number,
+                                source_excerpt,
+                                json.dumps(citation_metadata or {}),
+                                json.dumps(generation_metadata or {}),
+                                now,
+                            )
+                    except Exception as inner_inner_e:
+                        logger.error(f"Error creating quiz question in DB: {inner_inner_e}")
 
         _memory_quiz_questions[question_id] = q_data
         return q_data

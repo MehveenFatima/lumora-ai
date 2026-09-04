@@ -98,6 +98,8 @@ class QuizService:
                 citation_metadata={"document_name": gen_q.document_name, "page_number": gen_q.page_number},
                 generation_metadata={"stage": "diagnostic", "fingerprint": gen_q.fingerprint},
                 fingerprint=gen_q.fingerprint,
+                question_type=getattr(gen_q, "question_type", "conceptual"),
+                quality_score=getattr(gen_q, "quality_score", 1.0),
             )
             await bkt_repo.record_fingerprint(workspace_id, session_id, q_record["id"], gen_q.fingerprint)
 
@@ -424,6 +426,8 @@ class QuizService:
                 citation_metadata={"document_name": gen_q.document_name, "page_number": gen_q.page_number},
                 generation_metadata={"stage": "targeted_reinforcement", "fingerprint": gen_q.fingerprint},
                 fingerprint=gen_q.fingerprint,
+                question_type=getattr(gen_q, "question_type", "conceptual"),
+                quality_score=getattr(gen_q, "quality_score", 1.0),
             )
             await bkt_repo.record_fingerprint(workspace_id, session_id, q_rec["id"], gen_q.fingerprint)
             new_q_records.append(q_rec)
@@ -663,6 +667,9 @@ class QuizService:
 
         options = [QuizOptionSchema(key=opt["key"], text=opt["text"]) for opt in raw_opts]
 
+        gen_meta = q_record.get("generation_metadata") or {}
+        q_type = q_record.get("question_type") or gen_meta.get("question_type") or "conceptual"
+
         return QuizQuestionPublicResponse(
             id=str(q_record["id"]),
             quiz_session_id=str(q_record["quiz_session_id"]),
@@ -677,6 +684,7 @@ class QuizService:
             document_name=cit.get("document_name") or q_record.get("document_name"),
             page_number=q_record.get("page_number") or cit.get("page_number"),
             fingerprint=q_record.get("fingerprint"),
+            question_type=q_type,
             created_at=q_record.get("created_at"),
         )
 

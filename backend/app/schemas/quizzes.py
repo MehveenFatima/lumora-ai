@@ -22,6 +22,7 @@ class QuizQuestionPublicResponse(BaseModel):
     document_name: Optional[str] = None
     page_number: Optional[int] = None
     fingerprint: Optional[str] = None
+    question_type: Optional[str] = "conceptual"
     created_at: Optional[datetime] = None
 
 
