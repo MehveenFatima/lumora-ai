@@ -309,7 +309,35 @@ export const tutorApiClient = {
 
     if (!response.ok) {
       const err = await response.json().catch(() => ({}))
-      throw new Error(err.detail || `Failed to create quiz session (HTTP ${response.status})`)
+      const code = err.detail?.code || (typeof err.detail === 'string' && err.detail.includes('NO_INDEXED_DOCUMENTS') ? 'NO_INDEXED_DOCUMENTS' : null)
+      const message = err.detail?.message || (typeof err.detail === 'string' ? err.detail : `Failed to create quiz session (HTTP ${response.status})`)
+      const errorObj: any = new Error(message)
+      if (code) errorObj.code = code
+      throw errorObj
+    }
+    return response.json()
+  },
+
+  async startNextQuizBatch(
+    workspaceId: string,
+    quizId: string,
+    data: { batchSize?: number } = {}
+  ): Promise<any> {
+    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/quizzes/${quizId}/next-batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        batch_size: data.batchSize || 5,
+      }),
+    })
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      const code = err.detail?.code || null
+      const message = err.detail?.message || (typeof err.detail === 'string' ? err.detail : `Failed to start next quiz batch (HTTP ${response.status})`)
+      const errorObj: any = new Error(message)
+      if (code) errorObj.code = code
+      throw errorObj
     }
     return response.json()
   },

@@ -8,9 +8,11 @@ from backend.app.schemas.quizzes import (
     QuizAttemptResultResponse,
     QuizSummaryResponse,
     QuizHistoryResponse,
+    QuizNextBatchRequest,
+    QuizNextBatchResponse,
 )
 from backend.app.services.quiz_service import quiz_service
-from backend.app.services.question_generator import InsufficientContextError
+from backend.app.services.question_generator import InsufficientContextError, NoIndexedDocumentsError
 from backend.app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -35,6 +37,11 @@ async def create_quiz_session(
             initial_difficulty=request.initial_difficulty,
         )
         return session
+    except NoIndexedDocumentsError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "NO_INDEXED_DOCUMENTS", "message": str(e)},
+        )
     except InsufficientContextError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -154,3 +161,39 @@ async def complete_quiz_session(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to finalize quiz summary: {str(e)}",
         )
+
+
+@router.post(
+    "/workspaces/{workspace_id}/quizzes/{quiz_id}/next-batch",
+    response_model=QuizNextBatchResponse,
+)
+async def start_next_quiz_batch(
+    workspace_id: str,
+    quiz_id: str,
+    request: Optional[QuizNextBatchRequest] = None,
+) -> QuizNextBatchResponse:
+    batch_size = request.batch_size if request else 5
+    try:
+        response = await quiz_service.start_next_batch(
+            workspace_id=workspace_id,
+            session_id=quiz_id,
+            batch_size=batch_size,
+        )
+        return response
+    except NoIndexedDocumentsError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "NO_INDEXED_DOCUMENTS", "message": str(e)},
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    except Exception as e:
+        logger.error(f"Failed to start next batch for quiz {quiz_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate next adaptive batch: {str(e)}",
+        )
+

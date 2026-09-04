@@ -20,6 +20,8 @@ import {
   TrendingUp,
   Loader2,
   Award,
+  Target,
+  Brain,
 } from 'lucide-react'
 import { workspaceService } from '@/lib/services/workspace-service'
 import { tutorApiClient } from '@/lib/api/tutor-api-client'
@@ -75,30 +77,52 @@ interface AttemptResult {
   source_excerpt?: string
   source_citations?: SourceCitation[]
   is_quiz_completed: boolean
+  adaptation_round?: number
+  adaptation_metadata?: Record<string, any>
   next_question?: PublicQuizQuestion | null
 }
 
 interface ConceptPerformance {
   concept_name: string
+  topic_name?: string
   attempts: number
   correct: number
   accuracy_percentage: number
-  mastery_status: 'mastered' | 'proficient' | 'review_needed'
+  p_mastery?: number
+  mastery_percentage?: number
+  gap_priority?: number
+  status: string
+  recommended_action?: string
+  mastery_status?: 'mastered' | 'proficient' | 'review_needed'
+}
+
+interface KnowledgeGapDetail {
+  concept: string
+  topic: string
+  gap_priority: number
+  status: string
+  p_mastery: number
+  recommended_action: string
 }
 
 interface QuizSummary {
   session_id: string
   workspace_id: string
   total_questions: number
-  correct_answers: number
+  correct_answers?: number
+  correct_count?: number
   score: number
   accuracy_percentage: number
   average_response_time_seconds: number
-  final_difficulty_level: number
-  concept_breakdown: ConceptPerformance[]
-  knowledge_gaps: string[]
-  strengths: string[]
-  recommendations: string[]
+  final_difficulty_level?: number
+  adaptation_round?: number
+  concept_breakdown?: ConceptPerformance[]
+  concept_performance?: ConceptPerformance[]
+  knowledge_gaps?: any[]
+  knowledge_gaps_identified?: string[]
+  strengths?: string[]
+  recommendations?: string[]
+  recommendation?: string
 }
 
 const DIFFICULTY_LABELS: Record<number, { name: string; variant: 'neutral' | 'success' | 'warning' | 'destructive' }> = {
@@ -121,6 +145,12 @@ export default function AdaptiveQuizPage() {
   const [totalTargetQuestions, setTotalTargetQuestions] = useState<number>(5)
   const [currentDifficulty, setCurrentDifficulty] = useState<number>(2)
 
+  // Multi-batch adaptive learning state
+  const [adaptationRound, setAdaptationRound] = useState<number>(1)
+  const [adaptationStage, setAdaptationStage] = useState<string>('initial_diagnostic')
+  const [targetConcepts, setTargetConcepts] = useState<string[]>([])
+  const [isGeneratingNextBatch, setIsGeneratingNextBatch] = useState<boolean>(false)
+
   const [selectedOption, setSelectedOption] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false)
   const [isAnswerSubmitted, setIsAnswerSubmitted] = useState<boolean>(false)
@@ -128,6 +158,7 @@ export default function AdaptiveQuizPage() {
   const [quizSummary, setQuizSummary] = useState<QuizSummary | null>(null)
 
   const [isLoading, setIsLoading] = useState<boolean>(true)
+  const [errorCode, setErrorCode] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [timerSeconds, setTimerSeconds] = useState<number>(0)
 
@@ -137,12 +168,16 @@ export default function AdaptiveQuizPage() {
   const startQuizSession = async () => {
     if (!workspaceId) return
     setIsLoading(true)
+    setErrorCode(null)
     setErrorMessage(null)
     setQuizSummary(null)
     setAttemptResult(null)
     setIsAnswerSubmitted(false)
     setSelectedOption(null)
     setTimerSeconds(0)
+    setAdaptationRound(1)
+    setAdaptationStage('initial_diagnostic')
+    setTargetConcepts([])
 
     try {
       const ws = await workspaceService.getWorkspaceById(workspaceId)
@@ -156,6 +191,8 @@ export default function AdaptiveQuizPage() {
       setSessionId(sessionData.id)
       setCurrentDifficulty(sessionData.current_difficulty || 2)
       setTotalTargetQuestions(sessionData.target_question_count || 5)
+      setAdaptationRound(sessionData.adaptation_round || 1)
+      setAdaptationStage(sessionData.current_adaptation_stage || 'initial_diagnostic')
 
       if (sessionData.current_question) {
         setCurrentQuestion(sessionData.current_question)
@@ -166,7 +203,13 @@ export default function AdaptiveQuizPage() {
       }
     } catch (err: any) {
       console.error('Failed to initialize quiz session:', err)
-      setErrorMessage(err.message || 'Unable to create adaptive quiz session. Please verify workspace sources are indexed.')
+      const isNoDocs = err.code === 'NO_INDEXED_DOCUMENTS' || (typeof err.message === 'string' && err.message.toLowerCase().includes('no indexed'))
+      if (isNoDocs) {
+        setErrorCode('NO_INDEXED_DOCUMENTS')
+        setErrorMessage('Upload learning material to generate a grounded adaptive quiz.')
+      } else {
+        setErrorMessage(err.message || 'Unable to create adaptive quiz session. Please verify workspace sources are indexed.')
+      }
     } finally {
       setIsLoading(false)
     }
@@ -179,13 +222,13 @@ export default function AdaptiveQuizPage() {
   // Timer per question
   useEffect(() => {
     let interval: NodeJS.Timeout
-    if (!quizSummary && !isAnswerSubmitted && !isLoading) {
+    if (!quizSummary && !isAnswerSubmitted && !isLoading && !errorCode) {
       interval = setInterval(() => {
         setTimerSeconds((prev) => prev + 1)
       }, 1000)
     }
     return () => clearInterval(interval)
-  }, [quizSummary, isAnswerSubmitted, isLoading])
+  }, [quizSummary, isAnswerSubmitted, isLoading, errorCode])
 
   const formatTime = (secs: number) => {
     const m = Math.floor(secs / 60)
@@ -214,6 +257,9 @@ export default function AdaptiveQuizPage() {
       setAttemptResult(result)
       setIsAnswerSubmitted(true)
       setCurrentDifficulty(result.new_difficulty ?? currentDifficulty)
+      if (result.adaptation_round) {
+        setAdaptationRound(result.adaptation_round)
+      }
     } catch (err: any) {
       console.error('Failed to submit quiz attempt:', err)
       alert(err.message || 'Failed to submit answer. Please try again.')
@@ -222,16 +268,19 @@ export default function AdaptiveQuizPage() {
     }
   }
 
-  // Advance to Next Question or Complete Quiz
+  // Advance to Next Question or Complete Current Batch
   const handleNextQuestion = async () => {
     if (!sessionId || !attemptResult) return
 
     if (attemptResult.is_quiz_completed || !attemptResult.next_question) {
-      // Complete Session
+      // Complete Session / Batch
       setIsLoading(true)
       try {
         const summary: QuizSummary = await tutorApiClient.completeQuizSession(workspaceId, sessionId)
         setQuizSummary(summary)
+        if (summary.adaptation_round) {
+          setAdaptationRound(summary.adaptation_round)
+        }
       } catch (err: any) {
         console.error('Failed to complete quiz session:', err)
         alert(err.message || 'Failed to generate quiz summary.')
@@ -239,7 +288,7 @@ export default function AdaptiveQuizPage() {
         setIsLoading(false)
       }
     } else {
-      // Next Adaptive Question
+      // Next Question in Current Batch
       setCurrentQuestion(attemptResult.next_question)
       setQuestionOrder(attemptResult.next_question.question_order || (questionOrder + 1))
       setCurrentDifficulty(attemptResult.next_question.difficulty_level || currentDifficulty)
@@ -249,6 +298,67 @@ export default function AdaptiveQuizPage() {
       setTimerSeconds(0)
       questionStartTimeRef.current = performance.now()
     }
+  }
+
+  // Start Next Adaptive Batch (e.g. Round 2: Targeted Reinforcement)
+  const handleStartNextBatch = async () => {
+    if (!sessionId || !workspaceId || isGeneratingNextBatch) return
+    setIsGeneratingNextBatch(true)
+
+    try {
+      const nextBatch = await tutorApiClient.startNextQuizBatch(workspaceId, sessionId, { batchSize: 5 })
+      setAdaptationRound(nextBatch.adaptation_round || (adaptationRound + 1))
+      setAdaptationStage(nextBatch.current_adaptation_stage || 'targeted_reinforcement')
+      setTargetConcepts(nextBatch.target_concepts || [])
+      setTotalTargetQuestions((prev) => prev + (nextBatch.new_questions_count || 5))
+      setQuizSummary(null)
+      setAttemptResult(null)
+      setIsAnswerSubmitted(false)
+      setSelectedOption(null)
+      setTimerSeconds(0)
+
+      if (nextBatch.first_question) {
+        setCurrentQuestion(nextBatch.first_question)
+        setQuestionOrder(nextBatch.first_question.question_order || (questionOrder + 1))
+        setCurrentDifficulty(nextBatch.first_question.difficulty_level || currentDifficulty)
+        questionStartTimeRef.current = performance.now()
+      }
+    } catch (err: any) {
+      console.error('Failed to start next adaptive batch:', err)
+      alert(err.message || 'Failed to start next adaptive batch. Please try again.')
+    } finally {
+      setIsGeneratingNextBatch(false)
+    }
+  }
+
+  // ============================================================
+  // EMPTY STATE: NO INDEXED DOCUMENTS (e.g. OS workspace)
+  // ============================================================
+  if (errorCode === 'NO_INDEXED_DOCUMENTS') {
+    return (
+      <div className="mx-auto w-full max-w-2xl px-4 py-16 text-center animate-in fade-in duration-200">
+        <div className="rounded-3xl border border-dashed border-border bg-card/50 p-10 shadow-soft">
+          <div className="mx-auto flex size-14 items-center justify-center rounded-2xl bg-muted/60 text-muted-foreground">
+            <BookOpen className="size-7" />
+          </div>
+          <h2 className="mt-4 font-display text-lg font-semibold text-foreground">
+            No indexed learning materials
+          </h2>
+          <p className="mt-2 text-xs text-muted-foreground leading-relaxed max-w-md mx-auto">
+            Upload learning material to generate a grounded adaptive quiz.
+          </p>
+          <div className="mt-6 flex justify-center gap-3">
+            <Link
+              href={`/dashboard/workspace/${workspaceId}/sources`}
+              className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-xs font-semibold text-primary-foreground shadow-glow hover:opacity-90 transition-opacity"
+            >
+              <span>Add Source</span>
+              <ArrowRight className="size-3.5" />
+            </Link>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   // ============================================================
@@ -271,7 +381,7 @@ export default function AdaptiveQuizPage() {
   }
 
   // ============================================================
-  // EMPTY / ERROR STATE
+  // GENERIC ERROR STATE
   // ============================================================
   if (errorMessage || !currentQuestion) {
     return (
@@ -306,26 +416,40 @@ export default function AdaptiveQuizPage() {
   }
 
   // ============================================================
-  // QUIZ SUMMARY SCREEN
+  // QUIZ SUMMARY / INTERIM ADAPTIVE ANALYSIS SCREEN
   // ============================================================
   if (quizSummary) {
-    const weakConcepts = quizSummary.knowledge_gaps || []
-    const tutorPrompt = weakConcepts.length > 0
-      ? `I completed an adaptive quiz and need help understanding: ${weakConcepts.join(', ')}. Can you explain the core principles with examples?`
+    const rawGaps = quizSummary.knowledge_gaps || []
+    const weakConceptNames = (quizSummary.knowledge_gaps_identified && quizSummary.knowledge_gaps_identified.length > 0)
+      ? quizSummary.knowledge_gaps_identified
+      : rawGaps.map((g: any) => (typeof g === 'string' ? g : g.concept))
+
+    const tutorPrompt = weakConceptNames.length > 0
+      ? `I completed Round ${adaptationRound} adaptive assessment and need help understanding: ${weakConceptNames.join(', ')}. Can you explain the core principles with grounded examples?`
       : 'Can you give me an advanced conceptual challenge based on our workspace sources?'
+
+    const conceptList = quizSummary.concept_performance || quizSummary.concept_breakdown || []
 
     return (
       <div className="mx-auto w-full max-w-3xl px-4 py-8 md:py-12">
         <div className="rounded-3xl border border-border bg-card p-6 shadow-card md:p-10 text-center animate-in fade-in zoom-in-95 duration-200">
-          <span className="mx-auto flex size-14 items-center justify-center rounded-2xl bg-primary/10 text-primary shadow-glow">
-            <Award className="size-7" />
-          </span>
+          <div className="flex items-center justify-center gap-2">
+            <span className="flex size-14 items-center justify-center rounded-2xl bg-primary/10 text-primary shadow-glow">
+              <Award className="size-7" />
+            </span>
+          </div>
 
-          <h1 className="mt-4 font-display text-2xl font-semibold text-foreground md:text-3xl">
-            Adaptive Assessment Completed
+          <div className="mt-4 flex items-center justify-center gap-2">
+            <Badge variant="neutral" size="sm" className="bg-primary/10 text-primary border-primary/20 text-[11px] font-semibold">
+              Round {adaptationRound}: {adaptationRound === 1 ? 'Diagnostic Assessment' : 'Targeted Reinforcement'}
+            </Badge>
+          </div>
+
+          <h1 className="mt-2 font-display text-2xl font-semibold text-foreground md:text-3xl">
+            {adaptationRound === 1 ? 'Diagnostic Assessment Analyzed' : `Round ${adaptationRound} Assessment Completed`}
           </h1>
           <p className="mt-1 text-xs text-muted-foreground">
-            {workspace?.name || 'Workspace'} — Multi-Signal Performance Breakdown
+            {workspace?.name || 'Workspace'} — Bayesian Knowledge Tracing & Gap Priority Matrix
           </p>
 
           {/* Key Metrics */}
@@ -336,7 +460,7 @@ export default function AdaptiveQuizPage() {
                 {quizSummary.score}
               </p>
               <span className="text-[10px] text-muted-foreground">
-                {(quizSummary as any).correct_count ?? (quizSummary as any).correct_answers ?? 0} of {quizSummary.total_questions} correct
+                {quizSummary.correct_count ?? quizSummary.correct_answers ?? 0} of {quizSummary.total_questions} correct
               </span>
             </div>
             <div className="rounded-2xl border border-border bg-background p-4">
@@ -354,42 +478,74 @@ export default function AdaptiveQuizPage() {
               <span className="text-[10px] text-muted-foreground">Speed Calibration</span>
             </div>
             <div className="rounded-2xl border border-border bg-background p-4">
-              <span className="text-[11px] text-muted-foreground">Final Difficulty</span>
-              <p className="mt-1 font-display text-2xl font-bold text-warning">
-                L{(quizSummary as any).final_difficulty_level || 2}
+              <span className="text-[11px] text-muted-foreground">BKT Mastery Status</span>
+              <p className="mt-1 font-display text-xl font-bold text-warning">
+                {weakConceptNames.length === 0 ? 'High' : 'Calibrated'}
               </p>
               <span className="text-[10px] text-muted-foreground">
-                {DIFFICULTY_LABELS[(quizSummary as any).final_difficulty_level || 2]?.name.split(':')[1] || 'Calibrated'}
+                {weakConceptNames.length} gap{weakConceptNames.length === 1 ? '' : 's'} flagged
               </span>
             </div>
           </div>
 
-          {/* Concept Performance Matrix */}
-          {((quizSummary as any).concept_performance || (quizSummary as any).concept_breakdown || []).length > 0 && (
+          {/* Bayesian Concept Mastery Matrix */}
+          {conceptList.length > 0 && (
             <div className="mt-6 text-left">
-              <h3 className="font-display text-sm font-semibold text-foreground">Concept Mastery Matrix</h3>
-              <div className="mt-3 flex flex-col gap-2">
-                {((quizSummary as any).concept_performance || (quizSummary as any).concept_breakdown || []).map((c: any, i: number) => {
-                  const cName = c.concept || c.concept_name
+              <div className="flex items-center justify-between">
+                <h3 className="font-display text-sm font-semibold text-foreground flex items-center gap-1.5">
+                  <Brain className="size-4 text-primary" />
+                  <span>BKT Concept Mastery Matrix</span>
+                </h3>
+                <span className="text-[10px] text-muted-foreground">Multi-Signal Posterior Probability</span>
+              </div>
+
+              <div className="mt-3 flex flex-col gap-2.5">
+                {conceptList.map((c: any, i: number) => {
+                  const cName = c.concept_name || c.concept
                   const cAcc = c.accuracy_percentage
-                  const cStatus = c.mastery_status || (c.status === 'strong' ? 'mastered' : 'review_needed')
+                  const pMastery = typeof c.p_mastery === 'number' ? c.p_mastery : 0.3
+                  const masteryPct = typeof c.mastery_percentage === 'number' ? c.mastery_percentage : Math.round(pMastery * 100)
+                  const cStatus = c.status || c.mastery_status || (masteryPct >= 75 ? 'strong' : masteryPct >= 50 ? 'developing' : 'needs_attention')
+
+                  const isStrong = cStatus === 'strong' || cStatus === 'mastered'
+                  const isDeveloping = cStatus === 'developing' || cStatus === 'proficient'
+
                   return (
                     <div
                       key={i}
-                      className="flex items-center justify-between rounded-xl border border-border bg-background p-3 text-xs"
+                      className="rounded-2xl border border-border bg-background p-3.5 text-xs transition-all hover:border-border/80"
                     >
-                      <div>
-                        <span className="font-medium text-foreground">{cName}</span>
-                        <p className="text-[10px] text-muted-foreground">
-                          {c.correct}/{c.total_questions || c.attempts || 1} correct ({cAcc}%)
-                        </p>
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <span className="font-semibold text-foreground">{cName}</span>
+                          <span className="ml-2 text-[10px] text-muted-foreground">
+                            {c.correct}/{c.attempts || c.total_questions || 1} correct ({cAcc}%)
+                          </span>
+                        </div>
+                        <Badge
+                          variant={isStrong ? 'success' : isDeveloping ? 'warning' : 'destructive'}
+                          size="sm"
+                          className="capitalize text-[10px]"
+                        >
+                          {isStrong ? 'Mastered' : isDeveloping ? 'Proficient' : 'Needs Attention'}
+                        </Badge>
                       </div>
-                      <Badge
-                        variant={cStatus === 'mastered' ? 'success' : cStatus === 'proficient' ? 'warning' : 'destructive'}
-                        size="sm"
-                      >
-                        {cStatus === 'mastered' ? 'Mastered' : cStatus === 'proficient' ? 'Proficient' : 'Needs Review'}
-                      </Badge>
+
+                      {/* BKT Mastery Bar */}
+                      <div className="mt-2.5 flex items-center gap-2.5">
+                        <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+                          <div
+                            className={cn(
+                              'h-full rounded-full transition-all duration-500',
+                              isStrong ? 'bg-success' : isDeveloping ? 'bg-warning' : 'bg-destructive'
+                            )}
+                            style={{ width: `${Math.max(5, Math.min(100, masteryPct))}%` }}
+                          />
+                        </div>
+                        <span className="text-[10px] font-mono font-medium text-muted-foreground min-w-[50px] text-right">
+                          {masteryPct}% BKT
+                        </span>
+                      </div>
                     </div>
                   )
                 })}
@@ -398,66 +554,80 @@ export default function AdaptiveQuizPage() {
           )}
 
           {/* Identified Gaps */}
-          {weakConcepts.length > 0 && (
+          {weakConceptNames.length > 0 && (
             <div className="mt-6 rounded-2xl border border-destructive/20 bg-destructive/5 p-4 text-left">
               <div className="flex items-center gap-2 text-xs font-semibold text-destructive">
                 <AlertTriangle className="size-4" />
-                <span>Identified Knowledge Gaps</span>
+                <span>Identified Knowledge Gaps (Prioritized for Reinforcement)</span>
               </div>
-              <p className="mt-1 text-xs text-muted-foreground">
-                The adaptive engine detected hesitation or incorrect responses on:{' '}
-                <span className="font-semibold text-foreground">
-                  {weakConcepts.join(', ')}
-                </span>
-                .
+              <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
+                The adaptive engine detected conceptual fragility on:{' '}
+                <strong className="text-foreground">{weakConceptNames.join(', ')}</strong>.
+                Targeted questions have been calibrated for your next adaptive batch.
               </p>
             </div>
           )}
 
           {/* AI Recommendations */}
-          {((quizSummary as any).recommendation || (quizSummary as any).recommendations) && (
+          {(quizSummary.recommendation || quizSummary.recommendations) && (
             <div className="mt-4 rounded-2xl border border-primary/20 bg-primary/5 p-4 text-left text-xs">
               <div className="flex items-center gap-2 font-semibold text-primary">
                 <Sparkles className="size-4" />
-                <span>AI Tutor Recommendations</span>
+                <span>AI Tutor Insights</span>
               </div>
               <p className="mt-2 text-muted-foreground leading-relaxed">
-                {(quizSummary as any).recommendation ||
-                  (Array.isArray((quizSummary as any).recommendations)
-                    ? (quizSummary as any).recommendations.join(' ')
+                {quizSummary.recommendation ||
+                  (Array.isArray(quizSummary.recommendations)
+                    ? quizSummary.recommendations.join(' ')
                     : 'Review identified topics with AI Tutor.')}
               </p>
             </div>
           )}
 
-          {/* Action Buttons */}
+          {/* Adaptive Learning Actions */}
           <div className="mt-8 flex flex-col sm:flex-row gap-3">
+            {/* Primary Action: Launch Next Targeted Batch */}
+            <button
+              onClick={handleStartNextBatch}
+              disabled={isGeneratingNextBatch}
+              className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-primary py-3 px-4 text-xs font-semibold text-primary-foreground shadow-glow transition-all hover:opacity-90 disabled:opacity-50"
+            >
+              {isGeneratingNextBatch ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  <span>Synthesizing Round {adaptationRound + 1}...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="size-4" />
+                  <span>Start Targeted Adaptive Batch (Round {adaptationRound + 1})</span>
+                </>
+              )}
+            </button>
+
             <Link
               href={`/dashboard/workspace/${workspaceId}/tutor?prompt=${encodeURIComponent(tutorPrompt)}`}
-              className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-primary py-3 text-xs font-semibold text-primary-foreground shadow-glow transition-opacity hover:opacity-90"
+              className="flex items-center justify-center gap-2 rounded-xl border border-primary/30 bg-primary/5 py-3 px-4 text-xs font-semibold text-primary transition-colors hover:bg-primary/10"
             >
               <MessagesSquare className="size-4" />
               <span>Review Weak Areas with Tutor</span>
             </Link>
+
             <Link
               href={`/dashboard/workspace/${workspaceId}`}
-              className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-border bg-card py-3 text-xs font-semibold text-foreground transition-colors hover:bg-accent/40"
+              className="flex items-center justify-center gap-2 rounded-xl border border-border bg-card py-3 px-4 text-xs font-semibold text-foreground transition-colors hover:bg-accent/40"
             >
               <span>Back to Overview</span>
             </Link>
-            <button
-              onClick={startQuizSession}
-              className="flex items-center justify-center gap-2 rounded-xl border border-border bg-card px-4 py-3 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <RotateCcw className="size-4" />
-              <span>Try Again</span>
-            </button>
           </div>
         </div>
       </div>
     )
   }
 
+  // ============================================================
+  // ACTIVE QUESTION SCREEN
+  // ============================================================
   const currentConcept = currentQuestion.concept || currentQuestion.concept_tag || 'Core Principle'
   const currentDiff = currentQuestion.difficulty || currentQuestion.difficulty_level || currentDifficulty
   const diffMeta = DIFFICULTY_LABELS[currentDiff] || {
@@ -485,11 +655,16 @@ export default function AdaptiveQuizPage() {
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="font-display text-sm font-semibold text-foreground">{workspace?.name || 'Workspace'}</h2>
+                <Badge variant="neutral" size="sm" className="text-[10px] bg-primary/10 text-primary border-primary/20">
+                  Round {adaptationRound}
+                </Badge>
                 <Badge variant="neutral" size="sm" className="text-[10px]">
                   {currentConcept}
                 </Badge>
               </div>
-              <p className="text-[11px] text-muted-foreground">Production Adaptive Diagnostic Engine</p>
+              <p className="text-[11px] text-muted-foreground">
+                {adaptationRound === 1 ? 'Phase 2 Adaptive Diagnostic Engine' : `Targeted Reinforcement Round ${adaptationRound}`}
+              </p>
             </div>
           </div>
 
@@ -502,6 +677,14 @@ export default function AdaptiveQuizPage() {
             </span>
           </div>
         </div>
+
+        {/* Targeted Concepts Banner (if in targeted round) */}
+        {targetConcepts.length > 0 && (
+          <div className="mt-3 flex items-center gap-2 rounded-xl bg-accent/30 px-3 py-1.5 text-[11px] text-muted-foreground">
+            <Target className="size-3 text-primary shrink-0" />
+            <span>Targeting Knowledge Gaps: <strong className="text-foreground">{targetConcepts.join(', ')}</strong></span>
+          </div>
+        )}
 
         {/* Question Counter & Progress */}
         <div className="mt-4 flex items-center justify-between text-xs text-muted-foreground">
@@ -592,7 +775,7 @@ export default function AdaptiveQuizPage() {
                 ) : (
                   <>
                     <XCircle className="size-4 text-destructive" />
-                    <span className="text-destructive">Incorrect — Concept Calibration</span>
+                    <span className="text-destructive">Incorrect — BKT Mastery Calibrated</span>
                   </>
                 )}
               </div>
@@ -653,7 +836,7 @@ export default function AdaptiveQuizPage() {
             >
               <span>
                 {attemptResult?.is_quiz_completed || questionOrder >= totalTargetQuestions
-                  ? 'View Final Results'
+                  ? 'Complete Round & View Analysis'
                   : 'Next Question'}
               </span>
               <ArrowRight className="size-3.5" />

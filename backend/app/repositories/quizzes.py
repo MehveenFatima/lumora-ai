@@ -33,6 +33,10 @@ class QuizRepository:
             "correct_count": 0,
             "total_count": 0,
             "average_response_time_ms": 0,
+            "adaptation_round": 1,
+            "initial_diagnostic_completed": False,
+            "current_adaptation_stage": "diagnostic",
+            "current_target_concepts": [],
             "started_at": now,
             "completed_at": None,
             "created_at": now,
@@ -46,8 +50,8 @@ class QuizRepository:
                     await conn.execute(
                         """
                         INSERT INTO quiz_sessions 
-                        (id, workspace_id, user_id, status, target_question_count, current_question_index, score, correct_count, total_count, average_response_time_ms, started_at, created_at, updated_at)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                        (id, workspace_id, user_id, status, target_question_count, current_question_index, score, correct_count, total_count, average_response_time_ms, started_at, created_at, updated_at, adaptation_round, initial_diagnostic_completed, current_adaptation_stage)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
                         """,
                         uuid.UUID(session_id),
                         workspace_id,
@@ -62,9 +66,36 @@ class QuizRepository:
                         now,
                         now,
                         now,
+                        1,
+                        False,
+                        "diagnostic",
                     )
             except Exception as e:
-                logger.error(f"Error creating quiz session in DB: {e}")
+                # If table does not yet have Phase 2 columns, fallback to base insert
+                try:
+                    async with pool.acquire() as conn:
+                        await conn.execute(
+                            """
+                            INSERT INTO quiz_sessions 
+                            (id, workspace_id, user_id, status, target_question_count, current_question_index, score, correct_count, total_count, average_response_time_ms, started_at, created_at, updated_at)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                            """,
+                            uuid.UUID(session_id),
+                            workspace_id,
+                            user_id,
+                            session_data["status"],
+                            target_question_count,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            now,
+                            now,
+                            now,
+                        )
+                except Exception as inner_e:
+                    logger.error(f"Error creating quiz session in DB: {inner_e}")
 
         _memory_quiz_sessions[session_id] = session_data
         return session_data
@@ -145,8 +176,7 @@ class QuizRepository:
                         limit,
                         offset,
                     )
-                    if rows:
-                        return [dict(r) for r in rows]
+                    return [dict(r) for r in rows]
             except Exception as e:
                 logger.error(f"Error listing quiz sessions from DB: {e}")
 
@@ -171,6 +201,7 @@ class QuizRepository:
         source_excerpt: Optional[str] = None,
         citation_metadata: Optional[Dict[str, Any]] = None,
         generation_metadata: Optional[Dict[str, Any]] = None,
+        fingerprint: Optional[str] = None,
     ) -> Dict[str, Any]:
         question_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
@@ -191,6 +222,7 @@ class QuizRepository:
             "source_excerpt": source_excerpt,
             "citation_metadata": citation_metadata or {},
             "generation_metadata": generation_metadata or {},
+            "fingerprint": fingerprint,
             "created_at": now,
         }
 
@@ -201,8 +233,8 @@ class QuizRepository:
                     await conn.execute(
                         """
                         INSERT INTO quiz_questions
-                        (id, quiz_session_id, workspace_id, question_index, topic, concept, difficulty, question_text, options, correct_option, explanation, document_id, page_number, source_excerpt, citation_metadata, generation_metadata, created_at)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+                        (id, quiz_session_id, workspace_id, question_index, topic, concept, difficulty, question_text, options, correct_option, explanation, document_id, page_number, source_excerpt, citation_metadata, generation_metadata, created_at, fingerprint)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
                         """,
                         uuid.UUID(question_id),
                         uuid.UUID(quiz_session_id) if len(quiz_session_id) == 36 else quiz_session_id,
@@ -221,9 +253,38 @@ class QuizRepository:
                         json.dumps(citation_metadata or {}),
                         json.dumps(generation_metadata or {}),
                         now,
+                        fingerprint,
                     )
             except Exception as e:
-                logger.error(f"Error creating quiz question in DB: {e}")
+                # Fallback if fingerprint column not yet present
+                try:
+                    async with pool.acquire() as conn:
+                        await conn.execute(
+                            """
+                            INSERT INTO quiz_questions
+                            (id, quiz_session_id, workspace_id, question_index, topic, concept, difficulty, question_text, options, correct_option, explanation, document_id, page_number, source_excerpt, citation_metadata, generation_metadata, created_at)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+                            """,
+                            uuid.UUID(question_id),
+                            uuid.UUID(quiz_session_id) if len(quiz_session_id) == 36 else quiz_session_id,
+                            workspace_id,
+                            question_index,
+                            topic,
+                            concept,
+                            difficulty,
+                            question_text,
+                            json.dumps(options),
+                            correct_option,
+                            explanation,
+                            uuid.UUID(document_id) if document_id and len(document_id) == 36 else None,
+                            page_number,
+                            source_excerpt,
+                            json.dumps(citation_metadata or {}),
+                            json.dumps(generation_metadata or {}),
+                            now,
+                        )
+                except Exception as inner_e:
+                    logger.error(f"Error creating quiz question in DB: {inner_e}")
 
         _memory_quiz_questions[question_id] = q_data
         return q_data
@@ -244,12 +305,10 @@ class QuizRepository:
                         params.append(workspace_id)
                     row = await conn.fetchrow(query, *params)
                     if row:
-                        data = dict(row)
-                        if isinstance(data.get("options"), str):
-                            data["options"] = json.loads(data["options"])
-                        if isinstance(data.get("citation_metadata"), str):
-                            data["citation_metadata"] = json.loads(data["citation_metadata"])
-                        return data
+                        d = dict(row)
+                        if isinstance(d.get("options"), str):
+                            d["options"] = json.loads(d["options"])
+                        return d
             except Exception as e:
                 logger.error(f"Error fetching quiz question from DB: {e}")
 
@@ -267,30 +326,26 @@ class QuizRepository:
         if pool:
             try:
                 async with pool.acquire() as conn:
-                    query = """
-                        SELECT * FROM quiz_questions 
-                        WHERE quiz_session_id = $1
-                    """
+                    query = "SELECT * FROM quiz_questions WHERE quiz_session_id = $1"
                     params = [uuid.UUID(session_id) if len(session_id) == 36 else session_id]
                     if workspace_id:
                         query += " AND workspace_id = $2"
                         params.append(workspace_id)
                     query += " ORDER BY question_index ASC"
                     rows = await conn.fetch(query, *params)
-                    if rows:
-                        results = []
-                        for r in rows:
-                            d = dict(r)
-                            if isinstance(d.get("options"), str):
-                                d["options"] = json.loads(d["options"])
-                            results.append(d)
-                        return results
+                    result = []
+                    for r in rows:
+                        d = dict(r)
+                        if isinstance(d.get("options"), str):
+                            d["options"] = json.loads(d["options"])
+                        result.append(d)
+                    return result
             except Exception as e:
-                logger.error(f"Error listing questions by session from DB: {e}")
+                logger.error(f"Error listing quiz questions from DB: {e}")
 
         matching = [
             q for q in _memory_quiz_questions.values() 
-            if q["quiz_session_id"] == session_id and (not workspace_id or q["workspace_id"] == workspace_id)
+            if str(q["quiz_session_id"]) == str(session_id) and (not workspace_id or q["workspace_id"] == workspace_id)
         ]
         matching.sort(key=lambda x: x.get("question_index", 0))
         return matching
@@ -307,7 +362,7 @@ class QuizRepository:
     ) -> Dict[str, Any]:
         attempt_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
-        attempt_data = {
+        att_data = {
             "id": attempt_id,
             "quiz_session_id": quiz_session_id,
             "question_id": question_id,
@@ -344,8 +399,8 @@ class QuizRepository:
             except Exception as e:
                 logger.error(f"Error creating quiz attempt in DB: {e}")
 
-        _memory_quiz_attempts[attempt_id] = attempt_data
-        return attempt_data
+        _memory_quiz_attempts[attempt_id] = att_data
+        return att_data
 
     async def list_attempts_by_session(
         self,
@@ -356,24 +411,20 @@ class QuizRepository:
         if pool:
             try:
                 async with pool.acquire() as conn:
-                    query = """
-                        SELECT * FROM quiz_attempts 
-                        WHERE quiz_session_id = $1
-                    """
+                    query = "SELECT * FROM quiz_attempts WHERE quiz_session_id = $1"
                     params = [uuid.UUID(session_id) if len(session_id) == 36 else session_id]
                     if workspace_id:
                         query += " AND workspace_id = $2"
                         params.append(workspace_id)
                     query += " ORDER BY answered_at ASC"
                     rows = await conn.fetch(query, *params)
-                    if rows:
-                        return [dict(r) for r in rows]
+                    return [dict(r) for r in rows]
             except Exception as e:
-                logger.error(f"Error listing attempts by session from DB: {e}")
+                logger.error(f"Error listing quiz attempts from DB: {e}")
 
         matching = [
             a for a in _memory_quiz_attempts.values()
-            if a["quiz_session_id"] == session_id and (not workspace_id or a["workspace_id"] == workspace_id)
+            if str(a["quiz_session_id"]) == str(session_id) and (not workspace_id or a["workspace_id"] == workspace_id)
         ]
         matching.sort(key=lambda x: x.get("answered_at") or datetime.min.replace(tzinfo=timezone.utc))
         return matching
@@ -381,6 +432,7 @@ class QuizRepository:
     async def list_attempts_by_workspace(
         self,
         workspace_id: str,
+        user_id: str = "default_user",
     ) -> List[Dict[str, Any]]:
         pool = await get_db_pool()
         if pool:
@@ -388,30 +440,23 @@ class QuizRepository:
                 async with pool.acquire() as conn:
                     rows = await conn.fetch(
                         """
-                        SELECT a.*, q.topic, q.concept, q.difficulty
-                        FROM quiz_attempts a
-                        JOIN quiz_questions q ON q.id = a.question_id
-                        WHERE a.workspace_id = $1
-                        ORDER BY a.answered_at DESC
+                        SELECT * FROM quiz_attempts 
+                        WHERE workspace_id = $1 AND user_id = $2
+                        ORDER BY answered_at ASC
                         """,
                         workspace_id,
+                        user_id,
                     )
-                    if rows:
-                        return [dict(r) for r in rows]
+                    return [dict(r) for r in rows]
             except Exception as e:
-                logger.error(f"Error listing attempts by workspace from DB: {e}")
+                logger.error(f"Error listing workspace attempts from DB: {e}")
 
-        results = []
-        for a in _memory_quiz_attempts.values():
-            if a["workspace_id"] == workspace_id:
-                q = _memory_quiz_questions.get(a["question_id"], {})
-                results.append({
-                    **a,
-                    "topic": q.get("topic", "General"),
-                    "concept": q.get("concept", "General Concept"),
-                    "difficulty": q.get("difficulty", 2),
-                })
-        return results
+        matching = [
+            a for a in _memory_quiz_attempts.values()
+            if a["workspace_id"] == workspace_id and a.get("user_id", "default_user") == user_id
+        ]
+        matching.sort(key=lambda x: x.get("answered_at") or datetime.min.replace(tzinfo=timezone.utc))
+        return matching
 
 
 quiz_repo = QuizRepository()

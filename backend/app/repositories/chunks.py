@@ -62,6 +62,80 @@ class ChunkRepository:
         for c in chunks_data:
             _memory_chunks[c["id"]] = c
 
+    async def get_chunks_by_document(
+        self,
+        workspace_id: str,
+        document_id: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieves all chunks for a specific document.
+        STRICTLY SCOPED to the specified workspace_id and document_id.
+        """
+        pool = await get_db_pool()
+        if pool:
+            try:
+                async with pool.acquire() as conn:
+                    rows = await conn.fetch(
+                        """
+                        SELECT 
+                            c.id,
+                            c.workspace_id,
+                            c.document_id,
+                            c.chunk_index,
+                            c.page_number,
+                            c.heading,
+                            c.text,
+                            d.filename as document_name,
+                            d.title as document_title
+                        FROM document_chunks c
+                        JOIN documents d ON d.id = c.document_id
+                        WHERE c.workspace_id = $1
+                          AND c.document_id = $2
+                        ORDER BY c.page_number ASC, c.chunk_index ASC
+                        """,
+                        workspace_id,
+                        uuid.UUID(document_id) if len(document_id) == 36 else document_id,
+                    )
+                    return [
+                        {
+                            "id": str(r["id"]),
+                            "workspace_id": r["workspace_id"],
+                            "document_id": str(r["document_id"]),
+                            "document_name": r["document_name"],
+                            "document_title": r["document_title"],
+                            "chunk_index": r["chunk_index"],
+                            "page_number": r["page_number"] or 1,
+                            "heading": r["heading"],
+                            "text": r["text"],
+                            "similarity_score": 1.0,
+                        }
+                        for r in rows
+                    ]
+            except Exception as e:
+                logger.error(f"Error fetching chunks by document from DB: {e}")
+
+        # In-memory store fallback
+        matching = [
+            c for c in _memory_chunks.values()
+            if c["workspace_id"] == workspace_id and str(c["document_id"]) == str(document_id)
+        ]
+        matching.sort(key=lambda x: (x.get("page_number", 1), x.get("chunk_index", 0)))
+        return [
+            {
+                "id": item["id"],
+                "workspace_id": item["workspace_id"],
+                "document_id": item["document_id"],
+                "document_name": item.get("document_name", "Workspace Document"),
+                "document_title": item.get("document_title", "Document"),
+                "chunk_index": item["chunk_index"],
+                "page_number": item.get("page_number", 1),
+                "heading": item.get("heading"),
+                "text": item["text"],
+                "similarity_score": 1.0,
+            }
+            for item in matching
+        ]
+
     async def get_sampled_chunks_by_document(
         self,
         workspace_id: str,
