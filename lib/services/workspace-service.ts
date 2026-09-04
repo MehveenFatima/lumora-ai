@@ -250,14 +250,102 @@ export const workspaceService = {
     return false
   },
 
-  // 3. TOPICS & KNOWLEDGE METHODS
+  // 3. TOPICS & KNOWLEDGE METHODS (Authoritative Source: FastAPI TopicMasteryEngine & LearnerProfileService)
   async getTopics(workspaceId: string): Promise<Topic[]> {
     if (!workspaceId) return []
+
+    try {
+      const res = await tutorApiClient.getTopicMasteryList(workspaceId)
+      if (res && res.topics && res.topics.length > 0) {
+        const mappedTopics: Topic[] = res.topics.map((t: any) => {
+          const concepts = (t.concepts || []).map((c: any) => ({
+            id: `c_${c.concept.toLowerCase().replace(/[^a-z0-9]/g, '_')}`,
+            name: c.concept,
+            mastery: c.mastery_percentage !== undefined ? c.mastery_percentage : Math.round((c.p_mastery || 0.3) * 100),
+            status: (c.mastery_status as MasteryStatus) || 'developing',
+            whyWeak: c.mastery_status === 'critical_gap' || c.mastery_status === 'needs_review'
+              ? `Low assessment accuracy (${Math.round((c.recent_accuracy || 0) * 100)}%) with high knowledge gap priority.`
+              : undefined,
+            lastAssessed: c.last_practiced_at ? new Date(c.last_practiced_at).toLocaleDateString() : 'Not yet assessed',
+          }))
+
+          const trend: 'up' | 'down' | 'steady' =
+            t.trend === 'improving' ? 'up' : t.trend === 'declining' ? 'down' : 'steady'
+
+          const weakCount = concepts.filter(
+            (c: any) => c.status === 'critical_gap' || c.status === 'needs_review'
+          ).length
+
+          return {
+            id: `t_${t.topic.toLowerCase().replace(/[^a-z0-9]/g, '_')}`,
+            workspaceId: t.workspace_id || workspaceId,
+            name: t.topic,
+            description: `Curriculum topic containing ${t.concept_count || 1} concept${(t.concept_count || 1) > 1 ? 's' : ''} (${t.assessed_concept_count || 0} assessed).`,
+            mastery: t.mastery_percentage !== undefined ? t.mastery_percentage : Math.round((t.mastery_probability || 0.3) * 100),
+            trend: trend,
+            status: (t.mastery_status as MasteryStatus) || 'developing',
+            conceptsCount: t.concept_count || Math.max(concepts.length, 1),
+            weakConceptsCount: weakCount,
+            concepts: concepts,
+            lastReviewDate: t.last_assessed_at ? new Date(t.last_assessed_at).toLocaleDateString() : 'Recent',
+            nextReviewDate: 'In 3 days',
+            estimatedStudyMinutes: Math.max(15, (t.concept_count || 1) * 10),
+          }
+        })
+        topicsCache[workspaceId] = mappedTopics
+        return mappedTopics
+      }
+    } catch (err) {
+      console.warn(`Failed to fetch live topics for workspace '${workspaceId}':`, err)
+    }
+
+    // Presentation demo fallback strictly for dsa
+    if (workspaceId === 'dsa' && (!topicsCache['dsa'] || topicsCache['dsa'].length === 0)) {
+      return [...dsaTopics]
+    }
+
     return topicsCache[workspaceId] ? [...topicsCache[workspaceId]] : []
   },
 
   async getKnowledgeGaps(workspaceId: string): Promise<KnowledgeGap[]> {
     if (!workspaceId) return []
+
+    try {
+      const profile = await tutorApiClient.getLearnerProfile(workspaceId)
+      if (profile && profile.top_knowledge_gaps && profile.top_knowledge_gaps.length > 0) {
+        const mappedGaps: KnowledgeGap[] = profile.top_knowledge_gaps.map((g: any, idx: number) => {
+          const priority = g.gap_priority !== undefined ? g.gap_priority : 0.5
+          const severity: 'critical' | 'moderate' | 'mild' =
+            priority >= 0.7 ? 'critical' : priority >= 0.4 ? 'moderate' : 'mild'
+          const pMastery = g.p_mastery !== undefined ? g.p_mastery : 0.3
+
+          return {
+            id: `gap_${workspaceId}_${idx}`,
+            workspaceId: workspaceId,
+            topicId: `t_${(g.topic || 'general').toLowerCase().replace(/[^a-z0-9]/g, '_')}`,
+            topicName: g.topic || 'General',
+            conceptName: g.concept || 'Core Concept',
+            mastery: Math.round(pMastery * 100),
+            reason: g.rationale || `Identified knowledge gap with priority ${Math.round(priority * 100)}%. Focus practice to reinforce understanding.`,
+            severity: severity,
+            recommendedAction: (g.recommended_action === 'targeted_practice' ? 'quiz' : 'tutor') as any,
+          }
+        })
+        knowledgeGapsCache[workspaceId] = mappedGaps
+        return mappedGaps
+      } else if (profile && profile.status === 'not_assessed') {
+        knowledgeGapsCache[workspaceId] = []
+        return []
+      }
+    } catch (err) {
+      console.warn(`Failed to fetch learner profile gaps for '${workspaceId}':`, err)
+    }
+
+    // Presentation demo fallback strictly for dsa
+    if (workspaceId === 'dsa' && (!knowledgeGapsCache['dsa'] || knowledgeGapsCache['dsa'].length === 0)) {
+      return [...dsaKnowledgeGaps]
+    }
+
     return knowledgeGapsCache[workspaceId] ? [...knowledgeGapsCache[workspaceId]] : []
   },
 
@@ -268,6 +356,42 @@ export const workspaceService = {
 
   async getAIRecommendation(workspaceId: string): Promise<AIRecommendation | null> {
     if (!workspaceId) return null
+
+    try {
+      const profile = await tutorApiClient.getLearnerProfile(workspaceId)
+      if (profile && profile.recommendations && profile.recommendations.length > 0) {
+        const r = profile.recommendations[0]
+        const rec: AIRecommendation = {
+          id: `rec_${workspaceId}_${Date.now()}`,
+          workspaceId: workspaceId,
+          title: `Reinforce ${r.concept}`,
+          targetConcept: r.concept,
+          topicName: r.topic,
+          priority: r.gap_priority >= 0.7 ? 'high' : r.gap_priority >= 0.4 ? 'medium' : 'low',
+          estimatedMinutes: 15,
+          summary: `Targeted review recommended for ${r.concept} in ${r.topic}.`,
+          rationale: `BKT estimation shows ${Math.round(r.mastery_probability * 100)}% mastery with ${Math.round(r.gap_priority * 100)}% gap priority. Recommended action: ${(r.recommended_action || '').replace(/_/g, ' ')}.`,
+          dataPoints: [
+            `Current Mastery Probability: ${Math.round(r.mastery_probability * 100)}%`,
+            `Gap Priority Score: ${Math.round(r.gap_priority * 100)}%`,
+            `Evidence Confidence: ${r.confidence}`,
+            `Mastery Trend: ${(r.trend || '').replace(/_/g, ' ')}`,
+          ],
+          suggestedAction: r.recommended_action === 'targeted_practice' ? 'quiz' : 'tutor',
+        }
+        recommendationsCache[workspaceId] = rec
+        return rec
+      } else if (profile && profile.status === 'not_assessed') {
+        return null
+      }
+    } catch (err) {
+      console.warn(`Failed to fetch recommendation for '${workspaceId}':`, err)
+    }
+
+    if (workspaceId === 'dsa' && !recommendationsCache['dsa']) {
+      return dsaRecommendation ? { ...dsaRecommendation } : null
+    }
+
     return recommendationsCache[workspaceId] || null
   },
 

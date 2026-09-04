@@ -42,8 +42,46 @@ class BKTRepository:
             "last_practiced_at": now,
         })
 
-        new_attempts = existing["attempts_count"] + 1
-        new_correct = existing["correct_count"] + (1 if is_correct else 0)
+        new_attempts = existing.get("attempts_count", 0) + 1
+        new_correct = existing.get("correct_count", 0) + (1 if is_correct else 0)
+        new_incorrect = existing.get("incorrect_count", 0) + (0 if is_correct else 1)
+        recent_acc = round(new_correct / new_attempts, 4) if new_attempts > 0 else 0.0
+        repeated_err = (existing.get("repeated_error_count", 0) + 1) if not is_correct else 0
+        prev_avg_time = existing.get("average_response_time_ms", 0)
+        prev_attempts = existing.get("attempts_count", 0)
+        avg_time = int((prev_avg_time * prev_attempts + response_time_ms) / new_attempts) if new_attempts > 0 else response_time_ms
+
+        # Confidence heuristic
+        if new_attempts < 3:
+            conf_level = "low"
+        elif new_attempts < 8:
+            conf_level = "moderate"
+        else:
+            conf_level = "high"
+
+        # Status
+        if conf_level == "low":
+            m_status = "low_evidence" if p_mastery >= 0.80 else "developing"
+        elif p_mastery >= 0.80:
+            m_status = "strong"
+        elif p_mastery >= 0.60:
+            m_status = "developing"
+        elif p_mastery >= 0.40:
+            m_status = "needs_review"
+        else:
+            m_status = "critical_gap"
+
+        # Trend
+        prev_pm = existing.get("p_mastery", 0.30)
+        delta = p_mastery - prev_pm
+        if prev_attempts < 1:
+            c_trend = "insufficient_data"
+        elif delta >= 0.03:
+            c_trend = "improving"
+        elif delta <= -0.03:
+            c_trend = "declining"
+        else:
+            c_trend = "stable"
 
         record = {
             "id": existing.get("id") or str(uuid.uuid4()),
@@ -51,11 +89,21 @@ class BKTRepository:
             "user_id": user_id,
             "topic": topic,
             "concept": concept,
-            "p_mastery": p_mastery,
+            "p_mastery": round(float(p_mastery), 4),
+            "bkt_version": "1.0",
             "attempts_count": new_attempts,
             "correct_count": new_correct,
+            "incorrect_count": new_incorrect,
+            "recent_accuracy": recent_acc,
+            "average_response_time_ms": avg_time,
+            "repeated_error_count": repeated_err,
+            "first_attempt_at": existing.get("first_attempt_at") or now,
+            "last_attempt_at": now,
             "last_response_time_ms": response_time_ms,
             "last_practiced_at": now,
+            "mastery_status": m_status,
+            "confidence_level": conf_level,
+            "trend": c_trend,
             "created_at": existing.get("created_at") or now,
             "updated_at": now,
         }
@@ -67,30 +115,53 @@ class BKTRepository:
                 async with pool.acquire() as conn:
                     await conn.execute(
                         """
-                        INSERT INTO learner_concept_mastery
-                        (workspace_id, user_id, topic, concept, p_mastery, attempts_count, correct_count, last_response_time_ms, last_practiced_at, updated_at)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                        INSERT INTO learner_concept_mastery (
+                            workspace_id, user_id, topic, concept, p_mastery,
+                            bkt_version, attempts_count, correct_count, incorrect_count,
+                            recent_accuracy, average_response_time_ms, repeated_error_count,
+                            first_attempt_at, last_attempt_at, last_response_time_ms,
+                            last_practiced_at, mastery_status, confidence_level, trend, updated_at
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
                         ON CONFLICT (workspace_id, user_id, concept)
                         DO UPDATE SET
                             topic = EXCLUDED.topic,
                             p_mastery = EXCLUDED.p_mastery,
-                            attempts_count = learner_concept_mastery.attempts_count + 1,
-                            correct_count = learner_concept_mastery.correct_count + (CASE WHEN $11 THEN 1 ELSE 0 END),
+                            bkt_version = EXCLUDED.bkt_version,
+                            attempts_count = EXCLUDED.attempts_count,
+                            correct_count = EXCLUDED.correct_count,
+                            incorrect_count = EXCLUDED.incorrect_count,
+                            recent_accuracy = EXCLUDED.recent_accuracy,
+                            average_response_time_ms = EXCLUDED.average_response_time_ms,
+                            repeated_error_count = EXCLUDED.repeated_error_count,
+                            last_attempt_at = EXCLUDED.last_attempt_at,
                             last_response_time_ms = EXCLUDED.last_response_time_ms,
                             last_practiced_at = EXCLUDED.last_practiced_at,
+                            mastery_status = EXCLUDED.mastery_status,
+                            confidence_level = EXCLUDED.confidence_level,
+                            trend = EXCLUDED.trend,
                             updated_at = EXCLUDED.updated_at
                         """,
                         workspace_id,
                         user_id,
                         topic,
                         concept,
-                        p_mastery,
+                        record["p_mastery"],
+                        "1.0",
                         new_attempts,
                         new_correct,
+                        new_incorrect,
+                        recent_acc,
+                        avg_time,
+                        repeated_err,
+                        record["first_attempt_at"],
+                        now,
                         response_time_ms,
                         now,
+                        m_status,
+                        conf_level,
+                        c_trend,
                         now,
-                        is_correct,
                     )
             except Exception as e:
                 logger.warning(f"Failed to upsert learner_concept_mastery in PostgreSQL: {e}")

@@ -403,4 +403,43 @@ export const tutorApiClient = {
       return { sessions: [], total_count: 0 }
     }
   },
+
+  // ----------------------------------------------------
+  // PHASE 3: TOPIC MASTERY & LEARNER KNOWLEDGE PROFILE
+  // ----------------------------------------------------
+  async getWorkspaceMastery(workspaceId: string): Promise<any> {
+    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/mastery`)
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.detail || `Failed to fetch workspace mastery (HTTP ${response.status})`)
+    }
+    return response.json()
+  },
+
+  async getTopicMasteryList(workspaceId: string): Promise<any> {
+    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/mastery/topics`)
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.detail || `Failed to fetch topic mastery list (HTTP ${response.status})`)
+    }
+    return response.json()
+  },
+
+  async getTopicDetail(workspaceId: string, topicName: string): Promise<any> {
+    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/mastery/topics/${encodeURIComponent(topicName)}`)
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.detail || `Failed to fetch topic details for '${topicName}' (HTTP ${response.status})`)
+    }
+    return response.json()
+  },
+
+  async getLearnerProfile(workspaceId: string): Promise<any> {
+    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/learner-profile`)
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.detail || `Failed to fetch learner profile (HTTP ${response.status})`)
+    }
+    return response.json()
+  },
 }

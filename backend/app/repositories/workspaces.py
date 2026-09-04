@@ -198,10 +198,32 @@ class WorkspaceRepository:
             except Exception as e:
                 logger.error(f"Error incrementing doc count for workspace {workspace_id}: {e}")
 
+    async def update_mastery(
+        self,
+        workspace_id: str,
+        overall_mastery: int,
+        mastery_delta: int = 0,
+    ) -> None:
+        pool = await get_db_pool()
+        if pool:
+            try:
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        """
+                        UPDATE workspaces 
+                        SET overall_mastery = $2, mastery_delta = $3, updated_at = NOW()
+                        WHERE id = $1
+                        """,
+                        workspace_id,
+                        overall_mastery,
+                        mastery_delta,
+                    )
+            except Exception as e:
+                logger.error(f"Error updating mastery for workspace {workspace_id}: {e}")
+
         if workspace_id in _memory_workspaces:
-            _memory_workspaces[workspace_id]["document_count"] = max(
-                0, _memory_workspaces[workspace_id].get("document_count", 0) + delta
-            )
+            _memory_workspaces[workspace_id]["overall_mastery"] = overall_mastery
+            _memory_workspaces[workspace_id]["mastery_delta"] = mastery_delta
 
 
 workspace_repo = WorkspaceRepository()

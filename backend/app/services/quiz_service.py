@@ -268,6 +268,17 @@ class QuizService:
             user_id=user_id,
         )
 
+        # 6b. Topic Mastery Engine: Recalculate affected topic and snapshot
+        try:
+            from backend.app.services.topic_mastery_engine import topic_mastery_engine
+            await topic_mastery_engine.recalculate_topic(
+                workspace_id=workspace_id,
+                topic=topic_name,
+                user_id=user_id,
+            )
+        except Exception as e:
+            logger.warning(f"Error updating topic mastery in submit_attempt: {e}")
+
         # 7. Update Session State
         adaptation_round = session.get("adaptation_round", 1)
         initial_diag_done = session.get("initial_diagnostic_completed", False)
@@ -571,13 +582,21 @@ class QuizService:
             for cg in critical_gaps
         ]
         gap_names = [cg.concept_name for cg in critical_gaps]
-
         if gap_names:
             recommendation = f"Focus targeted review on {', '.join(gap_names[:2])} with the AI Tutor to close identified conceptual gaps."
         elif accuracy >= 80:
             recommendation = "Excellent mastery across evaluated concepts! Proceed to advanced validation questions."
         else:
             recommendation = "Good foundational performance. Continue practicing across varied curriculum topics."
+
+        # Recalculate all workspace topics and sync learner profile
+        try:
+            from backend.app.services.topic_mastery_engine import topic_mastery_engine
+            await topic_mastery_engine.recalculate_all_workspace_topics(workspace_id, user_id)
+            from backend.app.services.learner_profile_service import learner_profile_service
+            await learner_profile_service.get_learner_profile(workspace_id, user_id)
+        except Exception as e:
+            logger.warning(f"Error syncing learner profile on quiz completion: {e}")
 
         return QuizSummaryResponse(
             session_id=session_id,
