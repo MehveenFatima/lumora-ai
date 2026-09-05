@@ -22,33 +22,40 @@ router = APIRouter(tags=["Workspaces"])
     status_code=status.HTTP_201_CREATED,
 )
 async def create_workspace(request: WorkspaceCreateRequest) -> WorkspaceResponse:
-    ws_id = request.id or f"ws_{int(uuid.uuid4().hex[:12], 16)}"
-    created = await workspace_repo.create(
-        workspace_id=ws_id,
-        name=request.name,
-        goal=request.goal,
-        level=request.level,
-        target_date=request.target_date,
-        daily_target_minutes=request.daily_target_minutes,
-        description=request.description or "",
-        icon_name=request.icon_name or "FolderKanban",
-    )
-    return WorkspaceResponse(
-        id=created["id"],
-        name=created["name"],
-        goal=created["goal"],
-        level=created["level"],
-        target_date=str(created.get("target_date", "2026-12-31")),
-        daily_target_minutes=created.get("daily_target_minutes", 45),
-        description=created.get("description", ""),
-        overall_mastery=created.get("overall_mastery", 0),
-        mastery_delta=created.get("mastery_delta", 0),
-        status=created.get("status", "active"),
-        icon_name=created.get("icon_name", "FolderKanban"),
-        document_count=created.get("document_count", 0),
-        created_at=created.get("created_at"),
-        updated_at=created.get("updated_at"),
-    )
+    try:
+        ws_id = request.id or f"ws_{int(uuid.uuid4().hex[:12], 16)}"
+        created = await workspace_repo.create(
+            workspace_id=ws_id,
+            name=request.name,
+            goal=request.goal,
+            level=request.level,
+            target_date=request.target_date,
+            daily_target_minutes=request.daily_target_minutes,
+            description=request.description or "",
+            icon_name=request.icon_name or "FolderKanban",
+        )
+        return WorkspaceResponse(
+            id=created["id"],
+            name=created["name"],
+            goal=created["goal"],
+            level=created["level"],
+            target_date=str(created.get("target_date", "2026-12-31")),
+            daily_target_minutes=created.get("daily_target_minutes", 45),
+            description=created.get("description", ""),
+            overall_mastery=created.get("overall_mastery", 0),
+            mastery_delta=created.get("mastery_delta", 0),
+            status=created.get("status", "active"),
+            icon_name=created.get("icon_name", "FolderKanban"),
+            document_count=created.get("document_count", 0),
+            created_at=created.get("created_at"),
+            updated_at=created.get("updated_at"),
+        )
+    except Exception as e:
+        logger.error(f"Failed to create workspace '{request.name}': {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create workspace: {str(e)}",
+        )
 
 
 @router.get("/workspaces", response_model=WorkspaceListResponse)

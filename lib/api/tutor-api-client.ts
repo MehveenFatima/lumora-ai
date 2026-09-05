@@ -79,7 +79,14 @@ export const tutorApiClient = {
 
     if (!response.ok) {
       const err = await response.json().catch(() => ({}))
-      throw new Error(err.detail || `Failed to create workspace on backend (HTTP ${response.status})`)
+      const errorDetail =
+        err.detail ||
+        err.message ||
+        err.error ||
+        (response.status === 500
+          ? 'Backend server error (HTTP 500): please verify FastAPI is active on http://127.0.0.1:8000.'
+          : `Failed to create workspace on backend (HTTP ${response.status})`)
+      throw new Error(errorDetail)
     }
 
     const ws = await response.json()

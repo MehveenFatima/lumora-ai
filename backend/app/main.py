@@ -44,12 +44,14 @@ app.add_middleware(
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled server error on {request.method} {request.url.path}: {exc}", exc_info=True)
+    err_detail = str(exc) if settings.environment == "development" else "Internal server error"
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={
+            "detail": err_detail,
             "success": False,
             "error": "Internal server error",
-            "message": "An unexpected error occurred. Please try again later.",
+            "message": err_detail,
         },
     )
 

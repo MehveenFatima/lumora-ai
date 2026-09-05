@@ -79,12 +79,22 @@ class WorkspaceRepository:
         icon_name: str = "FolderKanban",
     ) -> Dict[str, Any]:
         now = datetime.now(timezone.utc)
+        # Ensure a clean YYYY-MM-DD string for PostgreSQL DATE casting
+        clean_target_date = "2026-12-31"
+        if target_date:
+            try:
+                candidate = str(target_date).strip()[:10]
+                datetime.strptime(candidate, "%Y-%m-%d")
+                clean_target_date = candidate
+            except Exception:
+                clean_target_date = "2026-12-31"
+
         ws_data = {
             "id": workspace_id,
             "name": name,
             "goal": goal,
             "level": level,
-            "target_date": target_date or "2026-12-31",
+            "target_date": clean_target_date,
             "daily_target_minutes": daily_target_minutes,
             "description": description,
             "overall_mastery": 0,
@@ -160,7 +170,12 @@ class WorkspaceRepository:
                 async with pool.acquire() as conn:
                     rows = await conn.fetch("SELECT * FROM workspaces ORDER BY created_at DESC")
                     if rows:
-                        return [dict(r) for r in rows]
+                        db_workspaces = [dict(r) for r in rows]
+                        existing_ids = {w["id"] for w in db_workspaces}
+                        for k, v in _memory_workspaces.items():
+                            if k not in existing_ids:
+                                db_workspaces.append(v)
+                        return db_workspaces
             except Exception as e:
                 logger.error(f"Error listing workspaces: {e}")
         ws_list = list(_memory_workspaces.values())
