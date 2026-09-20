@@ -26,5 +26,6 @@ class HealthResponse(BaseModel):
     database: Optional[Any] = None
     vector: Optional[Any] = None
     gemini: Optional[Any] = None
+    ai: Optional[Any] = None
     storage: Optional[Any] = None
     timestamp: Optional[str] = None

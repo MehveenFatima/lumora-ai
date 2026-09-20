@@ -165,6 +165,87 @@ class QuizService:
             created_at=session["created_at"],
         )
 
+    async def _ensure_valid_question(
+        self,
+        q_record: Dict[str, Any],
+        workspace_id: str,
+        session_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Verifies that an unanswered question satisfies the 15-criteria MCQ production gate.
+
+        If invalid (e.g. malformed options, parser artifacts, table garbage), attempts
+        to generate a valid replacement question grounded in workspace materials and updates
+        the question in DB. If no valid question can be generated, returns None to avoid
+        serving malformed content to the learner.
+        """
+        import json
+        from backend.app.services.question_quality_validator import validate_mcq_production_gate
+
+        raw_opts = q_record.get("options", [])
+        if isinstance(raw_opts, str):
+            try:
+                raw_opts = json.loads(raw_opts)
+            except Exception:
+                raw_opts = []
+        if not isinstance(raw_opts, list):
+            raw_opts = []
+
+        val = validate_mcq_production_gate(
+            question_text=q_record.get("question_text", ""),
+            options=raw_opts,
+            correct_option=q_record.get("correct_option", "A"),
+            concept=q_record.get("concept"),
+            topic=q_record.get("topic"),
+            workspace_id=workspace_id,
+        )
+        if val.is_valid:
+            return q_record
+
+        logger.warning(
+            f"[Quiz Repair] Unanswered question {q_record.get('id')} failed production gate: {val.rejection_reasons}. "
+            f"Generating valid replacement..."
+        )
+
+        try:
+            prev_fps = set(await bkt_repo.list_session_fingerprints(workspace_id, session_id))
+            all_q = await quiz_repo.list_questions_by_session(session_id, workspace_id)
+            prev_texts = [x["question_text"] for x in all_q if str(x["id"]) != str(q_record["id"])]
+
+            replacement = await question_generator_service.generate_question(
+                workspace_id=workspace_id,
+                topic=q_record.get("topic"),
+                concept=None,
+                target_difficulty=q_record.get("difficulty", 2),
+                excluded_question_texts=prev_texts,
+                excluded_fingerprints=prev_fps,
+            )
+            if replacement and replacement.validate():
+                updated = await quiz_repo.update_question(
+                    question_id=str(q_record["id"]),
+                    topic=replacement.topic,
+                    concept=replacement.concept,
+                    difficulty=replacement.difficulty,
+                    question_text=replacement.question_text,
+                    options=replacement.options,
+                    correct_option=replacement.correct_option,
+                    explanation=replacement.explanation,
+                    document_id=replacement.document_id,
+                    page_number=replacement.page_number,
+                    source_excerpt=replacement.source_excerpt,
+                    citation_metadata={"document_name": replacement.document_name, "page_number": replacement.page_number},
+                    generation_metadata={"stage": "repaired", "fingerprint": replacement.fingerprint},
+                    fingerprint=replacement.fingerprint,
+                    question_type=replacement.question_type,
+                    quality_score=replacement.quality_score,
+                )
+                await bkt_repo.record_fingerprint(workspace_id, session_id, str(q_record["id"]), replacement.fingerprint)
+                logger.info(f"[Quiz Repair] Successfully repaired question {q_record.get('id')} with validated question.")
+                return updated
+        except Exception as e:
+            logger.error(f"[Quiz Repair] Could not generate valid replacement for question {q_record.get('id')}: {e}")
+
+        return None
+
     async def get_quiz_session(
         self,
         workspace_id: str,
@@ -181,8 +262,10 @@ class QuizService:
         current_q = None
         for q in questions:
             if str(q["id"]) not in attempted_q_ids:
-                current_q = self._to_public_question(q)
-                break
+                valid_q = await self._ensure_valid_question(q, workspace_id, session_id)
+                if valid_q:
+                    current_q = self._to_public_question(valid_q)
+                    break
 
         return QuizSessionResponse(
             id=str(session["id"]),
@@ -213,6 +296,15 @@ class QuizService:
         q = await quiz_repo.get_question(question_id, workspace_id)
         if not q or str(q.get("quiz_session_id")) != session_id:
             return None
+
+        attempts = await quiz_repo.list_attempts_by_session(session_id, workspace_id)
+        is_attempted = any(str(a["question_id"]) == question_id for a in attempts)
+        if not is_attempted:
+            valid_q = await self._ensure_valid_question(q, workspace_id, session_id)
+            if not valid_q:
+                return None
+            return self._to_public_question(valid_q)
+
         return self._to_public_question(q)
 
     async def submit_attempt(
@@ -338,8 +430,10 @@ class QuizService:
             attempted_ids = {str(a["question_id"]) for a in all_attempts}
             for q in session_questions:
                 if str(q["id"]) not in attempted_ids:
-                    next_public_q = self._to_public_question(q)
-                    break
+                    valid_q = await self._ensure_valid_question(q, workspace_id, session_id)
+                    if valid_q:
+                        next_public_q = self._to_public_question(valid_q)
+                        break
 
         cit = question.get("citation_metadata") or {}
         if isinstance(cit, str):
@@ -401,6 +495,31 @@ class QuizService:
         session = await quiz_repo.get_session(session_id, workspace_id)
         if not session:
             raise ValueError(f"Quiz session '{session_id}' not found in workspace '{workspace_id}'.")
+
+        # 0a. Check max round boundary
+        current_round = session.get("adaptation_round", 1)
+        if current_round >= 5:
+            raise ValueError("Maximum adaptive quiz rounds (5 rounds) reached for this session. Please review your mastery summary.")
+
+        # 0b. Duplicate request guard: check if the session already has unanswered questions
+        all_prev_questions = await quiz_repo.list_questions_by_session(session_id, workspace_id)
+        attempts = await quiz_repo.list_attempts_by_session(session_id, workspace_id)
+        attempted_ids = {str(a["question_id"]) for a in attempts}
+        unanswered = [q for q in all_prev_questions if str(q["id"]) not in attempted_ids]
+
+        if unanswered:
+            valid_first = await self._ensure_valid_question(unanswered[0], workspace_id, session_id)
+            if valid_first:
+                first_q = self._to_public_question(valid_first)
+                return QuizNextBatchResponse(
+                    session_id=session_id,
+                    workspace_id=workspace_id,
+                    adaptation_round=current_round,
+                    current_adaptation_stage=session.get("current_adaptation_stage", "targeted_reinforcement"),
+                    target_concepts=[q.get("concept", "Concept") for q in unanswered],
+                    new_questions_count=len(unanswered),
+                    first_question=first_q,
+                )
 
         # 1. Gather BKT concept evaluations & knowledge gaps
         gaps = await bkt_repo.list_knowledge_gaps(workspace_id, user_id)

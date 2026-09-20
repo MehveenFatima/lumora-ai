@@ -181,7 +181,6 @@ async def test_new_workspace_ingestion_and_all_query_patterns():
     )
     await workspace_repo.increment_doc_count(ws_id, delta=1)
 
-    # Pattern A: Paraphrased Concept Question
     paraphrased_query = 'How do replica nodes maintain synchronized state when network delays occur?'
     chunks_p, is_grounded_p, res_p = await retrieval_service.retrieve_relevant_chunks(
         workspace_id=ws_id,

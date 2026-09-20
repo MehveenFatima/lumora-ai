@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import {
   FolderKanban,
@@ -44,14 +44,25 @@ export default function GlobalDashboardPage() {
   const [toastMessage, setToastMessage] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [backendError, setBackendError] = useState<string | null>(null)
+  const [aiWarning, setAiWarning] = useState<string | null>(null)
 
   const loadDashboard = useCallback(async () => {
     setLoading(true)
     setBackendError(null)
+    setAiWarning(null)
     try {
       const health = await tutorApiClient.getHealth().catch(() => null)
-      if (!health || health.status !== 'healthy') {
-        setBackendError('FastAPI backend service is unreachable or reporting degraded status.')
+      const isBackendHealthy =
+        health &&
+        (health.status === 'ok' || health.status === 'healthy' || health.backend === 'healthy')
+      if (!isBackendHealthy) {
+        setBackendError('FastAPI backend service is unreachable.')
+      } else {
+        if (health?.ai?.status === 'degraded') {
+          setAiWarning(
+            'AI model provider is temporarily in rate-limit cooldown. Grounded workspace knowledge retrieval fallback is active.'
+          )
+        }
       }
       const [ws, acts, notifs] = await Promise.all([
         workspaceService.getWorkspaces(),
@@ -96,6 +107,53 @@ export default function GlobalDashboardPage() {
     workspaces.length > 0
       ? Math.round(workspaces.reduce((acc, w) => acc + w.overallMastery, 0) / workspaces.length)
       : 0
+  const avgMasteryDelta =
+    workspaces.length > 0
+      ? Math.round(workspaces.reduce((acc, w) => acc + (w.masteryDelta || 0), 0) / workspaces.length)
+      : 0
+
+  // Calculate dynamic learning streak from real persisted activities
+  const streakDays = useMemo(() => {
+    if (!activities || activities.length === 0) return 0
+    const validDates = new Set<string>()
+    for (const act of activities) {
+      if (act.timestamp) {
+        const d = new Date(act.timestamp)
+        if (!isNaN(d.getTime())) {
+          const year = d.getFullYear()
+          const month = String(d.getMonth() + 1).padStart(2, '0')
+          const day = String(d.getDate()).padStart(2, '0')
+          validDates.add(`${year}-${month}-${day}`)
+        }
+      }
+    }
+    if (validDates.size === 0) return 0
+
+    const today = new Date()
+    const formatDate = (date: Date) => {
+      const y = date.getFullYear()
+      const m = String(date.getMonth() + 1).padStart(2, '0')
+      const d = String(date.getDate()).padStart(2, '0')
+      return `${y}-${m}-${d}`
+    }
+
+    let checkDate = new Date(today)
+    let todayStr = formatDate(checkDate)
+
+    if (!validDates.has(todayStr)) {
+      checkDate.setDate(checkDate.getDate() - 1)
+      if (!validDates.has(formatDate(checkDate))) {
+        return 0
+      }
+    }
+
+    let streak = 0
+    while (validDates.has(formatDate(checkDate))) {
+      streak++
+      checkDate.setDate(checkDate.getDate() - 1)
+    }
+    return streak
+  }, [activities])
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -182,7 +240,9 @@ export default function GlobalDashboardPage() {
               Welcome back, Mehveen
             </h1>
             <p className="mt-1 text-xs text-muted-foreground">
-              You are currently maintaining a 23-day learning streak. Select a workspace below to enter its grounded AI environment.
+              {streakDays > 0
+                ? `You are currently maintaining a ${streakDays}-day learning streak. Select a workspace below to enter its grounded AI environment.`
+                : 'Select a workspace below to enter its grounded AI environment and begin your adaptive learning journey.'}
             </p>
           </div>
 
@@ -210,7 +270,7 @@ export default function GlobalDashboardPage() {
               <div>
                 <span className="font-semibold">Backend Connection Issue:</span> {backendError}
                 <p className="mt-0.5 text-[11px] text-muted-foreground">
-                  Ensure FastAPI backend is running on <code>127.0.0.1:8000</code> and accessible via <code>/api/v1</code> proxy.
+                  Ensure the FastAPI backend service is running and accessible via the <code>/api/v1</code> proxy.
                 </p>
               </div>
             </div>
@@ -220,6 +280,18 @@ export default function GlobalDashboardPage() {
             >
               Retry Connection
             </button>
+          </div>
+        )}
+
+        {/* AI Cooldown Notice Banner */}
+        {aiWarning && !backendError && (
+          <div className="flex items-center justify-between gap-4 rounded-2xl border border-warning/40 bg-warning/10 p-4 text-xs text-warning">
+            <div className="flex items-center gap-2.5">
+              <Sparkles className="size-5 shrink-0 text-warning" />
+              <div>
+                <span className="font-semibold">AI Gateway Notification:</span> {aiWarning}
+              </div>
+            </div>
           </div>
         )}
 
@@ -248,8 +320,12 @@ export default function GlobalDashboardPage() {
               <span className="text-xs">Learning Streak</span>
               <Flame className="size-4 text-warning" />
             </div>
-            <p className="mt-2 font-display text-2xl font-bold text-foreground">23 Days</p>
-            <p className="mt-1 text-[11px] text-success">Personal best: 31 days</p>
+            <p className="mt-2 font-display text-2xl font-bold text-foreground">
+              {streakDays} {streakDays === 1 ? 'Day' : 'Days'}
+            </p>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              {streakDays > 0 ? `${streakDays} day active streak` : 'Start an activity to begin streak'}
+            </p>
           </div>
 
           <div className="rounded-3xl border border-border bg-card p-5 shadow-soft">
@@ -258,7 +334,13 @@ export default function GlobalDashboardPage() {
               <Target className="size-4 text-primary" />
             </div>
             <p className="mt-2 font-display text-2xl font-bold text-foreground">{avgMastery}%</p>
-            <p className="mt-1 text-[11px] text-success">+14% across all subjects</p>
+            <p className="mt-1 text-[11px] text-success">
+              {avgMasteryDelta > 0
+                ? `+${avgMasteryDelta}% across all subjects`
+                : avgMasteryDelta < 0
+                ? `${avgMasteryDelta}% across all subjects`
+                : 'Baseline mastery established'}
+            </p>
           </div>
         </div>
 

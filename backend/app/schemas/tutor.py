@@ -24,6 +24,9 @@ class RetrievalMetadata(BaseModel):
     grounded: bool
     top_similarity_score: Optional[float] = None
     query_terms: Optional[List[str]] = None
+    model_name: Optional[str] = None
+    is_fallback: Optional[bool] = False
+    pedagogical_mode: Optional[str] = None
 
 
 class TutorRequest(BaseModel):

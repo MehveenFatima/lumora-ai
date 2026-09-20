@@ -2,11 +2,23 @@ import { NextRequest, NextResponse } from 'next/server'
 
 const BACKEND_API_URL = process.env.BACKEND_API_URL || 'http://127.0.0.1:8000'
 
+const HOP_BY_HOP_HEADERS = new Set([
+  'host',
+  'connection',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+  'content-length',
+])
+
 function sanitizeHeaders(headers: Headers): Headers {
   const sanitized = new Headers()
   headers.forEach((val, key) => {
-    // Strip host to allow destination host header
-    if (key.toLowerCase() !== 'host') {
+    if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase())) {
       sanitized.set(key, val)
     }
   })
@@ -29,6 +41,7 @@ async function handleProxy(req: NextRequest, { params }: { params: Promise<{ pat
       method,
       headers,
       redirect: 'manual',
+      signal: AbortSignal.timeout(60000),
     }
 
     // Attach body for modifying methods
@@ -75,9 +88,10 @@ async function handleProxy(req: NextRequest, { params }: { params: Promise<{ pat
 
     return NextResponse.json(
       {
-        error: 'Backend unavailable',
-        detail: `Failed to connect to FastAPI backend at ${BACKEND_API_URL}. Please ensure the backend server is running. (${err?.message || 'Connection refused'})`,
-        upstream_url: targetUrl,
+        error: 'Backend Service Unavailable',
+        code: 'BACKEND_UNAVAILABLE',
+        detail: `Backend proxy was unable to reach the upstream backend service. (${err?.message || 'Connection refused'})`,
+        status: 503,
         timestamp: new Date().toISOString(),
       },
       { status: 503 }

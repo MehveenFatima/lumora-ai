@@ -25,6 +25,7 @@ class ResolvedQuery:
     clarification_message: Optional[str] = None
     is_visual_query: bool = False
     is_table_query: bool = False
+    pedagogical_mode: str = "standard"
 
 
 class QueryUnderstandingService:
@@ -118,17 +119,67 @@ class QueryUnderstandingService:
 
         fillers = [
             r"\b(in this pdf|in this document|from this pdf|from this document|in the file|from the file|in this lecture|from the lecture)\b",
-            r"\b(can you please|could you please|please explain|tell me about|tell me|explain to me|walk me through)\b",
+            r"\b(can you please|could you please|please explain|tell me about|tell me|explain to me|walk me through|give me|show me)\b",
             r"\b(in this workspace|from this workspace)\b",
             r"\b(according to this document|based on this document|based on the notes)\b",
+            r"\b(what are the|what are|what is the|what is|tell me the)\s+(?:important\s+)?(?:exam\s+points?|exam\s+questions?|key\s+takeaways?|key\s+points?)\s+(?:for|about|in|from|on)?\b",
+            r"\b(a\s+)?concrete\s+example\s+(?:of|for)?\b",
+            r"\b(in\s+simple\s+terms|in\s+simpler\s+terms|simply|for\s+beginners?)\b",
         ]
         for f in fillers:
             cleaned = re.sub(f, "", cleaned, flags=re.IGNORECASE)
 
+        # Handle 'why is X important/critical' -> extract subject X
+        why_match = re.search(r"\bwhy\s+(?:is|are)\s+(.+?)\s+(?:important|critical|necessary)\b", cleaned, flags=re.IGNORECASE)
+        if why_match:
+            subj = why_match.group(1).strip()
+            if len(subj) >= 3:
+                cleaned = subj
+
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
         return cleaned if len(cleaned) >= 2 else query.strip()
 
+    def detect_pedagogical_mode(self, query: str, intent: str) -> str:
+        """
+        Classifies the pedagogical intent of the learner's query to dynamically tailor
+        explanation structure, tone, analogies, and concrete examples.
+        """
+        q_low = query.lower()
+        if re.search(r"\b(simpler?(\s+terms)?|in\s+simple\s+terms|explain\s+simply|eli5|beginner|plain\s+english|easy\s+to\s+understand|dumb\s+it\s+down)\b", q_low):
+            return "simplify"
+        if re.search(r"\b(concrete\s+example|give\s+(me\s+)?(a\s+|an\s+)?example|code\s+example|show\s+(an?\s+)?example|real[- ]world\s+example|step[- ]by[- ]step\s+example|walk\s+through\s+an\s+example)\b", q_low):
+            return "example"
+        if re.search(r"\b(why\s+(?:is|are)\s+.*?important|why\s+.*?matters?|why\s+(?:is\s+this|is\s+it|do\s+we\s+need|does\s+this\s+matter|use\s+this)|why\s+important|importance\s+of|what\s+problem\s+does\s+this\s+solve|what\s+happens\s+without)\b", q_low):
+            return "why_importance"
+        if re.search(r"\b(exam\s+points?|important\s+for\s+exam|frequently\s+(tested|asked)|test\s+prep|high[- ]yield|exam\s+prep|likely\s+exam\s+questions?)\b", q_low):
+            return "exam_points"
+        if intent == "COMPARE_CONTRAST" or re.search(r"\b(compare|difference\s+between|contrast|vs\.?|versus)\b", q_low):
+            return "compare"
+        if intent in ("PAGE_REFERENCE", "DIAGRAM_FIGURE_QUERY", "TABLE_QUERY"):
+            return "page_focus"
+        if intent == "PAGE_RANGE_REFERENCE":
+            return "page_range_focus"
+        if intent in ("DOCUMENT_SUMMARY", "DOCUMENT_TOPIC_QUERY") or re.search(r"\b(summar(y|ize)|overview|key\s+takeaways)\b", q_low):
+            return "summary"
+        return "standard"
+
     async def resolve_user_reference(
+        self,
+        workspace_id: str,
+        user_message: str,
+        recent_history: Optional[List[Dict[str, Any]]] = None,
+        current_document_id: Optional[str] = None,
+    ) -> ResolvedQuery:
+        resolved = await self._resolve_user_reference_impl(
+            workspace_id=workspace_id,
+            user_message=user_message,
+            recent_history=recent_history,
+            current_document_id=current_document_id,
+        )
+        resolved.pedagogical_mode = self.detect_pedagogical_mode(user_message, resolved.intent)
+        return resolved
+
+    async def _resolve_user_reference_impl(
         self,
         workspace_id: str,
         user_message: str,
@@ -346,7 +397,7 @@ class QueryUnderstandingService:
         has_ordinal = bool(re.search(r"\b(first|1st|second|2nd|third|3rd|fourth|4th|last)\s*(concept|point|topic|item|algorithm|part|one)?\b", q_no_doc_ref))
         has_continuation = bool(
             re.search(
-                r"\b(simpler terms|in simple terms|elaborate|continue|more details|explain further|break it down|walk me through|just discussed|we discussed|discussed earlier|from earlier|key takeaways|exam points)\b",
+                r"\b(simpler?(\s+terms)?|in\s+simple\s+terms|explain\s+simply|elaborate|continue|more\s+details|explain\s+further|break\s+it\s+down|walk\s+me\s+through|just\s+discussed|we\s+discussed|discussed\s+earlier|from\s+earlier|key\s+takeaways|exam\s+points?|concrete\s+example|give\s+(me\s+)?(a\s+|an\s+)?example|show\s+(me\s+)?(an?\s+)?example|why\s+(is\s+this|is\s+it|do\s+we\s+need)|why\s+important|how\s+is\s+it\s+used)\b",
                 q_no_doc_ref,
             )
         )

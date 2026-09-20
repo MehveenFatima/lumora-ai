@@ -25,7 +25,7 @@ async def get_db_pool():
             _pool = await asyncpg.create_pool(
                 dsn=settings.database_url,
                 min_size=1,
-                max_size=10,
+                max_size=5,
                 timeout=30.0,
             )
             logger.info("Connected to Supabase PostgreSQL database pool.")

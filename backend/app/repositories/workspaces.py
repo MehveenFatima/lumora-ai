@@ -1,6 +1,7 @@
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone, date as dt_date
 from backend.app.db.connection import get_db_pool, check_presentation_mode_database_availability
+from backend.app.core.config import settings
 from backend.app.core.logging import get_logger
 
 logger = get_logger(__name__)

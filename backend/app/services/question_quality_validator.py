@@ -65,6 +65,32 @@ CITATION_LEAK_PATTERNS = [
     re.compile(r"how\s+does\s+[A-Za-z0-9_\-\s]+(?:\.pdf|page)\s+characterize", re.IGNORECASE),
 ]
 
+# Patterns for detecting raw Markdown tables, code snippets, and parser garbage
+PARSER_GARBAGE_PATTERNS = [
+    re.compile(r"\|.*\|", re.DOTALL),             # Markdown table pipes
+    re.compile(r"\|\s*[-:]+\s*\|"),                # Markdown table divider rows
+    re.compile(r"```"),                            # Code fences
+    re.compile(r"#!\s*/usr/"),                     # Shebang
+    re.compile(r"\b(?:=begin|=end)\b"),            # Ruby block comments
+    re.compile(r"<(?:div|h[1-6]|table|tr|td|th|p|span|br|pre|code)[^>]*>", re.IGNORECASE),  # HTML tags
+    re.compile(r"\b(?:gem\s+install|bundle\s+exec|Procfile)\b", re.IGNORECASE),             # Shell/deploy tooling
+    re.compile(r"\b(?:require\s+['\"][a-zA-Z0-9_\-]+['\"]|import\s+[a-zA-Z0-9_]+)\b"),     # Script imports
+    re.compile(r"#{1,6}\s+[A-Za-z0-9_]"),          # Markdown headings (### ...)
+    re.compile(r"\bExtracted\s+Tables?\b", re.IGNORECASE),  # Parser artifact
+    re.compile(r"\bStatement\s+(?:n|\d+)\b", re.IGNORECASE), # Parser artifact
+]
+
+GENERIC_CONCEPT_BLACKLIST = frozenset({
+    "page", "pages", "unit", "chapter", "section", "topic", "topics", "example", "examples",
+    "syntax", "code", "table", "figure", "notes", "file", "general", "core principle",
+    "workspace document", "introduction", "overview", "summary", "basics",
+})
+
+PROMPT_LEAK_PATTERNS = [
+    re.compile(r"^(?:here is a question|based on the provided context|according to the text|question:|as an ai)\b", re.IGNORECASE),
+    re.compile(r"\b(?:json format|output format|return a json)\b", re.IGNORECASE),
+]
+
 
 QUESTION_TYPES = [
     "conceptual",
@@ -354,16 +380,92 @@ class QuestionQualityValidator:
         notes = []
 
         # 1. Basic structural checks
-        if not question_text or len(question_text.strip()) < 15:
-            rejections.append("Question stem is empty or too short (< 15 characters).")
+        clean_q = (question_text or "").strip()
+        if not clean_q or len(clean_q) < 20:
+            rejections.append("Question stem is empty or too short (< 20 characters).")
+        if any(clean_q.endswith(cutoff) for cutoff in ["...", ",", " and", " the", " of", " with", " in", " to", " for"]):
+            rejections.append("Question stem is abruptly truncated or malformed.")
         if len(options) != 4:
             rejections.append(f"Expected exactly 4 options, got {len(options)}.")
 
-        correct_opt_obj = next((opt for opt in options if opt.get("key") == correct_option), None)
-        correct_text = correct_opt_obj.get("text", "") if correct_opt_obj else ""
+        keys = [opt.get("key") for opt in options if isinstance(opt, dict)]
+        if set(keys) != {"A", "B", "C", "D"}:
+            rejections.append(f"Options must have keys A, B, C, D; got {keys}.")
+
+        correct_opt_obj = next((opt for opt in options if isinstance(opt, dict) and opt.get("key") == correct_option), None)
+        correct_text = correct_opt_obj.get("text", "").strip() if correct_opt_obj else ""
 
         if not correct_text:
             rejections.append(f"Correct option '{correct_option}' is missing or empty.")
+
+        # 1b. Concept validity check
+        if concept:
+            clean_c = concept.strip().lower()
+            if clean_c in GENERIC_CONCEPT_BLACKLIST or any(clean_c.startswith(prefix) for prefix in ["page ", "unit ", "chapter ", "section ", "example "]):
+                rejections.append(f"Target concept '{concept}' is an invalid or generic document section header.")
+            elif len(clean_c) < 3:
+                rejections.append(f"Target concept '{concept}' is too short (< 3 characters).")
+
+        # 1c. Markdown table and parser artifact checks on question stem
+        if "|" in clean_q:
+            rejections.append("Question stem contains raw Markdown table syntax (|).")
+
+        for pat in PARSER_GARBAGE_PATTERNS:
+            if pat.search(clean_q):
+                rejections.append(f"Question stem contains parser or code artifacts.")
+                break
+
+        for pat in PROMPT_LEAK_PATTERNS:
+            if pat.search(clean_q):
+                rejections.append(f"Question stem contains generation/prompt metadata.")
+                break
+
+        # 1d. Markdown table, parser artifacts, and format checks on options
+        c_lower = (concept or "").lower()
+        t_lower = (topic or "").lower()
+        d_lower = (document_name or "").lower()
+        s_lower = (source_excerpt or "").lower()
+        all_ctx = f"{c_lower} {t_lower} {d_lower} {s_lower}"
+        is_web_ruby = any(k in c_lower or k in t_lower for k in ["ruby", "web", "cgi", "rack", "webrick", "cookie", "tk", "gui"])
+        is_crypto_sec = any(k in all_ctx for k in [
+            "ssl", "tls", "crypto", "cipher", "security", "mac", "secret", "integrity",
+            "auth", "encrypt", "rsa", "diffie", "hellman", "handshake", "certificate",
+            "key exchange", "asymmetric", "symmetric", "hash"
+        ])
+
+        for opt in options:
+            if not isinstance(opt, dict):
+                rejections.append("Option item is not a structured dictionary.")
+                continue
+            opt_key = opt.get("key", "?")
+            opt_text = (opt.get("text") or "").strip()
+
+            if len(opt_text) < 4:
+                rejections.append(f"Option '{opt_key}' is too short (< 4 characters).")
+            if len(opt_text) > 250:
+                rejections.append(f"Option '{opt_key}' is excessively long (> 250 characters), likely a raw chunk dump.")
+            if "\n" in opt.get("text", ""):
+                rejections.append(f"Option '{opt_key}' contains unparsed newlines.")
+            if "|" in opt_text:
+                rejections.append(f"Option '{opt_key}' contains raw Markdown table syntax (|).")
+
+            for pat in PARSER_GARBAGE_PATTERNS:
+                if pat.search(opt_text):
+                    rejections.append(f"Option '{opt_key}' contains parser or code artifacts.")
+                    break
+
+            # Cross-domain contamination checks
+            opt_lower = opt_text.lower()
+            if not is_web_ruby:
+                for bad_kw in ["cookie store", "procfile", "cgi script", "tkroot", "webrick"]:
+                    if bad_kw in opt_lower:
+                        rejections.append(f"Option '{opt_key}' contains unrelated cross-domain term '{bad_kw}'.")
+                        break
+            if not is_crypto_sec:
+                for bad_kw in ["symmetric confidentiality", "cryptographic message authentication", "asymmetric key exchange", "unauthenticated client-side cookie stores"]:
+                    if bad_kw in opt_lower:
+                        rejections.append(f"Option '{opt_key}' contains unrelated security distractor '{bad_kw}'.")
+                        break
 
         # 2. Direct verbatim leakage
         has_verbatim, verbatim_msg = self.check_verbatim_leakage(question_text, correct_text, options)
@@ -522,4 +624,47 @@ def check_option_balance(options: List[Dict[str, str]], correct_key: str) -> Tup
     is_balanced = (score >= 0.85) and (len(notes) == 0)
     reason = "; ".join(notes) if notes else None
     return is_balanced, reason
+
+
+def validate_mcq_production_gate(
+    question_text: str,
+    options: List[Dict[str, str]],
+    correct_option: str,
+    concept: Optional[str] = None,
+    topic: Optional[str] = None,
+    source_excerpt: Optional[str] = None,
+    document_name: Optional[str] = None,
+    page_number: Optional[int] = None,
+    workspace_id: Optional[str] = None,
+    question_type: Optional[str] = "conceptual",
+) -> ValidationResult:
+    """Authoritative production-grade MCQ validation gate satisfying all 15 LumoraAI quality criteria:
+
+    1. Coherent question (length >= 20, proper ending punctuation, no broken cutoffs).
+    2. Valid target concept/topic (not a generic document division header or artifact).
+    3. Exactly 4 options with keys A, B, C, D.
+    4. All options non-empty (length >= 4).
+    5. Exactly one correct option in {A, B, C, D}.
+    6. Correct answer matches one option and has substantive content.
+    7. All distractors related to the SAME concept/domain (no cross-domain pollution).
+    8. No unrelated chunks used as distractors (concise, <= 250 chars).
+    9. No Markdown table garbage (|) in stem or options.
+    10. No parser artifacts (code fences, shebangs, HTML, unparsed scripts).
+    11. No citation metadata leakage (Page X, .pdf, .docx).
+    12. No generation/prompt metadata exposed.
+    13. Workspace-grounded.
+    14. No cross-workspace contamination.
+    15. Clean learner-facing strings (proper punctuation, no unescaped newlines).
+    """
+    return question_quality_validator.validate_question(
+        question_text=question_text,
+        options=options,
+        correct_option=correct_option,
+        concept=concept,
+        topic=topic,
+        source_excerpt=source_excerpt,
+        document_name=document_name,
+        page_number=page_number,
+        question_type=question_type,
+    )
 

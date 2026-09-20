@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from fastapi import APIRouter
+from backend.app.ai.gateway import ai_gateway
 from backend.app.core.config import settings
 from backend.app.db.connection import get_db_pool
 from backend.app.schemas.common import HealthResponse
@@ -40,6 +41,26 @@ async def health_check() -> HealthResponse:
         "bucket": settings.supabase_storage_bucket,
     }
 
+    ai_report = ai_gateway.get_readiness_report()
+    providers = ai_report.get("providers", {})
+    any_healthy = any(p.get("status") == "healthy" for p in providers.values())
+    any_cooldown = any(p.get("status") == "cooldown" for p in providers.values())
+
+    if any_healthy:
+        ai_status = "healthy"
+    elif any_cooldown:
+        ai_status = "degraded"
+    else:
+        ai_status = "unavailable"
+
+    ai_info = {
+        "status": ai_status,
+        "gateway_status": ai_report.get("gateway_status", "degraded"),
+        "fallback_available": True,
+        "providers": providers,
+        "routing": ai_report.get("routing", {}),
+    }
+
     overall_status = "ok"
     if settings.presentation_mode and not pool:
         overall_status = "error"
@@ -53,6 +74,7 @@ async def health_check() -> HealthResponse:
         database=db_info,
         vector=vector_info,
         gemini=gemini_info,
+        ai=ai_info,
         storage=storage_info,
         timestamp=now_iso,
     )

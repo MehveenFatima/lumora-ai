@@ -20,6 +20,14 @@ def reset_memory_store():
     yield
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def auto_close_db_pool():
+    """Ensures database connection pool is cleanly closed inside the active test loop."""
+    yield
+    from backend.app.db.connection import close_db_pool
+    await close_db_pool()
+
+
 @pytest_asyncio.fixture
 async def async_client() -> AsyncGenerator[AsyncClient, None]:
     transport = ASGITransport(app=app)

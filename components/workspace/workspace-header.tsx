@@ -38,6 +38,7 @@ export function WorkspaceHeader({
   const [notifOpen, setNotifOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const [backendStatus, setBackendStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking')
+  const [aiStatus, setAiStatus] = useState<'healthy' | 'degraded' | 'unavailable' | 'unknown'>('unknown')
   const notifRef = useRef<HTMLDivElement>(null)
 
   const unreadCount = notifications.filter((n) => !n.read).length
@@ -46,8 +47,14 @@ export function WorkspaceHeader({
     setBackendStatus('checking')
     try {
       const h = await tutorApiClient.getHealth()
-      if (h && h.status === 'healthy') {
+      const isBackendHealthy = h && (h.status === 'ok' || h.status === 'healthy' || h.backend === 'healthy')
+      if (isBackendHealthy) {
         setBackendStatus('connected')
+        if (h.ai?.status) {
+          setAiStatus(h.ai.status as any)
+        } else {
+          setAiStatus('healthy')
+        }
       } else {
         setBackendStatus('disconnected')
       }
@@ -128,6 +135,17 @@ export function WorkspaceHeader({
             </button>
           )}
         </div>
+
+        {/* AI Provider Status Pill (visible when backend is connected and AI is in rate-limit cooldown) */}
+        {backendStatus === 'connected' && aiStatus === 'degraded' && (
+          <div
+            className="hidden lg:flex items-center gap-1.5 rounded-xl border border-warning/30 bg-warning/10 px-2.5 py-1 text-[11px] text-warning"
+            title="AI model rate limit cooldown active; grounded knowledge retrieval fallback is operational"
+          >
+            <span className="size-2 rounded-full bg-warning animate-pulse" />
+            <span className="font-medium">AI: Cooldown (Fallback Active)</span>
+          </div>
+        )}
 
         {/* Compact Mastery Pill */}
         <div className="hidden items-center gap-2 rounded-xl border border-border bg-card/60 px-3 py-1.5 md:flex">

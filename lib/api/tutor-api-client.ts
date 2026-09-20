@@ -1,4 +1,4 @@
-import { TutorMessage, TutorCitation, WorkspaceDocument, Workspace } from '@/lib/types/domain'
+import type { TutorMessage, TutorCitation, WorkspaceDocument, Workspace } from '../types/domain'
 
 export interface BackendTutorResponse {
   conversation_id: string
@@ -25,27 +25,100 @@ export interface BackendTutorResponse {
   suggested_follow_ups?: string[]
 }
 
+export interface HealthData {
+  status: string
+  service?: string
+  version?: string
+  backend?: string
+  presentation_mode?: boolean
+  database?: {
+    status?: string
+    type?: string
+    pool_active?: boolean
+    url_configured?: boolean
+    error?: string
+  }
+  vector?: {
+    capability?: string
+    provider?: string
+    dimensions?: number
+  }
+  gemini?: {
+    configured?: boolean
+    model?: string
+    embedding_model?: string
+  }
+  ai?: {
+    status?: 'healthy' | 'degraded' | 'unavailable' | string
+    gateway_status?: string
+    fallback_available?: boolean
+    providers?: Record<
+      string,
+      {
+        configured?: boolean
+        status?: string
+        model?: string
+        consecutive_failures?: number
+        success_count?: number
+        cooldown_remaining_seconds?: number
+        last_error?: string
+      }
+    >
+    routing?: Record<string, { primary?: string; fallback?: string }>
+  }
+  storage?: {
+    status?: string
+    bucket?: string
+  }
+  timestamp?: string
+}
+
+const DEFAULT_SERVER_BACKEND_URL = 'http://127.0.0.1:8000'
+
 function getBaseUrl(): string {
   if (typeof window !== 'undefined') {
-    // In browser: relative path for Next.js proxy rewrite
+    // In browser: strictly relative path, always routed through Next.js proxy
     return ''
   }
   // In server-side Node.js / SSR: absolute URL to FastAPI backend
-  return process.env.BACKEND_API_URL || 'http://127.0.0.1:8000'
+  return process.env.BACKEND_API_URL || DEFAULT_SERVER_BACKEND_URL
 }
 
 async function apiFetch(path: string, options: RequestInit = {}): Promise<Response> {
-  const base = getBaseUrl()
-  const cleanPath = path.startsWith('/') ? path : `/${path}`
-  const url = path.startsWith('http') ? path : `${base}${cleanPath}`
+  const isBrowser = typeof window !== 'undefined'
+  let cleanPath = path
+  if (cleanPath.startsWith('http://') || cleanPath.startsWith('https://')) {
+    try {
+      const parsed = new URL(cleanPath)
+      cleanPath = parsed.pathname + parsed.search
+    } catch {
+      // ignore
+    }
+  }
+  if (!cleanPath.startsWith('/')) {
+    cleanPath = `/${cleanPath}`
+  }
+  // Browser requests MUST ALWAYS be relative to use the Next.js /api/v1 proxy
+  const url = isBrowser ? cleanPath : `${getBaseUrl()}${cleanPath}`
+
+  const fetchOptions: RequestInit = {
+    ...options,
+    signal: options.signal || AbortSignal.timeout(30000),
+  }
 
   try {
-    const res = await fetch(url, options)
+    const res = await fetch(url, fetchOptions)
     return res
   } catch (err: any) {
-    console.error(`apiFetch failed for endpoint ${url}:`, err)
+    console.error(`[API Client] apiFetch failed for endpoint ${cleanPath}:`, err)
+    const isTimeout = err?.name === 'TimeoutError' || err?.message?.includes('timeout') || err?.message?.includes('aborted')
+    if (isTimeout) {
+      const timeoutErr: any = new Error(`Request to '${cleanPath}' timed out after 30 seconds.`)
+      timeoutErr.code = 'TIMEOUT'
+      throw timeoutErr
+    }
     throw new Error(
-      `Unable to reach backend at '${url}'. Please ensure FastAPI is running on http://127.0.0.1:8000. (${err?.message || err})`
+      `Unable to reach backend service via '${cleanPath}'. (${err?.message || err})`
     )
   }
 }
@@ -84,7 +157,7 @@ export const tutorApiClient = {
         err.message ||
         err.error ||
         (response.status === 500
-          ? 'Backend server error (HTTP 500): please verify FastAPI is active on http://127.0.0.1:8000.'
+          ? 'Backend server error (HTTP 500): please verify backend service is operational.'
           : `Failed to create workspace on backend (HTTP ${response.status})`)
       throw new Error(errorDetail)
     }
@@ -203,7 +276,7 @@ export const tutorApiClient = {
 
     const data: BackendTutorResponse = await response.json()
 
-    const mappedCitations: TutorCitation[] = data.citations.map((c) => ({
+    const mappedCitations: TutorCitation[] = (data.citations || []).map((c) => ({
       id: c.id,
       documentId: c.document_id,
       documentName: c.document_name,
@@ -213,14 +286,12 @@ export const tutorApiClient = {
     }))
 
     return {
-      id: data.message.id,
+      id: data.message?.id || 'msg-fallback',
       workspaceId,
       conversationId: data.conversation_id,
       role: 'assistant',
-      content: data.message.content,
-      timestamp:
-        data.message.timestamp ||
-        new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      content: data.message?.content || '',
+      timestamp: data.message?.timestamp || new Date().toISOString(),
       citations: mappedCitations,
       suggestedFollowUps: data.suggested_follow_ups || [
         'Can you walk through a concrete example?',
@@ -228,6 +299,15 @@ export const tutorApiClient = {
         'Quiz me on this concept',
       ],
     }
+  },
+
+  async askTutor(
+    workspaceId: string,
+    message: string,
+    conversationId?: string,
+    currentDocumentId?: string
+  ): Promise<TutorMessage> {
+    return this.sendTutorMessage(workspaceId, message, conversationId, currentDocumentId)
   },
 
   async getTutorHistory(
@@ -359,8 +439,18 @@ export const tutorApiClient = {
 
     if (!response.ok) {
       const err = await response.json().catch(() => ({}))
-      const code = err.detail?.code || (typeof err.detail === 'string' && err.detail.includes('NO_INDEXED_DOCUMENTS') ? 'NO_INDEXED_DOCUMENTS' : null)
-      const message = err.detail?.message || (typeof err.detail === 'string' ? err.detail : `Failed to create quiz session (HTTP ${response.status})`)
+      const code =
+        err.code ||
+        err.detail?.code ||
+        (typeof err.detail === 'string' && err.detail.includes('NO_INDEXED_DOCUMENTS')
+          ? 'NO_INDEXED_DOCUMENTS'
+          : null)
+      const message =
+        err.message ||
+        err.detail?.message ||
+        (typeof err.detail === 'string'
+          ? err.detail
+          : `Failed to create quiz session (HTTP ${response.status})`)
       const errorObj: any = new Error(message)
       if (code) errorObj.code = code
       throw errorObj
@@ -383,8 +473,13 @@ export const tutorApiClient = {
 
     if (!response.ok) {
       const err = await response.json().catch(() => ({}))
-      const code = err.detail?.code || null
-      const message = err.detail?.message || (typeof err.detail === 'string' ? err.detail : `Failed to start next quiz batch (HTTP ${response.status})`)
+      const code = err.code || err.detail?.code || null
+      const message =
+        err.message ||
+        err.detail?.message ||
+        (typeof err.detail === 'string'
+          ? err.detail
+          : `Failed to start next quiz batch (HTTP ${response.status})`)
       const errorObj: any = new Error(message)
       if (code) errorObj.code = code
       throw errorObj
@@ -396,16 +491,20 @@ export const tutorApiClient = {
     const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/quizzes/${quizId}`)
     if (!response.ok) {
       const err = await response.json().catch(() => ({}))
-      throw new Error(err.detail || `Failed to fetch quiz session (HTTP ${response.status})`)
+      throw new Error(err.message || err.detail || `Failed to fetch quiz session (HTTP ${response.status})`)
     }
     return response.json()
+  },
+
+  async getQuizSummary(workspaceId: string, quizId: string): Promise<any> {
+    return this.getQuizSession(workspaceId, quizId)
   },
 
   async getQuizQuestion(workspaceId: string, quizId: string, questionId: string): Promise<any> {
     const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/quizzes/${quizId}/questions/${questionId}`)
     if (!response.ok) {
       const err = await response.json().catch(() => ({}))
-      throw new Error(err.detail || `Failed to fetch quiz question (HTTP ${response.status})`)
+      throw new Error(err.message || err.detail || `Failed to fetch quiz question (HTTP ${response.status})`)
     }
     return response.json()
   },
@@ -427,9 +526,18 @@ export const tutorApiClient = {
 
     if (!response.ok) {
       const err = await response.json().catch(() => ({}))
-      throw new Error(err.detail || `Failed to submit quiz attempt (HTTP ${response.status})`)
+      throw new Error(err.message || err.detail || `Failed to submit quiz attempt (HTTP ${response.status})`)
     }
     return response.json()
+  },
+
+  async submitAttempt(
+    workspaceId: string,
+    quizId: string,
+    questionId: string,
+    data: { selectedOption: string; responseTimeMs: number }
+  ): Promise<any> {
+    return this.submitQuizAttempt(workspaceId, quizId, questionId, data)
   },
 
   async completeQuizSession(workspaceId: string, quizId: string): Promise<any> {
@@ -439,7 +547,7 @@ export const tutorApiClient = {
 
     if (!response.ok) {
       const err = await response.json().catch(() => ({}))
-      throw new Error(err.detail || `Failed to complete quiz (HTTP ${response.status})`)
+      throw new Error(err.message || err.detail || `Failed to complete quiz (HTTP ${response.status})`)
     }
     return response.json()
   },
@@ -541,7 +649,7 @@ export const tutorApiClient = {
     return response.json()
   },
 
-  async getHealth(): Promise<any> {
+  async getHealth(): Promise<HealthData> {
     const response = await apiFetch('/api/v1/health')
     if (!response.ok) {
       throw new Error(`Health check failed (HTTP ${response.status})`)

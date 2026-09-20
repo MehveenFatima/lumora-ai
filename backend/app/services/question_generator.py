@@ -422,7 +422,8 @@ class QuestionGeneratorService:
                             is_dupe = (
                                 fp in excluded_fps
                                 or any(fp == c.fingerprint for c in candidates)
-                                or any(is_paraphrase_duplicate(q_data.question_text, c.question_text) for c in candidates)
+                                or any(q_data.question_text.strip().lower() == c.question_text.strip().lower() for c in candidates)
+                                or any(c.concept.lower() == q_data.concept.lower() and is_paraphrase_duplicate(q_data.question_text, c.question_text) for c in candidates)
                                 or any(is_paraphrase_duplicate(q_data.question_text, eq) for eq in excluded_qs)
                             )
                             if not is_dupe:
@@ -456,7 +457,8 @@ class QuestionGeneratorService:
                 fp = synth_q.fingerprint
                 if fp not in excluded_fps and not any(fp == c.fingerprint for c in candidates):
                     if (
-                        not any(is_paraphrase_duplicate(synth_q.question_text, c.question_text) for c in candidates)
+                        not any(synth_q.question_text.strip().lower() == c.question_text.strip().lower() for c in candidates)
+                        and not any(c.concept.lower() == synth_q.concept.lower() and is_paraphrase_duplicate(synth_q.question_text, c.question_text) for c in candidates)
                         and not any(is_paraphrase_duplicate(synth_q.question_text, eq) for eq in excluded_qs)
                     ):
                         candidates.append(synth_q)
@@ -471,29 +473,49 @@ class QuestionGeneratorService:
         target_difficulty: int,
         excluded_texts: List[str],
     ) -> Optional[GeneratedQuestionData]:
-        """
-        Synthesizes a high-quality, independent assessment question:
+        """Synthesizes a high-quality, independent assessment question:
+
+        - Filters out raw code fences, Markdown tables, shebangs, and HTML.
         - NEVER copies citation metadata (document name, page number) into the stem.
         - NEVER dumps raw source snippets into the stem.
         - NEVER leaks the correct answer into the stem.
-        - Generates diverse question types (conceptual, application, mechanism, trade-off, complexity).
-        - Generates balanced, domain-coherent distractors matching length and tone.
+        - Generates balanced, same-domain distractors.
+        - Validates through the production-grade MCQ gate before returning.
         """
-        text = chunk.get("content") or chunk.get("text") or ""
+        raw_text = chunk.get("content") or chunk.get("text") or ""
         doc_name = chunk.get("document_name", "Workspace Document")
         page_num = chunk.get("page_number", 1)
-        heading = chunk.get("heading") or "Core Principle"
+        heading = (chunk.get("heading") or "").strip()
 
-        # Split into substantial sentences, filtering out lines containing document filename references
+        # 1. Clean raw text: Strip code blocks, Markdown tables, shebangs, HTML
+        clean_lines = []
+        in_code_block = False
+        for line in raw_text.splitlines():
+            line_str = line.strip()
+            if line_str.startswith("```"):
+                in_code_block = not in_code_block
+                continue
+            if in_code_block:
+                continue
+            if "|" in line_str:
+                continue  # Skip Markdown table lines
+            if line_str.startswith("#") or line_str.startswith("=begin") or line_str.startswith("=end"):
+                continue
+            if any(bad in line_str.lower() for bad in ["gem install", "bundle exec", "print \"", "require '", "import ", "<table", "<tr>", "<td>", "extracted table", "statement "]):
+                continue
+            clean_lines.append(line_str)
+
+        text = " ".join(clean_lines)
+
+        # 2. Extract substantial conceptual sentences
         raw_sentences = [
             s.strip() for s in re.split(r"(?<=[.!?])\s+", text)
-            if len(s.strip()) > 30 and not any(ext in s.lower() for ext in [".pdf", ".docx", ".pptx", ".txt"])
+            if len(s.strip()) > 30
+            and not any(ext in s.lower() for ext in [".pdf", ".docx", ".pptx", ".txt"])
+            and not any(bad in s.lower() for bad in ["code:", "syntax:", "handling form", "cgi script", "cookie", "procfile", "extracted table", "statement "])
+            and "|" not in s
+            and not s.strip().startswith("#")
         ]
-        if not raw_sentences:
-            raw_sentences = [
-                s.strip() for s in re.split(r"[\n\r]+", text)
-                if len(s.strip()) > 20 and not any(ext in s.lower() for ext in [".pdf", ".docx", ".pptx", ".txt"])
-            ]
         if not raw_sentences:
             return None
 
@@ -505,64 +527,95 @@ class QuestionGeneratorService:
         clean_sentence = re.sub(r"^(?:Page|Unit|Chapter|Section|Example)\s*\d*\s*[:\-–]?\s*", "", target_sentence, flags=re.IGNORECASE).strip()
         first_line_clean = clean_sentence.split("\n")[0].strip()
 
-        # Extract concept candidate: prioritize explicit heading when substantive
-        if heading and heading.strip() and heading.strip().lower() not in ("core principle", "general", "workspace document", "introduction"):
-            concept = heading.strip()
-        else:
-            # Strip introductory words from first_line_clean before regex matching
+        # 3. Extract and validate concept candidate
+        concept = None
+        if heading and heading.lower() not in ("core principle", "general", "workspace document", "introduction", "overview", "summary"):
+            # Check heading isn't a division title
+            clean_head = re.sub(r"^(?:Page|Unit|Chapter|Section|Example)\s*\d*\s*[:\-–]?\s*", "", heading, flags=re.IGNORECASE).strip()
+            if len(clean_head) >= 3 and clean_head.lower() not in ("unit", "chapter", "section", "page"):
+                concept = clean_head
+
+        if not concept:
             trimmed_line = re.sub(r"^(?:Regarding|In|For|When|With|The|According|During|By|As|From|To)\s+", "", first_line_clean, flags=re.IGNORECASE).strip()
             concept_match = re.search(r"([A-Z][a-z0-9]+(?:[ \t]+[A-Z][a-z0-9]+){1,3})", trimmed_line)
             if not concept_match:
                 concept_match = re.search(r"([A-Z][a-z0-9]+)", trimmed_line)
-            concept = concept_match.group(1).strip() if concept_match else (heading or "Core Principle")
-            concept = re.sub(r"\s+", " ", concept).strip()
-            if concept.lower() in {"page", "unit", "chapter", "section", "topic", "example", "regarding", "in", "the", "with", "this", "from"} and heading:
-                concept = heading
+            if concept_match:
+                c_cand = concept_match.group(1).strip()
+                if c_cand.lower() not in ("page", "unit", "chapter", "section", "topic", "example", "syntax", "code", "table", "figure", "notes", "file", "general", "basics"):
+                    concept = c_cand
 
-        # Determine domain keywords and question type from sentence content
+        if not concept:
+            return None
+
+        # Clean concept
+        concept = re.sub(r"[:\-–|].*$", "", concept).strip()
+        if len(concept) < 3 or concept.lower() in ("unit", "chapter", "section", "page", "example", "syntax", "code"):
+            return None
+
+        # 4. Identify domain for same-domain distractors
+        combined_context = (text + " " + doc_name + " " + heading + " " + concept).lower()
+        if any(k in combined_context for k in ["ruby", "tkroot", "tkbutton", "tklabel", "tkinter", "webrick", "cgi script", "cookie", "gem ", "rake", "irb"]):
+            domain = "ruby_scripting"
+        elif any(k in combined_context for k in ["tls", "handshake", "cipher", "certificate", "cryptograph", "encryption", "message authentication code", "hmac", "mac tag", "integrity", "confidentiality"]) or ("ssl" in combined_context and not any(r in combined_context for r in ["ruby", "script", "cgi", "tk"])):
+            domain = "ssl_crypto"
+        elif any(k in combined_context for k in ["virtual memory", "paging", "page table", "tlb", "thrashing", "deadlock", "process", "kernel", "operating system", "demand paging"]):
+            domain = "os_systems"
+        elif any(k in combined_context for k in ["tree", "graph", "queue", "stack", "sort", "search", "bfs", "dfs", "binary", "heap", "hash", "dsa", "complexity", "o("]):
+            domain = "dsa"
+        elif any(k in combined_context for k in ["consensus", "paxos", "raft", "quorum", "replication", "replica", "causality", "vector clock", "smr", "distributed"]):
+            domain = "dist_sys"
+        elif any(k in combined_context for k in ["microservice", "service mesh", "circuit breaker", "container", "virtualization", "cloud"]):
+            domain = "cloud"
+        else:
+            domain = "general"
+
+        # Determine question type and templates
         s_lower = clean_sentence.lower()
-
-        if any(w in s_lower for w in ["o(", "time", "complexity", "worst-case", "average", "logarithmic", "linear", "quadratic"]):
+        if any(w in s_lower for w in ["o(", "complexity", "worst-case", "average", "logarithmic", "linear", "quadratic"]):
             q_type = "complexity_analysis"
             stem_templates = [
                 f"What computational efficiency or resource trade-off is associated with {concept}?",
                 f"How is the runtime scaling behavior of {concept} formally characterized?",
                 f"Which complexity bound or performance constraint applies to {concept}?",
             ]
-        elif any(w in s_lower for w in ["encrypt", "mac", "secret", "cipher", "integrity", "confidentiality", "auth", "hash", "tls", "ssl"]):
+        elif domain == "ruby_scripting":
+            q_type = "application"
+            stem_templates = [
+                f"What core architectural responsibility is fulfilled by {concept} in application development?",
+                f"How does {concept} coordinate operational logic and component execution?",
+                f"Which programmatic role is fundamentally assigned to {concept}?",
+            ]
+        elif domain == "ssl_crypto":
             q_type = "reasoning"
             stem_templates = [
                 f"Through what primary mechanism does {concept} ensure cryptographic integrity and confidentiality?",
                 f"What security guarantee is formally established by {concept}?",
                 f"How does {concept} prevent unauthorized state modification in protocol communication?",
+                f"In secure communications, what foundational objective is achieved by {concept}?",
+                f"Which cryptographic property or verification rule is strictly enforced by {concept}?",
+                f"How does {concept} mitigate adversarial tampering or unauthorized observation?",
             ]
-        elif any(w in s_lower for w in ["negotiat", "handshake", "establish", "protocol", "step", "phase", "initializ"]):
+        elif domain == "dist_sys":
             q_type = "application"
             stem_templates = [
-                f"During protocol session establishment, what operational task is executed by {concept}?",
-                f"In the sequence of protocol phases, what role does {concept} fulfill?",
-                f"How does {concept} advance the connection state between communicating endpoints?",
+                f"During distributed coordination, what operational role is fulfilled by {concept}?",
+                f"Under network partitions or delays, how does {concept} maintain consistent state?",
+                f"What invariant guarantee is enforced by {concept} across participating nodes?",
             ]
-        elif any(w in s_lower for w in ["queue", "stack", "fifo", "pivot", "partition", "tree", "node", "graph", "traverse"]):
+        elif domain == "os_systems":
+            q_type = "conceptual"
+            stem_templates = [
+                f"What primary memory-management role is fulfilled by {concept} in system architecture?",
+                f"Which architectural invariant or address-translation property is maintained by {concept}?",
+                f"How does {concept} coordinate state between virtual address spaces and physical resources?",
+            ]
+        elif domain == "dsa":
             q_type = "conceptual"
             stem_templates = [
                 f"Which structural invariant or traversal property underpins {concept}?",
                 f"What core data-organization principle is maintained by {concept}?",
                 f"Through what internal mechanism does {concept} manage element relationships?",
-            ]
-        elif any(w in s_lower for w in ["require", "class", "root", "window", "gui", "widget", "tk", "loop", "event"]):
-            q_type = "interpretation"
-            stem_templates = [
-                f"What software architecture objective is fulfilled by the {concept} structure?",
-                f"How does {concept} coordinate container and event lifecycles in the system?",
-                f"What primary capability is enabled by incorporating {concept}?",
-            ]
-        elif any(w in s_lower for w in ["fail", "error", "alert", "fatal", "exception", "abort", "close"]):
-            q_type = "edge_case"
-            stem_templates = [
-                f"How does {concept} handle abnormal boundary events or fatal protocol alerts?",
-                f"Under what failure condition does {concept} trigger defensive state transitions?",
-                f"What corrective or containment behavior is executed by {concept} upon receiving an invalid input?",
             ]
         else:
             q_type = "conceptual"
@@ -570,91 +623,115 @@ class QuestionGeneratorService:
                 f"What primary operational purpose does {concept} serve in the system architecture?",
                 f"Which architectural property or operational invariant is guaranteed by {concept}?",
                 f"Through what mechanism does {concept} accomplish its documented function?",
-                f"In system design, what core responsibility is allocated to {concept}?",
             ]
 
-        # Select stem template deterministically without leaking citation or text snippets
         q_stem = stem_templates[iteration_seed % len(stem_templates)]
 
-        # Synthesize clean, conceptual correct answer (NOT raw verbatim quote)
-        # Extract meaningful predicate from sentence
+        # 5. Synthesize clean correct answer
         clean_ans = clean_sentence
-        # Clean any embedded doc name or page prefixes
         clean_ans = re.sub(r"[A-Za-z0-9_\-\s]+\.(?:pdf|docx|pptx|txt)\s*[:\-–]?\s*", "", clean_ans, flags=re.IGNORECASE).strip()
         clean_ans = re.sub(r"^(?:page|example|unit|chapter|section)\s*\d*\s*[:\-–]?\s*", "", clean_ans, flags=re.IGNORECASE).strip()
-        # If the sentence has code like "require 'tk' root = TkRoot.new", synthesize a conceptual description
-        if "require 'tk'" in clean_ans.lower() or "tkroot" in clean_ans.lower() or "tk.mainloop" in clean_ans.lower():
-            clean_ans = "Constructs the primary graphical application window and initializes the Tk widget hierarchy."
-        elif len(clean_ans) > 140:
-            # Shorten to the core clause
+
+        if len(clean_ans) > 130:
             first_clause = re.split(r"[,;.]", clean_ans)[0].strip()
             if len(first_clause) >= 30:
                 clean_ans = first_clause + "."
             else:
-                clean_ans = clean_ans[:120].rsplit(" ", 1)[0] + "."
+                clean_ans = clean_ans[:115].rsplit(" ", 1)[0] + "."
 
-        # If answer starts with lowercase or fragment, clean capitalization
-        clean_ans = clean_ans[0].upper() + clean_ans[1:] if clean_ans else "Establishes documented system invariant."
-        if not clean_ans.endswith("."):
+        clean_ans = clean_ans[0].upper() + clean_ans[1:] if clean_ans else ""
+        if clean_ans and not clean_ans.endswith("."):
             clean_ans += "."
 
-        # Domain-aware, plausible, balanced distractors matching length and tone
-        if q_type in ["reasoning", "application"]:
+        if len(clean_ans) < 20 or "|" in clean_ans:
+            return None
+
+        # 6. Domain-coherent distractors (NEVER cross-domain, NEVER table garbage)
+        if domain == "ruby_scripting":
             distractor_pools = [
                 [
-                    "Delegates state validation exclusively to unauthenticated client-side cookie stores.",
-                    "Bypasses symmetric confidentiality checks by transmitting session parameters in plaintext.",
-                    "Replaces cryptographic message authentication with randomized round-robin polling.",
+                    "Bypasses runtime execution flow to render output without initializing necessary object state.",
+                    "Directly reinterprets byte-level instructions without dispatching standard event handlers.",
+                    "Dispatches unmanaged asynchronous callbacks without binding to application scope.",
+                ],
+                [
+                    "Forces immediate thread termination when an unbound event handler is invoked.",
+                    "Isolates application state in global memory without hierarchical object scoping.",
+                    "Overwrites default method dispatch tables to prevent polymorphic runtime resolution.",
+                ],
+            ]
+        elif domain == "ssl_crypto":
+            distractor_pools = [
+                [
+                    "Permits unauthenticated client endpoints to bypass message digest calculation during renegotiation.",
+                    "Transmits master session keys in unencrypted format during the initial client hello exchange.",
+                    "Restricts cryptographic verification exclusively to asymmetric public key encryption without message integrity.",
                 ],
                 [
                     "Terminates active sessions unconditionally whenever asymmetric key exchange is initiated.",
                     "Forces all communicating endpoints to revert to unencrypted legacy protocol baselines.",
-                    "Restricts operational execution to single-threaded offline batch processing environments.",
+                    "Disables record-layer sequence numbering, leaving messages vulnerable to replay attacks.",
                 ],
             ]
-        elif q_type == "complexity_analysis":
+        elif domain == "os_systems":
             distractor_pools = [
+                [
+                    "Allocates physical frames statically at compile-time without virtual address translation.",
+                    "Suppresses hardware page-fault interrupts to prevent kernel trap handler invocation.",
+                    "Flushes all resident memory pages to auxiliary disk storage upon every context switch.",
+                ],
+                [
+                    "Prevents page replacement algorithms from identifying referenced frames in memory.",
+                    "Eliminates multi-level page table hierarchies by enforcing contiguous physical allocation.",
+                    "Disables translation lookaside caching, forcing memory references to traverse unmapped addresses.",
+                ],
+            ]
+        elif domain == "dsa":
+            distractor_pools = [
+                [
+                    "Maintains element ordering strictly by appending newly inserted keys to the tail of an unindexed array.",
+                    "Traverses deeper branches unconditionally without maintaining a visited state record.",
+                    "Guarantees logarithmic height solely when input elements are inserted in strictly sorted order.",
+                ],
                 [
                     "Executes in strict constant O(1) time complexity regardless of input dimension or partition depth.",
                     "Requires unbounded exponential O(2^N) auxiliary stack memory during standard execution.",
                     "Degrades to quadratic O(N^2) overhead even when data elements are statically pre-sorted.",
                 ],
-                [
-                    "Guarantees linear O(N) operations by discarding all intermediate state verification steps.",
-                    "Demands continuous re-allocation of external contiguous disk blocks for each iteration.",
-                    "Maintains sub-logarithmic O(log log N) convergence without prerequisite indexing.",
-                ],
             ]
-        elif q_type == "interpretation":
+        elif domain == "dist_sys":
             distractor_pools = [
                 [
-                    "Suppresses graphical event dispatching to enforce non-interactive terminal execution.",
-                    "Bypasses window management by directly manipulating low-level frame buffer memory addresses.",
-                    "Restricts widget instantiation strictly to modal dialog confirmation sequences.",
+                    "Requires unanimous agreement across all participating cluster nodes rather than a majority quorum.",
+                    "Permits follower nodes to commit unverified state changes independently of leader coordination.",
+                    "Relies on synchronized physical wall-clock timestamps rather than monotonic logical causality.",
                 ],
                 [
-                    "Replaces asynchronous event listeners with synchronous blocking sleep intervals.",
-                    "Disables concurrent user input processing across child window container hierarchies.",
-                    "Delegates widget layout positioning exclusively to remote network socket callbacks.",
+                    "Suspends log replication unconditionally whenever a single follower experiences network latency.",
+                    "Elects new cluster leaders without verifying term numbers or log entry completeness.",
+                    "Discards uncommitted state transitions during network partitions without safety validation.",
+                ],
+            ]
+        elif domain == "cloud":
+            distractor_pools = [
+                [
+                    "Routes all inter-service communication through unmonitored point-to-point static socket connections.",
+                    "Bypasses upstream health checks by forwarding requests continuously to timing-out services.",
+                    "Isolates container workloads at the hypervisor level rather than utilizing OS kernel namespaces.",
                 ],
             ]
         else:
             distractor_pools = [
                 [
-                    "Disables defensive boundary checks to prioritize rapid unverified data throughput.",
-                    "Enforces an inverse execution order that invalidates preceding state transitions.",
-                    "Isolates operational parameters by preventing synchronization across shared threads.",
-                ],
-                [
                     "Replaces deterministic algorithmic guarantees with unconstrained heuristic approximations.",
-                    "Restricts functional evaluation strictly to static read-only memory configurations.",
-                    "Executes auxiliary cleanup routines only when fatal boundary exceptions occur.",
+                    "Disables defensive boundary assertions to maximize throughput without input validation.",
+                    "Suppresses exception dispatching to enforce non-terminating background execution.",
                 ],
             ]
 
         chosen_distractors = distractor_pools[(iteration_seed + page_num) % len(distractor_pools)]
 
-        # Balance options: Rotate correct key among A, B, C, D
+        # Rotate correct key among A, B, C, D
         pos_keys = ["A", "B", "C", "D"]
         correct_key = pos_keys[iteration_seed % 4]
 
@@ -670,19 +747,23 @@ class QuestionGeneratorService:
         diff = max(1, min(3, (iteration_seed % 3) + 1 if target_difficulty == 2 else target_difficulty))
 
         q_obj = GeneratedQuestionData(
-            topic=heading,
+            topic=heading or "Core Principle",
             concept=concept,
             difficulty=diff,
             question_type=q_type,
             question_text=q_stem,
             options=options,
             correct_option=correct_key,
-            explanation=f"Based on {heading} ({concept}): {clean_ans}",
+            explanation=f"Based on {heading or 'curriculum'} ({concept}): {clean_ans}",
             document_id=str(chunk.get("document_id")),
             document_name=doc_name,
             page_number=page_num,
             source_excerpt=text[:300],
         )
+
+        # 7. Validate through production gate
+        if not q_obj.validate():
+            return None
 
         return q_obj
 

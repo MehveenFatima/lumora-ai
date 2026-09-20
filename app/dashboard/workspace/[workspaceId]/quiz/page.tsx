@@ -150,6 +150,7 @@ export default function AdaptiveQuizPage() {
   const [adaptationStage, setAdaptationStage] = useState<string>('initial_diagnostic')
   const [targetConcepts, setTargetConcepts] = useState<string[]>([])
   const [isGeneratingNextBatch, setIsGeneratingNextBatch] = useState<boolean>(false)
+  const [batchError, setBatchError] = useState<string | null>(null)
 
   const [selectedOption, setSelectedOption] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false)
@@ -213,10 +214,21 @@ export default function AdaptiveQuizPage() {
       }
     } catch (err: any) {
       console.error('Failed to initialize quiz session:', err)
-      const isNoDocs = err.code === 'NO_INDEXED_DOCUMENTS' || (typeof err.message === 'string' && err.message.toLowerCase().includes('no indexed'))
+      const isNoDocs =
+        err.code === 'NO_INDEXED_DOCUMENTS' ||
+        (typeof err.message === 'string' && err.message.toLowerCase().includes('no indexed'))
+      const isBackendDown =
+        err.code === 'BACKEND_UNAVAILABLE' ||
+        (typeof err.message === 'string' && err.message.includes('BACKEND_UNAVAILABLE'))
+
       if (isNoDocs) {
         setErrorCode('NO_INDEXED_DOCUMENTS')
         setErrorMessage('Upload learning material to generate a grounded adaptive quiz.')
+      } else if (isBackendDown) {
+        setErrorCode('BACKEND_UNAVAILABLE')
+        setErrorMessage(
+          'The backend service is currently unreachable via the API proxy. Please verify the backend is running.'
+        )
       } else {
         setErrorMessage(err.message || 'Unable to create adaptive quiz session. Please verify workspace sources are indexed.')
       }
@@ -315,9 +327,16 @@ export default function AdaptiveQuizPage() {
   const handleStartNextBatch = async () => {
     if (!sessionId || !workspaceId || isGeneratingNextBatch) return
     setIsGeneratingNextBatch(true)
+    setBatchError(null)
 
     try {
       const nextBatch = await tutorApiClient.startNextQuizBatch(workspaceId, sessionId, { batchSize: 5 })
+
+      if (!nextBatch || !nextBatch.first_question) {
+        setBatchError('Unable to generate additional adaptive questions from workspace sources at this time.')
+        return
+      }
+
       setAdaptationRound(nextBatch.adaptation_round || (adaptationRound + 1))
       setAdaptationStage(nextBatch.current_adaptation_stage || 'targeted_reinforcement')
       setTargetConcepts(nextBatch.target_concepts || [])
@@ -328,15 +347,13 @@ export default function AdaptiveQuizPage() {
       setSelectedOption(null)
       setTimerSeconds(0)
 
-      if (nextBatch.first_question) {
-        setCurrentQuestion(nextBatch.first_question)
-        setQuestionOrder(nextBatch.first_question.question_order || (questionOrder + 1))
-        setCurrentDifficulty(nextBatch.first_question.difficulty_level || currentDifficulty)
-        questionStartTimeRef.current = performance.now()
-      }
+      setCurrentQuestion(nextBatch.first_question)
+      setQuestionOrder(nextBatch.first_question.question_order || (questionOrder + 1))
+      setCurrentDifficulty(nextBatch.first_question.difficulty_level || currentDifficulty)
+      questionStartTimeRef.current = performance.now()
     } catch (err: any) {
       console.error('Failed to start next adaptive batch:', err)
-      alert(err.message || 'Failed to start next adaptive batch. Please try again.')
+      setBatchError(err.message || 'Failed to start next adaptive batch. Please verify sources are indexed.')
     } finally {
       setIsGeneratingNextBatch(false)
     }
@@ -595,8 +612,15 @@ export default function AdaptiveQuizPage() {
             </div>
           )}
 
+          {/* Batch Synthesis Error Alert */}
+          {batchError && (
+            <div className="mt-6 rounded-2xl border border-warning/40 bg-warning/10 p-4 text-xs text-warning text-left">
+              <span className="font-semibold">Batch Notice:</span> {batchError}
+            </div>
+          )}
+
           {/* Adaptive Learning Actions */}
-          <div className="mt-8 flex flex-col sm:flex-row gap-3">
+          <div className="mt-6 flex flex-col sm:flex-row gap-3">
             {/* Primary Action: Launch Next Targeted Batch */}
             <button
               onClick={handleStartNextBatch}

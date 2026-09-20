@@ -369,6 +369,79 @@ class QuizRepository:
         _memory_quiz_questions[question_id] = q_data
         return q_data
 
+    async def update_question(
+        self,
+        question_id: str,
+        topic: str,
+        concept: str,
+        difficulty: int,
+        question_text: str,
+        options: List[Dict[str, str]],
+        correct_option: str,
+        explanation: str,
+        document_id: Optional[str] = None,
+        page_number: Optional[int] = None,
+        source_excerpt: Optional[str] = None,
+        citation_metadata: Optional[Dict[str, Any]] = None,
+        generation_metadata: Optional[Dict[str, Any]] = None,
+        fingerprint: Optional[str] = None,
+        question_type: Optional[str] = "conceptual",
+        quality_score: Optional[float] = 1.0,
+    ) -> Optional[Dict[str, Any]]:
+        pool = await get_db_pool()
+        if pool:
+            try:
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        """
+                        UPDATE quiz_questions
+                        SET topic = $2, concept = $3, difficulty = $4, question_text = $5,
+                            options = $6, correct_option = $7, explanation = $8,
+                            document_id = $9, page_number = $10, source_excerpt = $11,
+                            citation_metadata = $12, generation_metadata = $13,
+                            fingerprint = $14, question_type = $15, quality_score = $16
+                        WHERE id = $1
+                        """,
+                        _safe_uuid(question_id),
+                        topic,
+                        concept,
+                        difficulty,
+                        question_text,
+                        json.dumps(options),
+                        correct_option,
+                        explanation,
+                        _safe_uuid(document_id) if document_id else None,
+                        page_number,
+                        source_excerpt,
+                        json.dumps(citation_metadata or {}),
+                        json.dumps(generation_metadata or {}),
+                        fingerprint,
+                        question_type or "conceptual",
+                        float(quality_score) if quality_score is not None else 1.0,
+                    )
+            except Exception as e:
+                logger.error(f"Error updating quiz question in DB: {e}")
+
+        if question_id in _memory_quiz_questions:
+            _memory_quiz_questions[question_id].update({
+                "topic": topic,
+                "concept": concept,
+                "difficulty": difficulty,
+                "question_text": question_text,
+                "options": options,
+                "correct_option": correct_option,
+                "explanation": explanation,
+                "document_id": document_id,
+                "page_number": page_number,
+                "source_excerpt": source_excerpt,
+                "citation_metadata": citation_metadata or {},
+                "generation_metadata": generation_metadata or {},
+                "fingerprint": fingerprint,
+                "question_type": question_type,
+                "quality_score": quality_score,
+            })
+        return await self.get_question(question_id)
+
     async def get_question(
         self,
         question_id: str,
