@@ -449,4 +449,60 @@ export const tutorApiClient = {
     }
     return response.json()
   },
+
+  // 6. FLASHCARDS, STUDY PLAN & ACTIVITY API METHODS
+  async getFlashcards(workspaceId: string): Promise<any> {
+    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/flashcards`)
+    if (!response.ok) return { workspace_id: workspaceId, total_count: 0, flashcards: [] }
+    return response.json()
+  },
+
+  async generateFlashcards(workspaceId: string): Promise<any> {
+    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/flashcards/generate`, {
+      method: 'POST',
+    })
+    if (!response.ok) return { workspace_id: workspaceId, total_count: 0, flashcards: [] }
+    return response.json()
+  },
+
+  async getStudyPlan(workspaceId: string): Promise<any> {
+    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/study-plan`)
+    if (!response.ok) return null
+    return response.json()
+  },
+
+  async toggleStudyTask(workspaceId: string, taskId: string): Promise<any> {
+    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/study-plan/tasks/${taskId}/toggle`, {
+      method: 'POST',
+    })
+    if (!response.ok) return null
+    return response.json()
+  },
+
+  async getActivities(workspaceId?: string): Promise<any> {
+    const url = workspaceId
+      ? `/api/v1/workspaces/${workspaceId}/activity`
+      : `/api/v1/activities`
+    const response = await apiFetch(url)
+    if (!response.ok) return { total_count: 0, activities: [] }
+    return response.json()
+  },
+
+  async addActivity(workspaceId: string, data: { event_type: string; title: string; description: string }): Promise<any> {
+    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/activity`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!response.ok) return null
+    return response.json()
+  },
+
+  async getHealth(): Promise<any> {
+    const response = await apiFetch('/api/v1/health')
+    if (!response.ok) {
+      throw new Error(`Health check failed (HTTP ${response.status})`)
+    }
+    return response.json()
+  },
 }

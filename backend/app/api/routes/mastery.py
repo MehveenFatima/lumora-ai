@@ -3,8 +3,9 @@ LumoraAI - Topic Mastery and Learner Profile API Routes
 Authoritative endpoints for workspace-scoped topic mastery, concept hierarchies,
 and the Learner Knowledge Profile.
 """
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, HTTPException, status, Query
+from pydantic import BaseModel
 
 from backend.app.core.logging import get_logger
 from backend.app.repositories.workspaces import workspace_repo
@@ -229,3 +230,65 @@ async def get_topic_detail(
         concepts=matching_concepts,
         last_assessed_at=topic_record.get("last_assessed_at"),
     )
+
+
+class ConceptSeedItem(BaseModel):
+    concept: str
+    topic: str
+    p_mastery: float
+    is_correct: bool = True
+    attempts: int = 5
+    correct: int = 4
+    gap_priority: Optional[float] = None
+    status: Optional[str] = None
+    action: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class MasterySeedRequest(BaseModel):
+    user_ids: List[str] = ["default_user", "presentation-demo-user"]
+    concepts: List[ConceptSeedItem]
+
+
+@router.post(
+    "/mastery/seed",
+    status_code=status.HTTP_200_OK,
+    summary="Seed Concept Mastery and Knowledge Gaps",
+)
+async def seed_workspace_mastery(
+    workspace_id: str,
+    request: MasterySeedRequest,
+):
+    ws = await workspace_repo.get_by_id(workspace_id)
+    if not ws:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Workspace '{workspace_id}' not found.",
+        )
+    for u_id in request.user_ids:
+        for item in request.concepts:
+            await bkt_repo.upsert_concept_mastery(
+                workspace_id=workspace_id,
+                topic=item.topic,
+                concept=item.concept,
+                p_mastery=item.p_mastery,
+                is_correct=item.is_correct,
+                response_time_ms=1800,
+                user_id=u_id,
+            )
+            if item.gap_priority is not None:
+                await bkt_repo.upsert_knowledge_gap(
+                    workspace_id=workspace_id,
+                    topic=item.topic,
+                    concept=item.concept,
+                    gap_priority=item.gap_priority,
+                    gap_status=item.status or "critical_gap",
+                    contributing_signals={"low_accuracy": True, "bkt_probability": item.p_mastery},
+                    recommended_action=item.action or "targeted_practice",
+                    user_id=u_id,
+                )
+        await topic_mastery_engine.recalculate_all_workspace_topics(workspace_id, user_id=u_id)
+        await learner_profile_service.get_learner_profile(workspace_id, user_id=u_id)
+
+    return {"status": "ok", "workspace_id": workspace_id, "seeded_concepts": len(request.concepts)}
+

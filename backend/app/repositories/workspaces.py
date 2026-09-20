@@ -1,6 +1,6 @@
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
-from backend.app.db.connection import get_db_pool
+from backend.app.db.connection import get_db_pool, check_presentation_mode_database_availability
 from backend.app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -35,32 +35,32 @@ _memory_workspaces: Dict[str, Dict[str, Any]] = {
         "icon_name": "Cpu",
         "document_count": 0,
     },
+    "dbms": {
+        "id": "dbms",
+        "name": "DBMS",
+        "goal": "Database Engineering & SQL Mastery",
+        "level": "intermediate",
+        "target_date": "2026-12-31",
+        "daily_target_minutes": 45,
+        "description": "Relational algebra, SQL JOINs, normalization, ACID transactions, and B-Tree indexing.",
+        "overall_mastery": 68,
+        "mastery_delta": 4,
+        "status": "on_track",
+        "icon_name": "Database",
+        "document_count": 0,
+    },
     "ml": {
         "id": "ml",
-        "name": "Machine Learning & AI",
-        "goal": "Certification Track",
+        "name": "Machine Learning",
+        "goal": "Predictive Modeling & Deep Learning",
         "level": "advanced",
         "target_date": "2026-12-31",
         "daily_target_minutes": 45,
-        "description": "Statistical modeling, deep learning architectures, and transformers.",
+        "description": "Statistical modeling, regression, classification metrics, tree ensembles, and validation.",
         "overall_mastery": 57,
         "mastery_delta": 7,
         "status": "active",
         "icon_name": "BrainCircuit",
-        "document_count": 0,
-    },
-    "aws": {
-        "id": "aws",
-        "name": "AWS Solutions Architect",
-        "goal": "SAA-C03 Certification",
-        "level": "beginner",
-        "target_date": "2026-12-31",
-        "daily_target_minutes": 45,
-        "description": "Cloud architecture, high availability, VPC, and IAM policies.",
-        "overall_mastery": 48,
-        "mastery_delta": 4,
-        "status": "active",
-        "icon_name": "Network",
         "document_count": 0,
     },
 }
@@ -109,6 +109,8 @@ class WorkspaceRepository:
         }
 
         pool = await get_db_pool()
+        check_presentation_mode_database_availability(pool)
+
         if pool:
             try:
                 async with pool.acquire() as conn:
@@ -146,6 +148,8 @@ class WorkspaceRepository:
 
     async def get_by_id(self, workspace_id: str) -> Optional[Dict[str, Any]]:
         pool = await get_db_pool()
+        check_presentation_mode_database_availability(pool)
+
         if pool:
             try:
                 async with pool.acquire() as conn:
@@ -163,8 +167,34 @@ class WorkspaceRepository:
             return {**ws, "document_count": len(docs)}
         return None
 
+    async def get_by_exact_name(self, name: str) -> List[Dict[str, Any]]:
+        """Queries workspaces matching the exact name (case-insensitive, trimmed)."""
+        target_name = name.strip().lower()
+        pool = await get_db_pool()
+        check_presentation_mode_database_availability(pool)
+
+        if pool:
+            try:
+                async with pool.acquire() as conn:
+                    rows = await conn.fetch(
+                        "SELECT * FROM workspaces WHERE LOWER(TRIM(name)) = $1", target_name
+                    )
+                    if rows:
+                        return [dict(r) for r in rows]
+            except Exception as e:
+                logger.error(f"Error querying workspace by name '{name}': {e}")
+
+        # In-memory fallback lookup
+        matches = [
+            ws for ws in _memory_workspaces.values()
+            if ws.get("name", "").strip().lower() == target_name
+        ]
+        return matches
+
     async def list_all(self) -> List[Dict[str, Any]]:
         pool = await get_db_pool()
+        check_presentation_mode_database_availability(pool)
+
         if pool:
             try:
                 async with pool.acquire() as conn:
@@ -188,6 +218,8 @@ class WorkspaceRepository:
 
     async def delete(self, workspace_id: str) -> bool:
         pool = await get_db_pool()
+        check_presentation_mode_database_availability(pool)
+
         if pool:
             try:
                 async with pool.acquire() as conn:

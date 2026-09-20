@@ -40,7 +40,7 @@ async def create_quiz_session(
     except NoIndexedDocumentsError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "NO_INDEXED_DOCUMENTS", "message": str(e)},
+            detail=f"No indexed documents found in workspace '{workspace_id}'. Upload and index a resource before starting an adaptive quiz. ({str(e)})",
         )
     except InsufficientContextError as e:
         raise HTTPException(
@@ -69,7 +69,7 @@ async def get_quiz_history(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ) -> QuizHistoryResponse:
-    return await quiz_service.get_quiz_history(workspace_id, limit=limit, offset=offset)
+    return await quiz_service.get_history(workspace_id, limit=limit, offset=offset)
 
 
 @router.get(

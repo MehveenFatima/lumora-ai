@@ -18,6 +18,7 @@ import { WorkspaceSwitcher } from './workspace-switcher'
 import { ThemeToggle } from '@/components/ui/theme-toggle'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
+import { tutorApiClient } from '@/lib/api/tutor-api-client'
 
 interface WorkspaceHeaderProps {
   workspaces: Workspace[]
@@ -36,9 +37,28 @@ export function WorkspaceHeader({
 }: WorkspaceHeaderProps) {
   const [notifOpen, setNotifOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
+  const [backendStatus, setBackendStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking')
   const notifRef = useRef<HTMLDivElement>(null)
 
   const unreadCount = notifications.filter((n) => !n.read).length
+
+  const checkStatus = async () => {
+    setBackendStatus('checking')
+    try {
+      const h = await tutorApiClient.getHealth()
+      if (h && h.status === 'healthy') {
+        setBackendStatus('connected')
+      } else {
+        setBackendStatus('disconnected')
+      }
+    } catch {
+      setBackendStatus('disconnected')
+    }
+  }
+
+  useEffect(() => {
+    checkStatus()
+  }, [])
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -77,6 +97,37 @@ export function WorkspaceHeader({
           currentWorkspace={currentWorkspace}
           onCreateWorkspaceClick={onCreateWorkspaceClick}
         />
+
+        {/* Presentation Demo Data Badge */}
+        <span className="hidden xl:inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/5 px-2.5 py-0.5 text-[10px] font-medium text-primary">
+          <Sparkles className="size-3" />
+          Presentation Demo Data
+        </span>
+
+        {/* Backend Connection Status Pill */}
+        <div className="hidden sm:flex items-center gap-1.5 rounded-xl border border-border bg-card/60 px-2.5 py-1 text-[11px]">
+          <span
+            className={cn(
+              'size-2 rounded-full',
+              backendStatus === 'connected'
+                ? 'bg-success animate-pulse'
+                : backendStatus === 'checking'
+                ? 'bg-warning animate-pulse'
+                : 'bg-destructive'
+            )}
+          />
+          <span className="text-muted-foreground">
+            {backendStatus === 'connected' ? 'FastAPI Connected' : backendStatus === 'checking' ? 'Connecting...' : 'Backend Offline'}
+          </span>
+          {backendStatus === 'disconnected' && (
+            <button
+              onClick={checkStatus}
+              className="ml-1 text-[10px] font-medium text-destructive underline hover:text-destructive/80"
+            >
+              Retry
+            </button>
+          )}
+        </div>
 
         {/* Compact Mastery Pill */}
         <div className="hidden items-center gap-2 rounded-xl border border-border bg-card/60 px-3 py-1.5 md:flex">

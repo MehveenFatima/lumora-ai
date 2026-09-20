@@ -25,6 +25,7 @@ import {
   FlashcardDeck,
   StudyPlan,
   LearningActivity,
+  ActivityType,
   TutorMessage,
   NotificationItem,
   User,
@@ -399,8 +400,43 @@ export const workspaceService = {
     return this.getAIRecommendation(workspaceId)
   },
 
-  async getRoadmap(workspaceId: string): Promise<Roadmap | null> {
+  async getRoadmap(workspaceId: string): Promise<any> {
     if (!workspaceId) return null
+
+    try {
+      const [topicsRes, profileRes] = await Promise.all([
+        tutorApiClient.getTopicMasteryList(workspaceId).catch(() => null),
+        tutorApiClient.getLearnerProfile(workspaceId).catch(() => null),
+      ])
+
+      if (topicsRes && topicsRes.topics && topicsRes.topics.length > 0) {
+        const steps = topicsRes.topics.map((t: any) => {
+          const mPct = t.mastery_percentage || 50
+          const state = mPct >= 75 ? 'done' : mPct >= 50 ? 'active' : 'todo'
+          const meta = mPct >= 75 ? 'Mastered' : mPct >= 50 ? `${mPct}% Mastery • In Progress` : 'Upcoming Milestone'
+          return {
+            title: t.topic,
+            meta,
+            state: state as 'done' | 'active' | 'todo',
+          }
+        })
+        const recommendations = (profileRes?.recommendations || []).map((r: any) => ({
+          title: `Review ${r.concept}`,
+          reason: `Mastery at ${Math.round(r.mastery_probability * 100)}% with ${r.gap_priority >= 0.7 ? 'high' : 'medium'} priority`,
+          tone: (r.gap_priority >= 0.7 ? 'warning' : 'default') as 'warning' | 'default' | 'success',
+        }))
+        return {
+          id: `roadmap_${workspaceId}`,
+          workspaceId,
+          steps,
+          recommendations,
+          progressPercentage: profileRes?.overall_mastery || 60,
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to fetch dynamic roadmap:', e)
+    }
+
     return roadmapsCache[workspaceId] || null
   },
 
@@ -455,6 +491,39 @@ export const workspaceService = {
 
   async getFlashcardDecks(workspaceId: string): Promise<FlashcardDeck[]> {
     if (!workspaceId) return []
+
+    try {
+      const res = await tutorApiClient.getFlashcards(workspaceId)
+      if (res && res.flashcards && res.flashcards.length > 0) {
+        const cards = res.flashcards.map((c: any) => ({
+          id: c.id,
+          deckId: `deck_${workspaceId}`,
+          question: c.front,
+          answer: c.back,
+          sourceCitation: c.source_document ? `${c.source_document} (p. ${c.source_page || 1})` : undefined,
+          difficulty: 'medium' as const,
+          intervalDays: c.interval_days || 1,
+          repetitions: 1,
+          dueDate: 'Today',
+        }))
+
+        const deck: FlashcardDeck = {
+          id: `deck_${workspaceId}`,
+          workspaceId,
+          title: 'Core Concepts & Definitions',
+          topicName: 'Curriculum Review',
+          totalCards: cards.length,
+          dueTodayCount: cards.length,
+          masteryPercentage: 65,
+          cards: cards,
+        }
+        flashcardDecksCache[workspaceId] = [deck]
+        return [deck]
+      }
+    } catch (err) {
+      console.warn(`Failed to fetch backend flashcards for '${workspaceId}':`, err)
+    }
+
     return flashcardDecksCache[workspaceId] ? [...flashcardDecksCache[workspaceId]] : []
   },
 
@@ -482,6 +551,39 @@ export const workspaceService = {
   // 5. STUDY PLAN & ACTIVITY METHODS
   async getStudyPlan(workspaceId: string): Promise<StudyPlan | null> {
     if (!workspaceId) return null
+
+    try {
+      const res = await tutorApiClient.getStudyPlan(workspaceId)
+      if (res && res.tasks && res.tasks.length > 0) {
+        const mappedPlan: StudyPlan = {
+          workspaceId: res.workspace_id || workspaceId,
+          dailyTargetMinutes: res.daily_target_minutes || 45,
+          todayCompletedMinutes: res.today_completed_minutes || 0,
+          weeklyTargetMinutes: res.weekly_target_minutes || 225,
+          weekCompletedMinutes: res.week_completed_minutes || 0,
+          tasks: res.tasks.map((t: any) => ({
+            id: t.id,
+            workspaceId: res.workspace_id || workspaceId,
+            title: t.title,
+            topicName: t.tag || 'Core Topic',
+            estimatedMinutes: t.estimatedMinutes || 20,
+            priority: (t.priority || 'medium') as 'high' | 'medium' | 'low',
+            type: (t.tag?.toLowerCase().includes('quiz')
+              ? 'quiz'
+              : t.tag?.toLowerCase().includes('flashcard')
+              ? 'flashcard'
+              : 'tutor') as any,
+            completed: Boolean(t.completed),
+            scheduledFor: (t.scheduledFor || 'today') as 'today' | 'this_week' | 'upcoming',
+          })),
+        }
+        studyPlansCache[workspaceId] = mappedPlan
+        return mappedPlan
+      }
+    } catch (err) {
+      console.warn(`Failed to fetch live study plan for '${workspaceId}':`, err)
+    }
+
     return studyPlansCache[workspaceId] || null
   },
 
@@ -504,10 +606,38 @@ export const workspaceService = {
   },
 
   async toggleStudyTask(workspaceId: string, taskId: string): Promise<StudyPlan | null> {
+    try {
+      const res = await tutorApiClient.toggleStudyTask(workspaceId, taskId)
+      if (res && res.tasks) {
+        return this.getStudyPlan(workspaceId)
+      }
+    } catch (err) {
+      console.warn(`Failed to toggle backend study task for '${workspaceId}':`, err)
+    }
     return this.toggleTaskCompletion(workspaceId, taskId)
   },
 
   async getActivities(workspaceId?: string): Promise<LearningActivity[]> {
+    try {
+      const res = await tutorApiClient.getActivities(workspaceId)
+      if (res && res.activities && res.activities.length > 0) {
+        const mapped: LearningActivity[] = res.activities.map((a: any) => ({
+          id: a.id,
+          workspaceId: a.workspace_id,
+          type: (a.event_type || 'tutor_session') as ActivityType,
+          title: a.title,
+          description: a.description,
+          timestamp: a.timestamp ? new Date(a.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recent',
+        }))
+        if (workspaceId) {
+          activitiesCache[workspaceId] = mapped
+        }
+        return mapped
+      }
+    } catch (err) {
+      console.warn('Failed to fetch live activities:', err)
+    }
+
     if (workspaceId && activitiesCache[workspaceId]) {
       return [...activitiesCache[workspaceId]]
     }

@@ -58,9 +58,15 @@ async def create_workspace(request: WorkspaceCreateRequest) -> WorkspaceResponse
         )
 
 
+from typing import List, Optional
+from fastapi import APIRouter, HTTPException, status, Query
+
 @router.get("/workspaces", response_model=WorkspaceListResponse)
-async def list_workspaces() -> WorkspaceListResponse:
-    workspaces = await workspace_repo.list_all()
+async def list_workspaces(name: Optional[str] = Query(default=None)) -> WorkspaceListResponse:
+    if name:
+        workspaces = await workspace_repo.get_by_exact_name(name)
+    else:
+        workspaces = await workspace_repo.list_all()
     responses = []
     for w in workspaces:
         docs = await document_repo.list_by_workspace(w["id"])

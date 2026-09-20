@@ -4,7 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:all": "node scripts/start_dev_all.mjs",
     "backend": "python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --reload",
+    "seed:presentation": "python scripts/seed_presentation_data.py",
     "build": "next build",
     "start": "next start",
     "lint": "eslint ."

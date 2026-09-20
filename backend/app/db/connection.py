@@ -1,5 +1,6 @@
 from typing import Optional, Any, List, Dict
 import asyncio
+from fastapi import HTTPException, status
 from backend.app.core.config import settings
 from backend.app.core.logging import get_logger
 
@@ -26,7 +27,18 @@ async def get_db_pool():
                 f"Could not connect to database pool ({e}). Operating in memory-backed mode."
             )
             _pool = None
+            if settings.presentation_mode:
+                logger.error(f"Presentation backend unavailable: PostgreSQL connection error: {e}")
     return _pool
+
+
+def check_presentation_mode_database_availability(pool):
+    """Enforces strict database availability in presentation mode."""
+    if settings.presentation_mode and not pool:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Presentation backend unavailable: Real PostgreSQL database connection required in PRESENTATION_MODE. Please verify DATABASE_URL in environment.",
+        )
 
 
 async def close_db_pool():

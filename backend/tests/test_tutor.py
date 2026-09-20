@@ -55,13 +55,21 @@ async def test_ask_tutor_with_grounded_citations(async_client: AsyncClient):
 @pytest.mark.asyncio
 async def test_tutor_refusal_when_unsupported_by_sources(async_client: AsyncClient):
     # Query completely unrelated topic in an empty workspace
-    response = await async_client.post(
-        "/api/v1/workspaces/aws/tutor",
-        json={"message": "What is the capital of ancient Mesopotamia in 2000 BCE?"},
+    ws_res = await async_client.post(
+        "/api/v1/workspaces",
+        json={"name": "Empty Refusal Test WS", "goal": "Refusal testing", "level": "beginner"},
     )
+    ws_id = ws_res.json()["id"]
+    try:
+        response = await async_client.post(
+            f"/api/v1/workspaces/{ws_id}/tutor",
+            json={"message": "What is the capital of ancient Mesopotamia in 2000 BCE?"},
+        )
 
-    assert response.status_code == 200
-    data = response.json()
-    assert "not contain enough information" in data["message"]["content"]
+        assert response.status_code == 200
+        data = response.json()
+        assert "not contain enough information" in data["message"]["content"]
+    finally:
+        await async_client.delete(f"/api/v1/workspaces/{ws_id}")
     assert len(data["citations"]) == 0
     assert data["retrieval"]["grounded"] is False

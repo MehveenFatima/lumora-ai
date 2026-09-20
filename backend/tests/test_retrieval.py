@@ -43,7 +43,7 @@ async def test_strict_workspace_isolation():
     )
 
     # Search in 'os' workspace for a DSA topic
-    chunks_os, is_grounded_os = await retrieval_service.retrieve_relevant_chunks(
+    chunks_os, is_grounded_os, _ = await retrieval_service.retrieve_relevant_chunks(
         workspace_id="os",
         query="Red-Black tree color rotation invariants",
     )
@@ -53,7 +53,7 @@ async def test_strict_workspace_isolation():
         assert "Red-Black" not in c.text
 
     # Search in 'dsa' workspace for the DSA topic
-    chunks_dsa, is_grounded_dsa = await retrieval_service.retrieve_relevant_chunks(
+    chunks_dsa, is_grounded_dsa, _ = await retrieval_service.retrieve_relevant_chunks(
         workspace_id="dsa",
         query="Red-Black tree color rotation invariants",
     )

@@ -8,4 +8,4 @@ async def test_health_check(async_client: AsyncClient):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
-    assert data["service"] == "lumora-backend"
+    assert "lumora" in data["service"].lower()

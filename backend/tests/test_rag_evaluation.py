@@ -55,7 +55,7 @@ async def test_rag_evaluation_known_facts(async_client: AsyncClient):
     )
 
     # Test 1: Verify correct relevant chunk is retrieved for known question in 'ml'
-    chunks, is_grounded = await retrieval_service.retrieve_relevant_chunks(
+    chunks, is_grounded, _ = await retrieval_service.retrieve_relevant_chunks(
         workspace_id="ml",
         query="What formula calculates the scaled dot-product self-attention weights?",
     )
@@ -66,7 +66,7 @@ async def test_rag_evaluation_known_facts(async_client: AsyncClient):
     assert chunks[0].page_number == 4
 
     # Test 2: Verify workspace filtering prevents cross-domain retrieval
-    chunks_in_os, is_grounded_in_os = await retrieval_service.retrieve_relevant_chunks(
+    chunks_in_os, is_grounded_in_os, _ = await retrieval_service.retrieve_relevant_chunks(
         workspace_id="os",
         query="What formula calculates the scaled dot-product self-attention weights?",
     )

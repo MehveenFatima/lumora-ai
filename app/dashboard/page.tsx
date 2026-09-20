@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import {
   FolderKanban,
@@ -21,8 +21,10 @@ import {
   Command,
   BookOpen,
   CheckCircle2,
+  AlertTriangle,
 } from 'lucide-react'
 import { workspaceService } from '@/lib/services/workspace-service'
+import { tutorApiClient } from '@/lib/api/tutor-api-client'
 import { Workspace, LearningActivity, NotificationItem } from '@/lib/types/domain'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
@@ -41,27 +43,35 @@ export default function GlobalDashboardPage() {
   const [baselineModalOpen, setBaselineModalOpen] = useState(false)
   const [toastMessage, setToastMessage] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [backendError, setBackendError] = useState<string | null>(null)
+
+  const loadDashboard = useCallback(async () => {
+    setLoading(true)
+    setBackendError(null)
+    try {
+      const health = await tutorApiClient.getHealth().catch(() => null)
+      if (!health || health.status !== 'healthy') {
+        setBackendError('FastAPI backend service is unreachable or reporting degraded status.')
+      }
+      const [ws, acts, notifs] = await Promise.all([
+        workspaceService.getWorkspaces(),
+        workspaceService.getActivities(),
+        workspaceService.getNotifications(),
+      ])
+      setWorkspaces(ws)
+      setActivities(acts)
+      setNotifications(notifs)
+    } catch (err: any) {
+      console.error(err)
+      setBackendError(err.message || 'Failed to connect to backend service')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
-    async function loadDashboard() {
-      setLoading(true)
-      try {
-        const [ws, acts, notifs] = await Promise.all([
-          workspaceService.getWorkspaces(),
-          workspaceService.getActivities(),
-          workspaceService.getNotifications(),
-        ])
-        setWorkspaces(ws)
-        setActivities(acts)
-        setNotifications(notifs)
-      } catch (err) {
-        console.error(err)
-      } finally {
-        setLoading(false)
-      }
-    }
     loadDashboard()
-  }, [])
+  }, [loadDashboard])
 
   const showToast = (msg: string) => {
     setToastMessage(msg)
@@ -191,6 +201,27 @@ export default function GlobalDashboardPage() {
             </button>
           </div>
         </div>
+
+        {/* Backend Connection Warning Banner */}
+        {backendError && (
+          <div className="flex items-center justify-between gap-4 rounded-2xl border border-destructive/40 bg-destructive/10 p-4 text-xs text-destructive">
+            <div className="flex items-center gap-2.5">
+              <AlertTriangle className="size-5 shrink-0" />
+              <div>
+                <span className="font-semibold">Backend Connection Issue:</span> {backendError}
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  Ensure FastAPI backend is running on <code>127.0.0.1:8000</code> and accessible via <code>/api/v1</code> proxy.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => loadDashboard()}
+              className="shrink-0 rounded-xl bg-destructive px-3.5 py-1.5 text-xs font-semibold text-destructive-foreground shadow-sm hover:opacity-90"
+            >
+              Retry Connection
+            </button>
+          </div>
+        )}
 
         {/* Aggregate Stats Cards */}
         <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
