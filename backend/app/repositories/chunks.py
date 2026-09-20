@@ -420,8 +420,18 @@ class ChunkRepository:
                             elif tok in doc_name_lower:
                                 matches += 1
 
-                        if matches > 0:
-                            score = min(1.0, (matches / (len(clean_tokens) * 1.5)) + (0.1 if heading_matches else 0.0))
+                        matched_toks = sum(
+                            1
+                            for tok in clean_tokens
+                            if tok in heading_lower or tok in text_lower or tok in doc_name_lower
+                        )
+                        coverage = matched_toks / len(clean_tokens)
+                        if matched_toks > 0:
+                            score = min(
+                                1.0,
+                                coverage * (matches / (len(clean_tokens) * 1.5))
+                                + (0.08 if heading_matches and coverage >= 0.5 else 0.0),
+                            )
                             scored_rows.append((r, score, meta))
 
                     scored_rows.sort(key=lambda x: x[1], reverse=True)

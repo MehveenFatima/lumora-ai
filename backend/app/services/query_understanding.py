@@ -56,10 +56,10 @@ class QueryUnderstandingService:
 
         concepts: List[str] = []
 
-        # 1. Numbered items in assistant response: "1. SSL Handshake Protocol: ..." or "1. **Ruby Object Model**"
+        # 1. Numbered items in assistant response: "1. SSL Handshake Protocol: ..." or "> 1. SSL Handshake Protocol:"
         if last_assistant_msg:
             numbered = re.findall(
-                r"(?:^|\n)\s*(?:\d+[\.\)]|\([0-9]+\))\s*(?:\*\*)?([^\n\:\-\*]+?)(?:\*\*)?(?:\:|\s*\-|\s*—|\n|$)",
+                r"(?:^|\n)\s*(?:>\s*)?(?:\d+[\.\)]|\([0-9]+\))\s*(?:\*\*)?([^\n\:\-\*]+?)(?:\*\*)?(?:\:|\s*\-|\s*—|\n|$)",
                 last_assistant_msg,
             )
             for c in numbered:
@@ -81,19 +81,27 @@ class QueryUnderstandingService:
                         and not clean_b.lower().startswith("from ")
                         and not clean_b.lower().startswith("source")
                         and not clean_b.lower().startswith("based on")
+                        and not "rate-limited" in clean_b.lower()
+                        and not "temporarily" in clean_b.lower()
+                        and not "generation model" in clean_b.lower()
                     ):
                         concepts.append(clean_b)
 
         # 3. Concepts extracted from the last user message (e.g. "What is a Hash Table?")
-        if last_user_msg:
+        # Only fall back to user message if assistant response did not enumerate specific concepts
+        if last_user_msg and not concepts:
             cleaned_u = re.sub(
-                r"\b(what is|explain|tell me about|how does|can you explain|define|describe|walk me through|a|an|the)\b",
+                r"\b(what is|explain|tell me about|how does|can you explain|define|describe|walk me through|summarize|give me|overview of|a|an|the|this|that|pdf|document)\b",
                 "",
                 last_user_msg,
                 flags=re.IGNORECASE,
             ).strip(" ?.!:,`*")
-            if len(cleaned_u) >= 3 and cleaned_u not in concepts:
-                concepts.insert(0, cleaned_u)
+            if (
+                len(cleaned_u) >= 3
+                and cleaned_u.lower() not in ["summary", "overview", "notes", "file", "all"]
+                and cleaned_u not in concepts
+            ):
+                concepts.append(cleaned_u)
 
         return concepts, last_doc_id, last_doc_name
 
@@ -336,7 +344,12 @@ class QueryUnderstandingService:
         q_no_doc_ref = re.sub(r"\b(this|the)\s+(document|pdf|file|lecture|workspace|notes|material)\b", "", q_lower)
         has_pronoun = bool(re.search(r"\b(its|it's|their|it|this|that|these|those)\b", q_no_doc_ref))
         has_ordinal = bool(re.search(r"\b(first|1st|second|2nd|third|3rd|fourth|4th|last)\s*(concept|point|topic|item|algorithm|part|one)?\b", q_no_doc_ref))
-        has_continuation = bool(re.search(r"\b(simpler terms|in simple terms|elaborate|continue|more details|explain further|break it down|walk me through)\b", q_no_doc_ref))
+        has_continuation = bool(
+            re.search(
+                r"\b(simpler terms|in simple terms|elaborate|continue|more details|explain further|break it down|walk me through|just discussed|we discussed|discussed earlier|from earlier|key takeaways|exam points)\b",
+                q_no_doc_ref,
+            )
+        )
 
         is_followup = bool(recent_history) and (has_pronoun or has_ordinal or has_continuation)
 
@@ -356,8 +369,20 @@ class QueryUnderstandingService:
             # Rewrite query with antecedent substituted
             subbed = re.sub(r"\b(its|it's|their)\b", f"the {resolved_concept}'s", q_raw, flags=re.IGNORECASE)
             subbed = re.sub(r"\b(it|this|that)\b", f"'{resolved_concept}'", subbed, flags=re.IGNORECASE)
-            subbed = re.sub(r"\b(the first concept|the second concept|the last concept)\b", f"'{resolved_concept}'", subbed, flags=re.IGNORECASE)
-            sem_q = self.normalize_semantic_query(subbed, target_doc_name)
+            subbed = re.sub(
+                r"\b(?:the\s+)?(first|1st|second|2nd|third|3rd|last)\s+(concept|point|item|topic|part|algorithm|one)\b",
+                f"'{resolved_concept}'",
+                subbed,
+                flags=re.IGNORECASE,
+            )
+            subbed = re.sub(
+                r"\b(?:from\s+)?(?:what\s+)?(?:we\s+)?(?:just\s+)?discussed(?:\s+earlier)?\b",
+                f"'{resolved_concept}'",
+                subbed,
+                flags=re.IGNORECASE,
+            )
+            norm_subbed = self.normalize_semantic_query(subbed, target_doc_name)
+            sem_q = f"{resolved_concept}: {norm_subbed}" if resolved_concept not in norm_subbed else norm_subbed
 
             return ResolvedQuery(
                 intent="CONTEXTUAL_FOLLOWUP",

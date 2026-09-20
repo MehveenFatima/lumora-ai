@@ -64,7 +64,7 @@ async def ask_tutor(
 )
 async def get_tutor_history(
     workspace_id: str,
-    conversation_id: str,
+    conversation_id: Optional[str] = None,
 ) -> ConversationHistoryResponse:
     workspace = await workspace_repo.get_by_id(workspace_id)
     if not workspace:
@@ -73,9 +73,21 @@ async def get_tutor_history(
             detail=f"Workspace '{workspace_id}' not found.",
         )
 
-    messages = await tutor_repo.get_recent_messages(conversation_id, limit=20)
+    resolved_conv_id = conversation_id
+    if not resolved_conv_id:
+        resolved_conv_id = await tutor_repo.get_latest_conversation_id(workspace_id)
+
+    if not resolved_conv_id:
+        return ConversationHistoryResponse(
+            conversation_id="",
+            workspace_id=workspace_id,
+            messages=[],
+            total_messages=0,
+        )
+
+    messages = await tutor_repo.get_recent_messages(resolved_conv_id, limit=50)
     return ConversationHistoryResponse(
-        conversation_id=conversation_id,
+        conversation_id=resolved_conv_id,
         workspace_id=workspace_id,
         messages=[
             MessagePayload(

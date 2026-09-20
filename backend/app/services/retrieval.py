@@ -169,7 +169,7 @@ class RetrievalService:
             elif vec_score > 0:
                 base_score = vec_score
             else:
-                base_score = 0.80 * lex_score
+                base_score = lex_score
 
             base_score += heading_bonus + section_bonus + page_bonus + visual_bonus
 
@@ -342,6 +342,7 @@ class RetrievalService:
         is_grounded = bool(reranked) and (
             top_score >= effective_threshold
             or resolved.intent in ["PAGE_REFERENCE", "PAGE_RANGE_REFERENCE", "DOCUMENT_SUMMARY"]
+            or (resolved.intent == "CONTEXTUAL_FOLLOWUP" and top_score >= 0.35)
         )
 
         retrieved: List[RetrievedChunk] = []

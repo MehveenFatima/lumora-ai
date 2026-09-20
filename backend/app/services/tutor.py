@@ -14,6 +14,8 @@ from backend.app.schemas.tutor import (
     MessagePayload,
     RetrievalMetadata,
 )
+from backend.app.ai.gateway import ai_gateway
+from backend.app.ai.types import AIRequest, TaskType
 
 logger = get_logger(__name__)
 
@@ -290,7 +292,7 @@ class TutorService:
             workspace_id=workspace_id,
             role="assistant",
             content=answer_text,
-            citations=[c.dict() for c in citations],
+            citations=[c.model_dump() if hasattr(c, "model_dump") else c.dict() for c in citations],
             retrieval_metadata={
                 "chunks_considered": len(chunks),
                 "grounded": is_grounded,
@@ -409,26 +411,30 @@ class TutorService:
             f"Provide a clear, grounded explanation answering the learner's question using the sources above."
         )
 
-        # Call Gemini if available
-        if self._init_gemini():
-            try:
-                import google.generativeai as genai
-                model = genai.GenerativeModel(self.model_name)
-                if has_visual_attached and page_png_bytes:
-                    contents = [prompt, {"mime_type": "image/png", "data": page_png_bytes}]
-                else:
-                    contents = prompt
-                response = model.generate_content(contents)
-                if response and response.text:
-                    answer = response.text.strip()
-                    follow_ups = [
-                        "Can you walk through a concrete example?",
-                        "What are the common edge cases?",
-                        "Quiz me on this concept",
-                    ]
-                    return answer, follow_ups
-            except Exception as e:
-                logger.error(f"Gemini API text generation error: {e}")
+        # Dispatch through AI Gateway (Primary: Gemini 3.8 Flash, Fallback: OpenRouter Qwen 27B)
+        ai_req = AIRequest(
+            prompt=prompt,
+            system_prompt=TUTOR_SYSTEM_PROMPT,
+            images=[page_png_bytes] if (has_visual_attached and page_png_bytes) else None,
+            temperature=0.4,
+            task_type=TaskType.TUTOR,
+        )
+        try:
+            ai_resp = await ai_gateway.generate_text(ai_req)
+            if (
+                ai_resp
+                and ai_resp.content
+                and not ai_resp.content.startswith("⚠️ **AI Model Generation Temporarily Unavailable**")
+            ):
+                answer = ai_resp.content.strip()
+                follow_ups = [
+                    "Can you walk through a concrete example?",
+                    "What are the common edge cases?",
+                    "Quiz me on this concept",
+                ]
+                return answer, follow_ups
+        except Exception as e:
+            logger.error(f"AI Gateway text generation error in Tutor: {e}")
 
         # Strict Rule 1 Enforcement: If generation model is unavailable or rate-limited,
         # do NOT locally synthesize simulated AI text. Return truthful model-unavailable

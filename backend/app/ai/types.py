@@ -107,5 +107,5 @@ class AIResponse(BaseModel):
     latency_ms: float
     is_fallback: bool = False
     attempts_history: List[AttemptRecord] = Field(default_factory=list)
-    token_usage: Optional[Dict[str, int]] = None
+    token_usage: Optional[Dict[str, Any]] = None
     error: Optional[str] = None

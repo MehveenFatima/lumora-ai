@@ -282,6 +282,7 @@ export interface TutorCitation {
 export interface TutorMessage {
   id: string
   workspaceId: string
+  conversationId?: string
   role: 'user' | 'assistant'
   content: string
   timestamp: string

@@ -41,6 +41,7 @@ export default function AiTutorPage() {
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [documents, setDocuments] = useState<WorkspaceDocument[]>([])
   const [messages, setMessages] = useState<TutorMessage[]>([])
+  const [conversationId, setConversationId] = useState<string | null>(null)
   const [input, setInput] = useState('')
   const [isTyping, setIsTyping] = useState(false)
   const [selectedCitation, setSelectedCitation] = useState<TutorCitation | null>(null)
@@ -52,14 +53,19 @@ export default function AiTutorPage() {
     if (!workspaceId) return
 
     async function loadTutorData() {
-      const [ws, docs, msgs] = await Promise.all([
+      const [ws, docs, historyData] = await Promise.all([
         workspaceService.getWorkspaceById(workspaceId),
         workspaceService.getDocuments(workspaceId),
-        workspaceService.getTutorMessages(workspaceId),
+        workspaceService.getTutorHistory(workspaceId),
       ])
       setWorkspace(ws)
       setDocuments(docs)
-      setMessages(msgs)
+      if (historyData && historyData.messages) {
+        setMessages(historyData.messages)
+        if (historyData.conversationId) {
+          setConversationId(historyData.conversationId)
+        }
+      }
     }
     loadTutorData()
   }, [workspaceId])
@@ -79,6 +85,7 @@ export default function AiTutorPage() {
     const tempUserMsg: TutorMessage = {
       id: `temp_u_${Date.now()}`,
       workspaceId,
+      conversationId: conversationId || undefined,
       role: 'user',
       content: text,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -86,7 +93,14 @@ export default function AiTutorPage() {
     setMessages((prev) => [...prev, tempUserMsg])
 
     try {
-      const assistantMsg = await workspaceService.sendTutorMessage(workspaceId, text)
+      const assistantMsg = await workspaceService.sendTutorMessage(
+        workspaceId,
+        text,
+        conversationId || undefined
+      )
+      if (assistantMsg.conversationId && !conversationId) {
+        setConversationId(assistantMsg.conversationId)
+      }
       setMessages((prev) => [...prev.filter((m) => m.id !== tempUserMsg.id), tempUserMsg, assistantMsg])
     } catch (err) {
       console.error('Failed to send tutor message:', err)

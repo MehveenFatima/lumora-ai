@@ -215,6 +215,7 @@ export const tutorApiClient = {
     return {
       id: data.message.id,
       workspaceId,
+      conversationId: data.conversation_id,
       role: 'assistant',
       content: data.message.content,
       timestamp:
@@ -226,6 +227,36 @@ export const tutorApiClient = {
         'What are common edge cases?',
         'Quiz me on this concept',
       ],
+    }
+  },
+
+  async getTutorHistory(
+    workspaceId: string,
+    conversationId?: string
+  ): Promise<{ conversationId: string; messages: TutorMessage[] }> {
+    try {
+      const url = conversationId
+        ? `/api/v1/workspaces/${workspaceId}/tutor/history?conversation_id=${encodeURIComponent(conversationId)}`
+        : `/api/v1/workspaces/${workspaceId}/tutor/history`
+      const response = await apiFetch(url)
+      if (!response.ok) {
+        return { conversationId: '', messages: [] }
+      }
+      const data = await response.json()
+      const convId = data.conversation_id || ''
+      const messages: TutorMessage[] = (data.messages || []).map((m: any) => ({
+        id: m.id,
+        workspaceId,
+        conversationId: convId,
+        role: m.role,
+        content: m.content,
+        timestamp: m.timestamp || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        citations: [],
+        suggestedFollowUps: [],
+      }))
+      return { conversationId: convId, messages }
+    } catch {
+      return { conversationId: '', messages: [] }
     }
   },
 

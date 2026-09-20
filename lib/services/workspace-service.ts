@@ -719,7 +719,34 @@ export const workspaceService = {
   // 6. TUTOR & RAG CHAT (Authoritative Source: FastAPI /api/v1/workspaces/{id}/tutor)
   async getTutorMessages(workspaceId: string): Promise<TutorMessage[]> {
     if (!workspaceId) return []
+
+    if (tutorMessagesCache[workspaceId] && tutorMessagesCache[workspaceId].length > 0) {
+      return [...tutorMessagesCache[workspaceId]]
+    }
+
+    try {
+      const history = await tutorApiClient.getTutorHistory(workspaceId)
+      if (history && history.messages.length > 0) {
+        tutorMessagesCache[workspaceId] = history.messages
+        return [...history.messages]
+      }
+    } catch (err) {
+      console.warn(`Failed to fetch persisted tutor history for workspace '${workspaceId}':`, err)
+    }
+
     return tutorMessagesCache[workspaceId] ? [...tutorMessagesCache[workspaceId]] : []
+  },
+
+  async getTutorHistory(
+    workspaceId: string,
+    conversationId?: string
+  ): Promise<{ conversationId: string; messages: TutorMessage[] }> {
+    if (!workspaceId) return { conversationId: '', messages: [] }
+    const res = await tutorApiClient.getTutorHistory(workspaceId, conversationId)
+    if (res && res.messages.length > 0) {
+      tutorMessagesCache[workspaceId] = res.messages
+    }
+    return res
   },
 
   async sendTutorMessage(
