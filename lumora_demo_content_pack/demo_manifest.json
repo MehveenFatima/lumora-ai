@@ -1,0 +1,95 @@
+{
+  "workspaces": [
+    {
+      "name": "Data Structures & Algorithms",
+      "folder": "01_Data_Structures_Algorithms",
+      "suggested_tutor_questions": [
+        "Why is hash map lookup considered O(1) on average?",
+        "When would BFS be preferred over DFS?",
+        "Compare a binary search tree with a min-heap."
+      ],
+      "demo_quiz_focus": [
+        "Hashing",
+        "BST",
+        "Heaps",
+        "BFS/DFS",
+        "Dijkstra"
+      ]
+    },
+    {
+      "name": "Operating Systems",
+      "folder": "02_Operating_Systems",
+      "suggested_tutor_questions": [
+        "What is the difference between a process and a thread?",
+        "Why can Round Robin increase context-switch overhead?",
+        "What happens during a page fault?"
+      ],
+      "demo_quiz_focus": [
+        "Processes",
+        "Threads",
+        "Scheduling",
+        "Paging",
+        "Page Replacement"
+      ]
+    },
+    {
+      "name": "DBMS",
+      "folder": "03_DBMS",
+      "suggested_tutor_questions": [
+        "What is the difference between a primary key and a foreign key?",
+        "Why is normalization used?",
+        "How do indexes improve query performance?"
+      ],
+      "demo_quiz_focus": [
+        "Keys",
+        "JOINs",
+        "Normalization",
+        "Transactions",
+        "Indexes"
+      ]
+    },
+    {
+      "name": "Machine Learning",
+      "folder": "04_Machine_Learning",
+      "suggested_tutor_questions": [
+        "What is overfitting and how can validation reveal it?",
+        "What is the difference between precision and recall?",
+        "How does gradient boosting differ from random forests?"
+      ],
+      "demo_quiz_focus": [
+        "Regression",
+        "Overfitting",
+        "Classification",
+        "Metrics",
+        "Ensembles"
+      ]
+    }
+  ],
+  "notes": [
+    "These are original demo documents, not claims about a learner's real academic history.",
+    "Seed them into the real backend/database so the UI shows READY documents rather than front-end placeholders.",
+    "Use a clearly marked Presentation Demo learner/workspace if pre-seeding mastery or quiz history."
+  ],
+  "files": {
+    "01_Data_Structures_Algorithms": [
+      "01_Data_Structures_Algorithms/DSA_Arrays_and_Hashing.pdf",
+      "01_Data_Structures_Algorithms/DSA_Trees_BST_and_Heaps.pdf",
+      "01_Data_Structures_Algorithms/DSA_Graph_Traversal_and_Shortest_Path.pdf"
+    ],
+    "02_Operating_Systems": [
+      "02_Operating_Systems/OS_Processes_and_Threads.pdf",
+      "02_Operating_Systems/OS_CPU_Scheduling.pdf",
+      "02_Operating_Systems/OS_Virtual_Memory_and_Paging.pdf"
+    ],
+    "03_DBMS": [
+      "03_DBMS/DBMS_SQL_and_Keys.pdf",
+      "03_DBMS/DBMS_Normalization.pdf",
+      "03_DBMS/DBMS_Transactions_Indexing.pdf"
+    ],
+    "04_Machine_Learning": [
+      "04_Machine_Learning/ML_Regression_Fundamentals.pdf",
+      "04_Machine_Learning/ML_Classification_and_Metrics.pdf",
+      "04_Machine_Learning/ML_Trees_Ensembles_and_Validation.pdf"
+    ]
+  }
+}

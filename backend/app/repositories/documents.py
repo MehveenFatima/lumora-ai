@@ -76,10 +76,12 @@ class DocumentRepository:
             try:
                 async with pool.acquire() as conn:
                     row = await conn.fetchrow(
-                        "SELECT * FROM documents WHERE id = $1", uuid.UUID(document_id)
+                        "SELECT * FROM documents WHERE id = $1", uuid.UUID(str(document_id))
                     )
                     if row:
-                        return dict(row)
+                        d = dict(row)
+                        d["id"] = str(d["id"])
+                        return d
             except Exception as e:
                 logger.error(f"Error fetching document {document_id}: {e}")
         return _memory_documents.get(document_id)
@@ -94,7 +96,12 @@ class DocumentRepository:
                         workspace_id,
                     )
                     if rows:
-                        return [dict(r) for r in rows]
+                        res = []
+                        for r in rows:
+                            d = dict(r)
+                            d["id"] = str(d["id"])
+                            res.append(d)
+                        return res
             except Exception as e:
                 logger.error(f"Error listing documents for workspace {workspace_id}: {e}")
 
@@ -129,7 +136,7 @@ class DocumentRepository:
                             updated_at = $7
                         WHERE id = $1
                         """,
-                        uuid.UUID(document_id),
+                        uuid.UUID(str(document_id)),
                         status,
                         page_count,
                         chunk_count,
@@ -139,6 +146,11 @@ class DocumentRepository:
                     )
             except Exception as e:
                 logger.error(f"Error updating document status {document_id}: {e}")
+
+        if pool:
+            db_doc = await self.get_by_id(str(document_id))
+            if db_doc:
+                return db_doc
 
         if document_id in _memory_documents:
             doc = _memory_documents[document_id]
@@ -160,7 +172,7 @@ class DocumentRepository:
             try:
                 async with pool.acquire() as conn:
                     await conn.execute(
-                        "DELETE FROM documents WHERE id = $1", uuid.UUID(document_id)
+                        "DELETE FROM documents WHERE id = $1", uuid.UUID(str(document_id))
                     )
             except Exception as e:
                 logger.error(f"Error deleting document {document_id}: {e}")

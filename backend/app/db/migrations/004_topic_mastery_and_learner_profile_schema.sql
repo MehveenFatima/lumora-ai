@@ -1,4 +1,4 @@
-﻿-- LumoraAI Phase 3: Topic Mastery Engine & Learner Knowledge Profile Schema
+-- LumoraAI Phase 3: Topic Mastery Engine & Learner Knowledge Profile Schema
 -- Concept-to-Topic Aggregation, Evidence Confidence, Trends & Mastery Snapshots
 
 -- 1. Extend Learner Concept Mastery Table (Phase 2 -> Phase 3)

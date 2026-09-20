@@ -1,5 +1,6 @@
 from typing import List, Dict, Any, Optional
 import uuid
+import json
 from datetime import datetime, timezone
 import numpy as np
 from backend.app.db.connection import get_db_pool
@@ -42,7 +43,7 @@ class ChunkRepository:
                             c["text"],
                             c.get("token_count"),
                             str(c["embedding"]),
-                            c.get("metadata", {}),
+                            json.dumps(c.get("metadata", {})) if isinstance(c.get("metadata"), (dict, list)) else (c.get("metadata") or "{}"),
                             datetime.now(timezone.utc),
                         )
                         for c in chunks_data
@@ -512,7 +513,7 @@ class ChunkRepository:
                 async with pool.acquire() as conn:
                     await conn.execute(
                         "DELETE FROM document_chunks WHERE document_id = $1",
-                        uuid.UUID(document_id) if len(document_id) == 36 else document_id,
+                        uuid.UUID(str(document_id)),
                     )
             except Exception as e:
                 logger.error(f"Error deleting chunks for doc {document_id}: {e}")

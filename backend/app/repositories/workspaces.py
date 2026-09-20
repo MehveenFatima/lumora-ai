@@ -1,5 +1,5 @@
 from typing import Optional, Dict, Any, List
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date as dt_date
 from backend.app.db.connection import get_db_pool, check_presentation_mode_database_availability
 from backend.app.core.logging import get_logger
 
@@ -129,7 +129,7 @@ class WorkspaceRepository:
                         name,
                         goal,
                         level,
-                        ws_data["target_date"],
+                        dt_date.fromisoformat(ws_data["target_date"]) if isinstance(ws_data.get("target_date"), str) and ws_data.get("target_date") else (ws_data.get("target_date") if isinstance(ws_data.get("target_date"), dt_date) else None),
                         daily_target_minutes,
                         description,
                         0,
@@ -158,8 +158,11 @@ class WorkspaceRepository:
                     )
                     if row:
                         return dict(row)
+                    return None
             except Exception as e:
                 logger.error(f"Error getting workspace {workspace_id}: {e}")
+                if settings.presentation_mode:
+                    raise
         ws = _memory_workspaces.get(workspace_id)
         if ws:
             from backend.app.repositories.documents import document_repo
@@ -179,10 +182,11 @@ class WorkspaceRepository:
                     rows = await conn.fetch(
                         "SELECT * FROM workspaces WHERE LOWER(TRIM(name)) = $1", target_name
                     )
-                    if rows:
-                        return [dict(r) for r in rows]
+                    return [dict(r) for r in rows]
             except Exception as e:
                 logger.error(f"Error querying workspace by name '{name}': {e}")
+                if settings.presentation_mode:
+                    raise
 
         # In-memory fallback lookup
         matches = [
@@ -199,15 +203,11 @@ class WorkspaceRepository:
             try:
                 async with pool.acquire() as conn:
                     rows = await conn.fetch("SELECT * FROM workspaces ORDER BY created_at DESC")
-                    if rows:
-                        db_workspaces = [dict(r) for r in rows]
-                        existing_ids = {w["id"] for w in db_workspaces}
-                        for k, v in _memory_workspaces.items():
-                            if k not in existing_ids:
-                                db_workspaces.append(v)
-                        return db_workspaces
+                    return [dict(r) for r in rows]
             except Exception as e:
                 logger.error(f"Error listing workspaces: {e}")
+                if settings.presentation_mode:
+                    raise
         ws_list = list(_memory_workspaces.values())
         from backend.app.repositories.documents import document_repo
         result = []

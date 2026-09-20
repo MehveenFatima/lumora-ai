@@ -12,6 +12,13 @@ _pool = None
 
 async def get_db_pool():
     global _pool
+    if _pool is not None:
+        try:
+            if hasattr(_pool, "_loop") and _pool._loop.is_closed():
+                _pool = None
+        except Exception:
+            _pool = None
+
     if _pool is None and settings.database_url:
         try:
             import asyncpg
