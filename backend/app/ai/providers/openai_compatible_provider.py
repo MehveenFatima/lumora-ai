@@ -35,14 +35,16 @@ class OpenAICompatibleProvider(BaseAIProvider):
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         model_name: Optional[str] = None,
+        provider_name: Optional[str] = None,
         timeout_seconds: float = 30.0,
     ):
         self._api_key = api_key if api_key is not None else settings.effective_secondary_api_key
         self._base_url = (base_url or settings.effective_secondary_base_url).rstrip("/")
         effective_model = model_name or settings.effective_secondary_model
         self.timeout_seconds = timeout_seconds
+        resolved_provider_name = provider_name or settings.secondary_ai_provider_name or "openrouter"
 
-        super().__init__(provider_name="openai_compatible", model_name=effective_model)
+        super().__init__(provider_name=resolved_provider_name, model_name=effective_model)
 
         if self._api_key:
             self.register_secret(self._api_key)
@@ -53,7 +55,7 @@ class OpenAICompatibleProvider(BaseAIProvider):
     def _ensure_configured(self) -> None:
         if not self.is_configured():
             raise ProviderConfigurationError(
-                "Secondary OpenAI-compatible provider is not configured (missing SECONDARY_AI_API_KEY or OPENAI_API_KEY).",
+                f"Secondary provider '{self.provider_name}' is not configured (missing OPENROUTER_API_KEY or SECONDARY_AI_API_KEY).",
                 provider=self.provider_name,
             )
 
@@ -61,6 +63,8 @@ class OpenAICompatibleProvider(BaseAIProvider):
         return {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
+            "HTTP-Referer": "https://lumora.ai",
+            "X-Title": "LumoraAI",
         }
 
     def _get_endpoint_url(self) -> str:

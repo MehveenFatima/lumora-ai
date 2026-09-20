@@ -41,15 +41,20 @@ class AIGateway:
         self.providers: Dict[str, BaseAIProvider] = {}
 
         # Default registered providers
+        sec_provider = secondary_provider or OpenAICompatibleProvider()
+        sec_key = sec_provider.provider_name or "openai_compatible"
+
         self.register_provider("gemini", gemini_provider or GeminiProvider())
-        self.register_provider("openai_compatible", secondary_provider or OpenAICompatibleProvider())
+        self.register_provider(sec_key, sec_provider)
+        if sec_key != "openai_compatible":
+            self.register_provider("openai_compatible", sec_provider)
 
         # Routing Table (Primary -> Fallback)
         self._routing_table: Dict[TaskType, Tuple[str, str]] = {
-            TaskType.TUTOR: ("gemini", "openai_compatible"),
-            TaskType.QUIZ: ("openai_compatible", "gemini"),
-            TaskType.FLASHCARDS: ("openai_compatible", "gemini"),
-            TaskType.GENERAL: ("gemini", "openai_compatible"),
+            TaskType.TUTOR: ("gemini", sec_key),
+            TaskType.QUIZ: (sec_key, "gemini"),
+            TaskType.FLASHCARDS: (sec_key, "gemini"),
+            TaskType.GENERAL: ("gemini", sec_key),
         }
 
     def register_provider(self, name: str, provider: BaseAIProvider) -> None:

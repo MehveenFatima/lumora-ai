@@ -33,12 +33,25 @@ class GeminiProvider(BaseAIProvider):
         model_name: Optional[str] = None,
     ):
         self._api_key = api_key if api_key is not None else settings.gemini_api_key
-        effective_model = model_name or settings.gemini_model
+        raw_model = model_name or settings.gemini_model or "gemini-3.8-flash"
+        effective_model = self._resolve_model_name(raw_model)
         super().__init__(provider_name="gemini", model_name=effective_model)
 
         if self._api_key:
             self.register_secret(self._api_key)
         self._configured = False
+
+    @staticmethod
+    def _resolve_model_name(raw_model: str) -> str:
+        """
+        Normalizes model identifier to gemini-3.8-flash standard format.
+        Automatically migrates legacy or deprecated preview names.
+        """
+        if any(legacy in raw_model for legacy in ["gemini-3.6", "gemini-2.5", "gemini-1.5"]):
+            return "gemini-3.8-flash"
+        if raw_model.startswith("models/"):
+            return raw_model.replace("models/", "")
+        return raw_model
 
     def is_configured(self) -> bool:
         return bool(self._api_key and len(self._api_key.strip()) >= 10)
@@ -93,21 +106,27 @@ class GeminiProvider(BaseAIProvider):
 
         try:
             import google.generativeai as genai
-            model = genai.GenerativeModel(self.model_name)
 
-            prompt_parts = []
-            if request.system_prompt:
-                prompt_parts.append(f"[SYSTEM INSTRUCTIONS]:\n{request.system_prompt}\n\n")
-            prompt_parts.append(request.prompt)
+            # Build generation config with validated Gemini 3.8 parameters
+            gen_config: Dict[str, Any] = {}
+            if request.temperature is not None:
+                gen_config["temperature"] = float(request.temperature)
+            if request.max_tokens is not None:
+                gen_config["max_output_tokens"] = int(request.max_tokens)
 
-            full_prompt = "".join(prompt_parts)
-            contents: Any = full_prompt
+            model = genai.GenerativeModel(
+                model_name=self.model_name,
+                system_instruction=request.system_prompt if request.system_prompt else None,
+                generation_config=gen_config or None,
+            )
 
-            # Support vision/image input if passed
+            # Multimodal support: image bytes + text prompt
             if request.images and len(request.images) > 0:
-                contents = [full_prompt]
+                contents: List[Any] = [request.prompt]
                 for img_bytes in request.images:
                     contents.append({"mime_type": "image/png", "data": img_bytes})
+            else:
+                contents = request.prompt
 
             response = model.generate_content(contents)
 
@@ -136,20 +155,33 @@ class GeminiProvider(BaseAIProvider):
 
         try:
             import google.generativeai as genai
+
+            gen_config: Dict[str, Any] = {
+                "response_mime_type": "application/json"
+            }
+            if request.temperature is not None:
+                gen_config["temperature"] = float(request.temperature)
+            if request.max_tokens is not None:
+                gen_config["max_output_tokens"] = int(request.max_tokens)
+
             model = genai.GenerativeModel(
-                self.model_name,
-                generation_config={"response_mime_type": "application/json"}
+                model_name=self.model_name,
+                system_instruction=request.system_prompt if request.system_prompt else None,
+                generation_config=gen_config,
             )
 
-            prompt_parts = []
-            if request.system_prompt:
-                prompt_parts.append(f"[SYSTEM INSTRUCTIONS]:\n{request.system_prompt}\n\n")
-            prompt_parts.append(request.prompt)
+            prompt = request.prompt
             if request.schema_definition:
-                prompt_parts.append(f"\n\nOutput MUST strictly conform to this JSON schema:\n{json.dumps(request.schema_definition)}")
+                prompt += f"\n\nOutput MUST strictly conform to this JSON schema:\n{json.dumps(request.schema_definition)}"
 
-            full_prompt = "".join(prompt_parts)
-            response = model.generate_content(full_prompt)
+            if request.images and len(request.images) > 0:
+                contents: List[Any] = [prompt]
+                for img_bytes in request.images:
+                    contents.append({"mime_type": "image/png", "data": img_bytes})
+            else:
+                contents = prompt
+
+            response = model.generate_content(contents)
 
             if not response or not hasattr(response, "text") or not response.text:
                 raise ProviderUnavailableError("Gemini returned empty structured response.", provider=self.provider_name)
