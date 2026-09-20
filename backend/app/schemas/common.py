@@ -21,3 +21,10 @@ class HealthResponse(BaseModel):
     status: str = "ok"
     service: str = "lumora-backend"
     version: str = "0.1.0"
+    backend: str = "healthy"
+    presentation_mode: bool = False
+    database: Optional[Any] = None
+    vector: Optional[Any] = None
+    gemini: Optional[Any] = None
+    storage: Optional[Any] = None
+    timestamp: Optional[str] = None
