@@ -30,3 +30,6 @@ next-env.d.ts
 __pycache__/
 *.py[cod]
 .pytest_cache/
+
+# presentation demo scratch artifacts
+temp_demo_docs/
