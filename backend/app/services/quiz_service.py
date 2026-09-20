@@ -64,12 +64,52 @@ class QuizService:
         )
         session_id = session["id"]
 
-        # 4. Generate Initial Diagnostic Pool (Distinct Concepts, No Duplicates)
+        # Check existing learner model (BKT mastery + knowledge gaps)
+        existing_gaps = await bkt_repo.list_knowledge_gaps(workspace_id, user_id)
+        existing_mastery = await bkt_repo.list_concept_mastery(workspace_id, user_id)
+        workspace_fps = set(await bkt_repo.list_workspace_fingerprints(workspace_id))
+
+        if existing_gaps or existing_mastery:
+            concept_evals = []
+            for g in existing_gaps:
+                concept_evals.append({
+                    "concept": g["concept"],
+                    "topic": g["topic"],
+                    "gap_priority": g["gap_priority"],
+                    "status": g["gap_status"],
+                    "p_mastery": next((m["p_mastery"] for m in existing_mastery if m["concept"] == g["concept"]), bkt_service.p_l0),
+                })
+            gap_concept_names = {g["concept"] for g in existing_gaps}
+            for m in existing_mastery:
+                if m["concept"] not in gap_concept_names:
+                    concept_evals.append({
+                        "concept": m["concept"],
+                        "topic": m.get("topic", "General"),
+                        "gap_priority": round(1.0 - m.get("p_mastery", bkt_service.p_l0), 4),
+                        "status": m.get("mastery_status", "developing"),
+                        "p_mastery": m.get("p_mastery", bkt_service.p_l0),
+                    })
+
+            targets = adaptive_question_selector.select_batch_targets(
+                concept_evaluations=concept_evals,
+                available_concepts=available_concepts,
+                batch_size=target_question_count,
+            )
+            target_concept_dicts = [{"concept": t.target_concept, "topic": t.target_topic} for t in targets]
+            preferred_diff = targets[0].difficulty if targets else initial_difficulty
+            stage = "targeted_reinforcement"
+        else:
+            target_concept_dicts = available_concepts
+            preferred_diff = initial_difficulty
+            stage = "diagnostic"
+
+        # 4. Generate Initial Pool (Adapting to existing learner state if present)
         candidates = await question_generator_service.generate_candidate_pool(
             workspace_id=workspace_id,
             target_count=target_question_count,
-            target_concepts=available_concepts,
-            preferred_difficulty=initial_difficulty,
+            target_concepts=target_concept_dicts,
+            excluded_fingerprints=workspace_fps,
+            preferred_difficulty=preferred_diff,
         )
 
         if not candidates:
@@ -234,39 +274,31 @@ class QuizService:
         current_p_k = mastery_record.get("p_mastery", bkt_service.p_l0) if mastery_record else bkt_service.p_l0
         new_p_k = bkt_service.update_mastery(current_p_k, is_correct)
 
-        await bkt_repo.upsert_concept_mastery(
-            workspace_id=workspace_id,
-            topic=topic_name,
-            concept=concept_name,
-            p_mastery=new_p_k,
-            is_correct=is_correct,
-            response_time_ms=response_time_ms,
-            user_id=user_id,
-        )
-
-        # 6. Multi-Signal Knowledge Gap Update
-        workspace_attempts = await quiz_repo.list_attempts_by_workspace(workspace_id, user_id)
-        concept_q_ids = {
-            str(q["id"]) for q in (await quiz_repo.list_questions_by_session(session_id, workspace_id))
-            if q.get("concept") == concept_name
-        }
-        concept_attempts = [a for a in workspace_attempts if str(a["question_id"]) in concept_q_ids]
+        # 6. Multi-Signal Knowledge Gap Evaluation
+        # Pull all historical attempts on this concept across the workspace for full sequential accuracy
+        concept_attempts = await quiz_repo.list_attempts_by_concept(workspace_id, concept_name, user_id)
+        if not concept_attempts:
+            concept_attempts = [attempt]
 
         gap_info = knowledge_gap_engine.evaluate_concept_performance(
             concept=concept_name,
             topic=topic_name,
             p_mastery=new_p_k,
-            attempts=concept_attempts or [attempt],
+            attempts=concept_attempts,
         )
 
-        await bkt_repo.upsert_knowledge_gap(
+        # Atomic Transaction: update concept mastery and knowledge gap together
+        await bkt_repo.upsert_concept_and_gap(
             workspace_id=workspace_id,
             topic=topic_name,
             concept=concept_name,
+            p_mastery=new_p_k,
+            is_correct=is_correct,
             gap_priority=gap_info["gap_priority"],
             gap_status=gap_info["status"],
             contributing_signals=gap_info["signals"],
             recommended_action=gap_info["recommended_action"],
+            response_time_ms=response_time_ms,
             user_id=user_id,
         )
 

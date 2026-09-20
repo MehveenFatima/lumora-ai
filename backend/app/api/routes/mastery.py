@@ -140,6 +140,29 @@ async def list_workspace_topics(
     if not raw_topics:
         raw_topics = await topic_mastery_engine.recalculate_all_workspace_topics(workspace_id, user_id)
 
+    all_concepts = await bkt_repo.list_concept_mastery(workspace_id, user_id)
+    concepts_by_topic: Dict[str, List[ConceptMasteryDetail]] = {}
+    for c in all_concepts:
+        nt = normalize_topic_name(c.get("topic", "General"))
+        if nt not in concepts_by_topic:
+            concepts_by_topic[nt] = []
+        concepts_by_topic[nt].append(
+            ConceptMasteryDetail(
+                concept=c.get("concept"),
+                topic=c.get("topic"),
+                p_mastery=c.get("p_mastery", 0.30),
+                mastery_percentage=int(round(c.get("p_mastery", 0.30) * 100)),
+                confidence_level=c.get("confidence_level", "low"),
+                mastery_status=c.get("mastery_status", "developing"),
+                trend=c.get("trend", "insufficient_data"),
+                attempts_count=c.get("attempts_count", 0),
+                correct_count=c.get("correct_count", 0),
+                recent_accuracy=c.get("recent_accuracy", 0.0),
+                average_response_time_ms=c.get("average_response_time_ms", 0),
+                last_practiced_at=c.get("last_practiced_at"),
+            )
+        )
+
     topics_res = [
         TopicMasteryDetail(
             topic=t.get("topic"),
@@ -149,14 +172,15 @@ async def list_workspace_topics(
             confidence_level=t.get("confidence_level", "low"),
             mastery_status=t.get("mastery_status", "developing"),
             trend=t.get("trend", "insufficient_data"),
-            concept_count=t.get("concept_count", 0),
-            assessed_concept_count=t.get("assessed_concept_count", 0),
+            concept_count=max(t.get("concept_count", 0), len(concepts_by_topic.get(normalize_topic_name(t.get("topic", "")), []))),
+            assessed_concept_count=len(concepts_by_topic.get(normalize_topic_name(t.get("topic", "")), [])),
             coverage_ratio=t.get("coverage_ratio", 0.0),
             attempt_count=t.get("attempt_count", 0),
             correct_count=t.get("correct_count", 0),
             recent_accuracy=t.get("recent_accuracy", 0.0),
             average_response_time_ms=t.get("average_response_time_ms", 0),
             gap_priority=t.get("gap_priority", 0.0),
+            concepts=concepts_by_topic.get(normalize_topic_name(t.get("topic", "")), []),
             last_assessed_at=t.get("last_assessed_at"),
         )
         for t in raw_topics
@@ -187,9 +211,7 @@ async def get_topic_detail(
         )
 
     norm_topic = normalize_topic_name(topic)
-    topic_record = await topic_mastery_repo.get_topic_mastery(workspace_id, norm_topic, user_id)
-    if not topic_record:
-        topic_record = await topic_mastery_engine.recalculate_topic(workspace_id, norm_topic, user_id=user_id)
+    topic_record = await topic_mastery_engine.ensure_topic_mastery_current(workspace_id, norm_topic, user_id=user_id)
 
     all_concepts = await bkt_repo.list_concept_mastery(workspace_id, user_id)
     matching_concepts = [

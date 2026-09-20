@@ -541,5 +541,40 @@ class QuizRepository:
         matching.sort(key=lambda x: x.get("answered_at") or datetime.min.replace(tzinfo=timezone.utc))
         return matching
 
+    async def list_attempts_by_concept(
+        self,
+        workspace_id: str,
+        concept: str,
+        user_id: str = "default_user",
+    ) -> List[Dict[str, Any]]:
+        pool = await get_db_pool()
+        if pool:
+            try:
+                async with pool.acquire() as conn:
+                    rows = await conn.fetch(
+                        """
+                        SELECT a.* FROM quiz_attempts a
+                        JOIN quiz_questions q ON a.question_id = q.id
+                        WHERE a.workspace_id = $1 AND a.user_id = $2 AND q.concept = $3
+                        ORDER BY a.answered_at ASC
+                        """,
+                        workspace_id,
+                        user_id,
+                        concept,
+                    )
+                    if rows:
+                        return [dict(r) for r in rows]
+            except Exception as e:
+                logger.error(f"Error listing attempts by concept from DB: {e}")
+
+        matching = []
+        for a in _memory_quiz_attempts.values():
+            if a["workspace_id"] == workspace_id and a.get("user_id", "default_user") == user_id:
+                q = _memory_quiz_questions.get(str(a["question_id"]))
+                if q and q.get("concept") == concept:
+                    matching.append(a)
+        matching.sort(key=lambda x: x.get("answered_at") or datetime.min.replace(tzinfo=timezone.utc))
+        return matching
+
 
 quiz_repo = QuizRepository()

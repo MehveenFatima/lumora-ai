@@ -279,5 +279,38 @@ class TopicMasteryEngine:
             results.append(res)
         return results
 
+    async def ensure_topic_mastery_current(
+        self,
+        workspace_id: str,
+        topic: str,
+        user_id: str = "default_user",
+    ) -> Dict[str, Any]:
+        """
+        Self-healing consistency check:
+        Ensures topic mastery exists and reflects the latest concept updates.
+        If missing or stale, it automatically recalculates and persists the topic record.
+        """
+        norm_topic = normalize_topic_name(topic)
+        topic_record = await topic_mastery_repo.get_topic_mastery(workspace_id, norm_topic, user_id)
+
+        all_concepts = await bkt_repo.list_concept_mastery(workspace_id, user_id)
+        matching = [c for c in all_concepts if normalize_topic_name(c.get("topic", "")) == norm_topic]
+
+        if not topic_record:
+            return await self.recalculate_topic(workspace_id, norm_topic, user_id=user_id)
+
+        last_assessed = topic_record.get("last_assessed_at")
+        if matching and last_assessed:
+            is_stale = False
+            for c in matching:
+                c_up = c.get("updated_at")
+                if c_up and c_up > last_assessed:
+                    is_stale = True
+                    break
+            if is_stale:
+                return await self.recalculate_topic(workspace_id, norm_topic, user_id=user_id)
+
+        return topic_record
+
 
 topic_mastery_engine = TopicMasteryEngine()

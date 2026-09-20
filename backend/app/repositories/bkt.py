@@ -16,6 +16,15 @@ _memory_knowledge_gaps: Dict[str, Dict[str, Any]] = {}
 _memory_question_fingerprints: Dict[str, List[str]] = {}
 
 
+def _safe_uuid(val: Any) -> uuid.UUID:
+    if isinstance(val, uuid.UUID):
+        return val
+    try:
+        return uuid.UUID(str(val))
+    except (ValueError, TypeError, AttributeError):
+        return uuid.uuid5(uuid.NAMESPACE_DNS, str(val))
+
+
 class BKTRepository:
     async def upsert_concept_mastery(
         self,
@@ -275,6 +284,212 @@ class BKTRepository:
 
         return record
 
+    async def upsert_concept_and_gap(
+        self,
+        workspace_id: str,
+        topic: str,
+        concept: str,
+        p_mastery: float,
+        is_correct: bool,
+        gap_priority: float,
+        gap_status: str,
+        contributing_signals: Dict[str, Any],
+        recommended_action: str = "targeted_practice",
+        response_time_ms: int = 0,
+        user_id: str = "default_user",
+    ) -> Dict[str, Any]:
+        """
+        Atomically updates learner_concept_mastery and learner_knowledge_gaps in a single
+        database transaction to prevent partial failure inconsistency.
+        """
+        concept_key = f"{workspace_id}:{user_id}:{concept}"
+        gap_key = f"{workspace_id}:{user_id}:{concept}"
+        now = datetime.now(timezone.utc)
+
+        # 1. Prepare Concept Record
+        existing_concept = _memory_concept_mastery.get(concept_key, {
+            "workspace_id": workspace_id,
+            "user_id": user_id,
+            "topic": topic,
+            "concept": concept,
+            "p_mastery": 0.30,
+            "attempts_count": 0,
+            "correct_count": 0,
+            "last_response_time_ms": 0,
+            "last_practiced_at": now,
+        })
+
+        new_attempts = existing_concept.get("attempts_count", 0) + 1
+        new_correct = existing_concept.get("correct_count", 0) + (1 if is_correct else 0)
+        new_incorrect = existing_concept.get("incorrect_count", 0) + (0 if is_correct else 1)
+        recent_acc = round(new_correct / new_attempts, 4) if new_attempts > 0 else 0.0
+        repeated_err = (existing_concept.get("repeated_error_count", 0) + 1) if not is_correct else 0
+        prev_avg_time = existing_concept.get("average_response_time_ms", 0)
+        prev_attempts = existing_concept.get("attempts_count", 0)
+        avg_time = int((prev_avg_time * prev_attempts + response_time_ms) / new_attempts) if new_attempts > 0 else response_time_ms
+
+        if new_attempts < 3:
+            conf_level = "low"
+        elif new_attempts < 8:
+            conf_level = "moderate"
+        else:
+            conf_level = "high"
+
+        if conf_level == "low":
+            m_status = "low_evidence" if p_mastery >= 0.80 else "developing"
+        elif p_mastery >= 0.80:
+            m_status = "strong"
+        elif p_mastery >= 0.60:
+            m_status = "developing"
+        elif p_mastery >= 0.40:
+            m_status = "needs_review"
+        else:
+            m_status = "critical_gap"
+
+        prev_pm = existing_concept.get("p_mastery", 0.30)
+        delta = p_mastery - prev_pm
+        if prev_attempts < 1:
+            c_trend = "insufficient_data"
+        elif delta >= 0.03:
+            c_trend = "improving"
+        elif delta <= -0.03:
+            c_trend = "declining"
+        else:
+            c_trend = "stable"
+
+        concept_record = {
+            "id": existing_concept.get("id") or str(uuid.uuid4()),
+            "workspace_id": workspace_id,
+            "user_id": user_id,
+            "topic": topic,
+            "concept": concept,
+            "p_mastery": round(float(p_mastery), 4),
+            "bkt_version": "1.0",
+            "attempts_count": new_attempts,
+            "correct_count": new_correct,
+            "incorrect_count": new_incorrect,
+            "recent_accuracy": recent_acc,
+            "average_response_time_ms": avg_time,
+            "repeated_error_count": repeated_err,
+            "first_attempt_at": existing_concept.get("first_attempt_at") or now,
+            "last_attempt_at": now,
+            "last_response_time_ms": response_time_ms,
+            "last_practiced_at": now,
+            "mastery_status": m_status,
+            "confidence_level": conf_level,
+            "trend": c_trend,
+            "created_at": existing_concept.get("created_at") or now,
+            "updated_at": now,
+        }
+
+        # 2. Prepare Knowledge Gap Record
+        gap_record = {
+            "id": str(uuid.uuid4()),
+            "workspace_id": workspace_id,
+            "user_id": user_id,
+            "topic": topic,
+            "concept": concept,
+            "gap_priority": round(float(gap_priority), 4),
+            "gap_status": gap_status,
+            "contributing_signals": contributing_signals,
+            "recommended_action": recommended_action,
+            "created_at": now,
+            "updated_at": now,
+        }
+
+        # 3. Database Execution: Atomic Transaction
+        pool = await get_db_pool()
+        if pool:
+            try:
+                import json
+                async with pool.acquire() as conn:
+                    async with conn.transaction():
+                        await conn.execute(
+                            """
+                            INSERT INTO learner_concept_mastery (
+                                workspace_id, user_id, topic, concept, p_mastery,
+                                bkt_version, attempts_count, correct_count, incorrect_count,
+                                recent_accuracy, average_response_time_ms, repeated_error_count,
+                                first_attempt_at, last_attempt_at, last_response_time_ms,
+                                last_practiced_at, mastery_status, confidence_level, trend, updated_at
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+                            ON CONFLICT (workspace_id, user_id, concept)
+                            DO UPDATE SET
+                                topic = EXCLUDED.topic,
+                                p_mastery = EXCLUDED.p_mastery,
+                                bkt_version = EXCLUDED.bkt_version,
+                                attempts_count = EXCLUDED.attempts_count,
+                                correct_count = EXCLUDED.correct_count,
+                                incorrect_count = EXCLUDED.incorrect_count,
+                                recent_accuracy = EXCLUDED.recent_accuracy,
+                                average_response_time_ms = EXCLUDED.average_response_time_ms,
+                                repeated_error_count = EXCLUDED.repeated_error_count,
+                                last_attempt_at = EXCLUDED.last_attempt_at,
+                                last_response_time_ms = EXCLUDED.last_response_time_ms,
+                                last_practiced_at = EXCLUDED.last_practiced_at,
+                                mastery_status = EXCLUDED.mastery_status,
+                                confidence_level = EXCLUDED.confidence_level,
+                                trend = EXCLUDED.trend,
+                                updated_at = EXCLUDED.updated_at
+                            """,
+                            workspace_id,
+                            user_id,
+                            topic,
+                            concept,
+                            concept_record["p_mastery"],
+                            "1.0",
+                            new_attempts,
+                            new_correct,
+                            new_incorrect,
+                            recent_acc,
+                            avg_time,
+                            repeated_err,
+                            concept_record["first_attempt_at"],
+                            now,
+                            response_time_ms,
+                            now,
+                            m_status,
+                            conf_level,
+                            c_trend,
+                            now,
+                        )
+
+                        await conn.execute(
+                            """
+                            INSERT INTO learner_knowledge_gaps
+                            (workspace_id, user_id, topic, concept, gap_priority, gap_status, contributing_signals, recommended_action, updated_at)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                            ON CONFLICT (workspace_id, user_id, concept)
+                            DO UPDATE SET
+                                topic = EXCLUDED.topic,
+                                gap_priority = EXCLUDED.gap_priority,
+                                gap_status = EXCLUDED.gap_status,
+                                contributing_signals = EXCLUDED.contributing_signals,
+                                recommended_action = EXCLUDED.recommended_action,
+                                updated_at = EXCLUDED.updated_at
+                            """,
+                            workspace_id,
+                            user_id,
+                            topic,
+                            concept,
+                            gap_record["gap_priority"],
+                            gap_status,
+                            json.dumps(contributing_signals),
+                            recommended_action,
+                            now,
+                        )
+            except Exception as e:
+                logger.warning(f"Failed atomic transaction for concept & gap in PostgreSQL: {e}")
+
+        _memory_concept_mastery[concept_key] = concept_record
+        _memory_knowledge_gaps[gap_key] = gap_record
+
+        return {
+            "concept_mastery": concept_record,
+            "knowledge_gap": gap_record,
+        }
+
     async def list_knowledge_gaps(
         self,
         workspace_id: str,
@@ -329,8 +544,8 @@ class BKTRepository:
                         VALUES ($1, $2, $3, $4)
                         """,
                         workspace_id,
-                        uuid.UUID(quiz_session_id),
-                        uuid.UUID(question_id),
+                        _safe_uuid(quiz_session_id),
+                        _safe_uuid(question_id),
                         fingerprint,
                     )
             except Exception as e:
@@ -348,7 +563,7 @@ class BKTRepository:
                     rows = await conn.fetch(
                         "SELECT fingerprint FROM quiz_question_fingerprints WHERE workspace_id = $1 AND quiz_session_id = $2",
                         workspace_id,
-                        uuid.UUID(quiz_session_id),
+                        _safe_uuid(quiz_session_id),
                     )
                     return [r["fingerprint"] for r in rows]
             except Exception as e:

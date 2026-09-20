@@ -5,9 +5,19 @@ from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, field_validator
 
-# Explicitly load .env files from both root and backend directory
-load_dotenv()
-load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
+# Resolve absolute paths to repository root and backend directory .env files
+_CONFIG_DIR = Path(__file__).resolve().parent
+_BACKEND_DIR = _CONFIG_DIR.parent.parent
+_ROOT_DIR = _BACKEND_DIR.parent
+
+_ROOT_ENV = _ROOT_DIR / ".env"
+_BACKEND_ENV = _BACKEND_DIR / ".env"
+
+# Explicitly load .env files
+if _ROOT_ENV.exists():
+    load_dotenv(_ROOT_ENV)
+if _BACKEND_ENV.exists():
+    load_dotenv(_BACKEND_ENV)
 
 
 class Settings(BaseSettings):
@@ -22,9 +32,9 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3000",
     ]
 
-    # Google Gemini AI Configuration
+    # Google Gemini AI Configuration (Single authoritative source of truth: models/gemini-3.8-flash)
     gemini_api_key: Optional[str] = Field(default=None, validation_alias="GEMINI_API_KEY")
-    gemini_model: str = Field(default="gemini-3.8-flash", validation_alias="GEMINI_MODEL")
+    gemini_model: str = Field(default="models/gemini-3.8-flash", validation_alias="GEMINI_MODEL")
     gemini_embedding_model: str = Field(
         default="models/gemini-embedding-001", validation_alias="GEMINI_EMBEDDING_MODEL"
     )
@@ -77,10 +87,50 @@ class Settings(BaseSettings):
     max_file_size_bytes: int = 10 * 1024 * 1024  # 10 MB
 
     model_config = SettingsConfigDict(
-        env_file=(".env", "backend/.env"),
+        env_file=([str(_ROOT_ENV), str(_BACKEND_ENV)] if (_ROOT_ENV.exists() or _BACKEND_ENV.exists()) else None),
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @field_validator("gemini_model")
+    @classmethod
+    def validate_gemini_model(cls, v: str) -> str:
+        if not v or not isinstance(v, str):
+            raise ValueError("GEMINI_MODEL must be a non-empty string.")
+        trimmed = v.strip()
+        lower = trimmed.lower()
+        if any(legacy in lower for legacy in ["3.6", "2.5", "1.5", "1.0", "pro-vision"]):
+            raise ValueError(
+                f"Obsolete or prohibited Gemini generation model configured: '{trimmed}'. "
+                f"LumoraAI requires Gemini 3.8 Flash ('models/gemini-3.8-flash' or 'gemini-3.8-flash'). "
+                f"Please update GEMINI_MODEL in your .env configuration."
+            )
+        normalized = trimmed.replace("models/", "")
+        if normalized != "gemini-3.8-flash":
+            raise ValueError(
+                f"Unsupported Gemini generation model configured: '{trimmed}'. "
+                f"LumoraAI strictly expects 'models/gemini-3.8-flash' or 'gemini-3.8-flash'. "
+                f"Please check GEMINI_MODEL in your environment."
+            )
+        return trimmed
+
+    @field_validator("gemini_embedding_model")
+    @classmethod
+    def validate_embedding_model(cls, v: str) -> str:
+        if v != "models/gemini-embedding-001":
+            raise ValueError(
+                f"Invalid GEMINI_EMBEDDING_MODEL '{v}'. LumoraAI requires 'models/gemini-embedding-001'."
+            )
+        return v
+
+    @field_validator("embedding_dimensions")
+    @classmethod
+    def validate_embedding_dimensions(cls, v: int) -> int:
+        if v != 768:
+            raise ValueError(
+                f"Invalid EMBEDDING_DIMENSIONS '{v}'. LumoraAI requires 768 dimensions."
+            )
+        return v
 
     @field_validator("allowed_origins", mode="before")
     def assemble_cors_origins(cls, v, values):

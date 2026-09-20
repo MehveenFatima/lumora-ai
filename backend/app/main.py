@@ -15,6 +15,19 @@ async def lifespan(app: FastAPI):
     # Startup
     setup_logging()
     logger.info(f"Starting {settings.app_name} in {settings.environment} mode...")
+
+    # Assert Gemini generation model integrity
+    from backend.app.ai.gateway import ai_gateway
+    gemini_provider = ai_gateway.get_provider("gemini")
+    effective_model = gemini_provider.model_name if gemini_provider else None
+
+    logger.info(f"[AI Gateway] Effective Gemini generation model: {effective_model}")
+    if effective_model != "gemini-3.8-flash":
+        raise RuntimeError(
+            f"Startup configuration validation failed: Effective Gemini generation model is '{effective_model}', "
+            f"expected 'gemini-3.8-flash'. Obsolete model fallback is strictly prohibited."
+        )
+
     await get_db_pool()
     yield
     # Shutdown

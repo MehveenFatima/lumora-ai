@@ -25,19 +25,28 @@ from backend.app.services.adaptive_question_selector import adaptive_question_se
 from backend.app.services.quiz_service import quiz_service
 from backend.app.repositories.quizzes import quiz_repo
 from backend.app.repositories.bkt import bkt_repo
-from backend.app.repositories.workspaces import _memory_workspaces
+import uuid
+from backend.app.repositories.workspaces import _memory_workspaces, workspace_repo
 
 
 @pytest.mark.asyncio
 async def test_empty_workspace_raises_no_indexed_documents():
-    """Workspaces with 0 documents (e.g. 'os') must raise NoIndexedDocumentsError."""
-    empty_ws_id = "os"
-    with pytest.raises(NoIndexedDocumentsError) as excinfo:
-        await question_generator_service.get_workspace_chunks(empty_ws_id)
-    assert "No indexed learning materials are available" in str(excinfo.value)
+    """Workspaces with 0 documents must raise NoIndexedDocumentsError."""
+    empty_ws_id = f"test_empty_ws_{uuid.uuid4().hex[:8]}"
+    await workspace_repo.create(
+        workspace_id=empty_ws_id,
+        name="Empty Test Workspace",
+        goal="Verification",
+    )
+    try:
+        with pytest.raises(NoIndexedDocumentsError) as excinfo:
+            await question_generator_service.get_workspace_chunks(empty_ws_id)
+        assert "No indexed learning materials are available" in str(excinfo.value)
 
-    with pytest.raises(NoIndexedDocumentsError):
-        await quiz_service.create_quiz_session(empty_ws_id, target_question_count=5)
+        with pytest.raises(NoIndexedDocumentsError):
+            await quiz_service.create_quiz_session(empty_ws_id, target_question_count=5)
+    finally:
+        await workspace_repo.delete(empty_ws_id)
 
 
 @pytest.mark.asyncio
@@ -115,127 +124,125 @@ async def test_multi_batch_quiz_lifecycle_and_bkt_tracking(monkeypatch):
     ws_id = "test_lifecycle_ws_phase2"
     user_id = "test_user_phase2"
 
-    _memory_workspaces[ws_id] = {
-        "id": ws_id,
-        "name": "Phase 2 Lifecycle Workspace",
-        "goal": "Verification",
-        "level": "intermediate",
-        "target_date": "2026-12-31",
-        "daily_target_minutes": 30,
-        "description": "Lifecycle test workspace",
-        "overall_mastery": 50,
-        "mastery_delta": 0,
-        "status": "on_track",
-        "icon_name": "BookOpen",
-        "document_count": 1,
-    }
-
-    # 1. Seed test chunks with distinct topics
-    sub_topics = [
-        ("Binary Search Trees", "A Binary Search Tree preserves the left-subchild invariant where every left key is strictly smaller."),
-        ("AVL Trees", "AVL Trees maintain strict height balance factor between -1 and 1 via left and right rotations."),
-        ("Hash Tables", "Hash collisions can be resolved via separate chaining or open addressing with quadratic probing."),
-        ("Dijkstra Algorithm", "Dijkstra algorithm evaluates non-negative edge weights using a priority queue to determine shortest path distances."),
-        ("Bellman-Ford", "Bellman-Ford relaxes edges iteratively to compute single-source shortest paths in graphs with negative weights."),
-        ("QuickSort", "QuickSort partitions arrays recursively around chosen pivot elements achieving O(n log n) expected time."),
-        ("MergeSort", "MergeSort divides arrays into equal halves and merges sorted sub-arrays in guaranteed O(n log n) time."),
-        ("Heap Data Structure", "Binary heaps maintain complete binary trees satisfying min-heap or max-heap order properties."),
-        ("Trie Structures", "Trie nodes store alphabet characters enabling prefix-based search retrieval in O(L) time."),
-        ("Dynamic Programming", "Dynamic programming decomposes optimization problems into overlapping subproblems with optimal substructure."),
-    ]
-
-    test_chunks = [
-        {
-            "id": f"c_{i}",
-            "document_id": "doc_algo",
-            "document_name": "Data_Structures.pdf",
-            "page_number": (i % 5) + 1,
-            "heading": t[0],
-            "text": f"In computational analysis, {t[0]} provides foundational mechanics. {t[1]} The resulting algorithmic behavior optimizes resource constraints.",
-        }
-        for i, t in enumerate(sub_topics)
-    ]
-
-    # Mock get_workspace_chunks for this test workspace
-    orig_get_chunks = question_generator_service.get_workspace_chunks
-
-    async def mock_get_chunks(w_id: str):
-        if w_id == ws_id:
-            return test_chunks
-        return await orig_get_chunks(w_id)
-
-    monkeypatch.setattr(question_generator_service, "get_workspace_chunks", mock_get_chunks)
-
-    # 2. Create Round 1 Quiz Session (Diagnostic)
-    session = await quiz_service.create_quiz_session(
+    await workspace_repo.create(
         workspace_id=ws_id,
-        target_question_count=5,
-        initial_difficulty=2,
+        name="Phase 2 Lifecycle Workspace",
+        goal="Verification",
+        level="intermediate",
+        daily_target_minutes=30,
+        description="Lifecycle test workspace",
+        icon_name="BookOpen",
     )
-    assert bool(session.id) and len(session.id) >= 20
-    assert session.adaptation_round == 1
-    assert session.current_adaptation_stage in ("diagnostic", "initial_diagnostic")
-    assert session.target_question_count == 5
 
-    # 3. Submit attempts across 5 questions
-    # Intentionally answer correctly for BST and incorrectly for Hash Tables to establish a gap
-    questions = await quiz_repo.list_questions_by_session(session.id, ws_id)
-    assert len(questions) == 5
+    try:
+        # 1. Seed test chunks with distinct topics
+        sub_topics = [
+            ("Binary Search Trees", "A Binary Search Tree preserves the left-subchild invariant where every left key is strictly smaller."),
+            ("AVL Trees", "AVL Trees maintain strict height balance factor between -1 and 1 via left and right rotations."),
+            ("Hash Tables", "Hash collisions can be resolved via separate chaining or open addressing with quadratic probing."),
+            ("Dijkstra Algorithm", "Dijkstra algorithm evaluates non-negative edge weights using a priority queue to determine shortest path distances."),
+            ("Bellman-Ford", "Bellman-Ford relaxes edges iteratively to compute single-source shortest paths in graphs with negative weights."),
+            ("QuickSort", "QuickSort partitions arrays recursively around chosen pivot elements achieving O(n log n) expected time."),
+            ("MergeSort", "MergeSort divides arrays into equal halves and merges sorted sub-arrays in guaranteed O(n log n) time."),
+            ("Heap Data Structure", "Binary heaps maintain complete binary trees satisfying min-heap or max-heap order properties."),
+            ("Trie Structures", "Trie nodes store alphabet characters enabling prefix-based search retrieval in O(L) time."),
+            ("Dynamic Programming", "Dynamic programming decomposes optimization problems into overlapping subproblems with optimal substructure."),
+        ]
 
-    for idx, q in enumerate(questions):
-        concept = q.get("concept", "")
-        # Answer correct if BST, incorrect if Hash Tables / Graph
-        is_bst = "Binary" in concept or "Tree" in concept
-        selected = q["correct_option"] if is_bst else ("B" if q["correct_option"] != "B" else "C")
-        res_time = 4500 if is_bst else 18000  # fast for BST, hesitant for Hash Tables
+        test_chunks = [
+            {
+                "id": f"c_{i}",
+                "document_id": "doc_algo",
+                "document_name": "Data_Structures.pdf",
+                "page_number": (i % 5) + 1,
+                "heading": t[0],
+                "text": f"In computational analysis, {t[0]} provides foundational mechanics. {t[1]} The resulting algorithmic behavior optimizes resource constraints.",
+            }
+            for i, t in enumerate(sub_topics)
+        ]
 
-        attempt_res = await quiz_service.submit_attempt(
+        # Mock get_workspace_chunks for this test workspace
+        orig_get_chunks = question_generator_service.get_workspace_chunks
+
+        async def mock_get_chunks(w_id: str):
+            if w_id == ws_id:
+                return test_chunks
+            return await orig_get_chunks(w_id)
+
+        monkeypatch.setattr(question_generator_service, "get_workspace_chunks", mock_get_chunks)
+
+        # 2. Create Round 1 Quiz Session (Diagnostic)
+        session = await quiz_service.create_quiz_session(
+            workspace_id=ws_id,
+            target_question_count=5,
+            initial_difficulty=2,
+        )
+        assert bool(session.id) and len(session.id) >= 20
+        assert session.adaptation_round == 1
+        assert session.current_adaptation_stage in ("diagnostic", "initial_diagnostic")
+        assert session.target_question_count == 5
+
+        # 3. Submit attempts across 5 questions
+        # Intentionally answer correctly for BST and incorrectly for Hash Tables to establish a gap
+        questions = await quiz_repo.list_questions_by_session(session.id, ws_id)
+        assert len(questions) == 5
+
+        for idx, q in enumerate(questions):
+            concept = q.get("concept", "")
+            # Answer correct if BST, incorrect if Hash Tables / Graph
+            is_bst = "Binary" in concept or "Tree" in concept
+            selected = q["correct_option"] if is_bst else ("B" if q["correct_option"] != "B" else "C")
+            res_time = 4500 if is_bst else 18000  # fast for BST, hesitant for Hash Tables
+
+            attempt_res = await quiz_service.submit_attempt(
+                workspace_id=ws_id,
+                session_id=session.id,
+                question_id=q["id"],
+                selected_option=selected,
+                response_time_ms=res_time,
+                user_id=user_id,
+            )
+            assert attempt_res.attempt_id is not None
+            assert attempt_res.adaptation_metadata is not None
+            assert "p_mastery" in attempt_res.adaptation_metadata
+
+        # 4. Complete Round 1
+        summary = await quiz_service.complete_quiz(ws_id, session.id, user_id=user_id)
+        assert summary.session_id == session.id
+        assert summary.adaptation_round == 1
+        assert len(summary.concept_performance) > 0
+
+        # Verify BKT updated learner mastery
+        masteries = await bkt_repo.list_concept_mastery(ws_id, user_id)
+        assert len(masteries) > 0
+
+        # 5. Launch Round 2 Targeted Next Batch
+        next_batch = await quiz_service.start_next_batch(
             workspace_id=ws_id,
             session_id=session.id,
-            question_id=q["id"],
-            selected_option=selected,
-            response_time_ms=res_time,
+            batch_size=5,
             user_id=user_id,
         )
-        assert attempt_res.attempt_id is not None
-        assert attempt_res.adaptation_metadata is not None
-        assert "p_mastery" in attempt_res.adaptation_metadata
 
-    # 4. Complete Round 1
-    summary = await quiz_service.complete_quiz(ws_id, session.id, user_id=user_id)
-    assert summary.session_id == session.id
-    assert summary.adaptation_round == 1
-    assert len(summary.concept_performance) > 0
+        assert next_batch.session_id == session.id
+        assert next_batch.adaptation_round == 2
+        assert next_batch.current_adaptation_stage == "targeted_reinforcement"
+        assert next_batch.new_questions_count == 5
+        assert next_batch.first_question is not None
 
-    # Verify BKT updated learner mastery
-    masteries = await bkt_repo.list_concept_mastery(ws_id, user_id)
-    assert len(masteries) > 0
+        # 6. Verify NO questions from Round 1 are repeated in Round 2
+        round_1_question_texts = [q["question_text"] for q in questions]
+        all_qs = await quiz_repo.list_questions_by_session(session.id, ws_id)
+        assert len(all_qs) == 10
 
-    # 5. Launch Round 2 Targeted Next Batch
-    next_batch = await quiz_service.start_next_batch(
-        workspace_id=ws_id,
-        session_id=session.id,
-        batch_size=5,
-        user_id=user_id,
-    )
+        round_2_questions = all_qs[5:]
+        round_2_question_texts = [q["question_text"] for q in round_2_questions]
 
-    assert next_batch.session_id == session.id
-    assert next_batch.adaptation_round == 2
-    assert next_batch.current_adaptation_stage == "targeted_reinforcement"
-    assert next_batch.new_questions_count == 5
-    assert next_batch.first_question is not None
+        for r2_text in round_2_question_texts:
+            for r1_text in round_1_question_texts:
+                assert r2_text != r1_text, f"Repeated question across batches: {r2_text}"
+                assert not is_paraphrase_duplicate(r2_text, r1_text), f"Paraphrased repetition: {r2_text} vs {r1_text}"
 
-    # 6. Verify NO questions from Round 1 are repeated in Round 2
-    round_1_question_texts = [q["question_text"] for q in questions]
-    all_qs = await quiz_repo.list_questions_by_session(session.id, ws_id)
-    assert len(all_qs) == 10
-
-    round_2_questions = all_qs[5:]
-    round_2_question_texts = [q["question_text"] for q in round_2_questions]
-
-    for r2_text in round_2_question_texts:
-        for r1_text in round_1_question_texts:
-            assert r2_text != r1_text, f"Repeated question across batches: {r2_text}"
-            assert not is_paraphrase_duplicate(r2_text, r1_text), f"Paraphrased repetition: {r2_text} vs {r1_text}"
-
-    print("\n[SUCCESS] Phase 2 Adaptive Learning verification passed completely!")
+        print("\n[SUCCESS] Phase 2 Adaptive Learning verification passed completely!")
+    finally:
+        await workspace_repo.delete(ws_id)

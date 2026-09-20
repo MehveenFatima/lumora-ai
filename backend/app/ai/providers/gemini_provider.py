@@ -44,14 +44,34 @@ class GeminiProvider(BaseAIProvider):
     @staticmethod
     def _resolve_model_name(raw_model: str) -> str:
         """
-        Normalizes model identifier to gemini-3.8-flash standard format.
-        Automatically migrates legacy or deprecated preview names.
+        Normalizes model identifier to gemini-3.8-flash standard format for Google SDK.
+        Strictly rejects obsolete legacy models instead of silently substituting them.
         """
-        if any(legacy in raw_model for legacy in ["gemini-3.6", "gemini-2.5", "gemini-1.5"]):
+        if not raw_model:
             return "gemini-3.8-flash"
-        if raw_model.startswith("models/"):
-            return raw_model.replace("models/", "")
-        return raw_model
+
+        trimmed = raw_model.strip()
+        lower = trimmed.lower()
+
+        # Fail fast: Reject obsolete or legacy Gemini models
+        if any(legacy in lower for legacy in ["3.6", "2.5", "1.5", "1.0", "pro-vision"]):
+            raise ProviderConfigurationError(
+                f"Obsolete or prohibited Gemini generation model '{trimmed}' requested. "
+                f"Silent substitution of legacy models is strictly prohibited. "
+                f"LumoraAI requires 'models/gemini-3.8-flash'.",
+                provider="gemini",
+            )
+
+        # Normalize models/ prefix for SDK
+        normalized = trimmed.replace("models/", "")
+        if normalized != "gemini-3.8-flash":
+            raise ProviderConfigurationError(
+                f"Unsupported Gemini generation model '{trimmed}'. "
+                f"LumoraAI strictly expects 'models/gemini-3.8-flash' or 'gemini-3.8-flash'.",
+                provider="gemini",
+            )
+
+        return normalized
 
     def is_configured(self) -> bool:
         return bool(self._api_key and len(self._api_key.strip()) >= 10)

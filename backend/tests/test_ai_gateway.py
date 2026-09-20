@@ -108,7 +108,7 @@ class MockProvider(BaseAIProvider):
 
 @pytest.fixture
 def mock_gemini():
-    return MockProvider("gemini", "gemini-2.5-flash", configured=True)
+    return MockProvider("gemini", "gemini-3.8-flash", configured=True)
 
 
 @pytest.fixture
