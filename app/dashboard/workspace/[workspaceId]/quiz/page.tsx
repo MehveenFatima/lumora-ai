@@ -165,7 +165,7 @@ export default function AdaptiveQuizPage() {
   const questionStartTimeRef = useRef<number>(performance.now())
 
   // Initialize workspace & quiz session
-  const startQuizSession = async () => {
+  const startQuizSession = async (forceNew: boolean = false) => {
     if (!workspaceId) return
     setIsLoading(true)
     setErrorCode(null)
@@ -183,10 +183,17 @@ export default function AdaptiveQuizPage() {
       const ws = await workspaceService.getWorkspaceById(workspaceId)
       setWorkspace(ws)
 
-      const sessionData = await tutorApiClient.createQuizSession(workspaceId, {
-        targetQuestionCount: 5,
-        initialDifficulty: 2,
-      })
+      let sessionData = null
+      if (!forceNew) {
+        sessionData = await tutorApiClient.getActiveQuizSession(workspaceId)
+      }
+
+      if (!sessionData) {
+        sessionData = await tutorApiClient.createQuizSession(workspaceId, {
+          targetQuestionCount: 5,
+          initialDifficulty: 2,
+        })
+      }
 
       setSessionId(sessionData.id)
       setCurrentDifficulty(sessionData.current_difficulty || 2)
@@ -196,8 +203,11 @@ export default function AdaptiveQuizPage() {
 
       if (sessionData.current_question) {
         setCurrentQuestion(sessionData.current_question)
-        setQuestionOrder(sessionData.current_question.question_order || 1)
+        setQuestionOrder(sessionData.current_question_index || sessionData.current_question.question_index || 1)
         questionStartTimeRef.current = performance.now()
+      } else if (sessionData.status === 'completed') {
+        const summary = await tutorApiClient.completeQuizSession(workspaceId, sessionData.id)
+        setQuizSummary(summary)
       } else {
         setErrorMessage('No questions could be generated. Please ensure your workspace has indexed documents.')
       }
@@ -214,6 +224,7 @@ export default function AdaptiveQuizPage() {
       setIsLoading(false)
     }
   }
+
 
   useEffect(() => {
     startQuizSession()
@@ -403,7 +414,7 @@ export default function AdaptiveQuizPage() {
               <ArrowRight className="size-3.5" />
             </Link>
             <button
-              onClick={startQuizSession}
+              onClick={() => startQuizSession(true)}
               className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-xs font-medium text-foreground hover:bg-accent/40"
             >
               <RotateCcw className="size-3.5" />

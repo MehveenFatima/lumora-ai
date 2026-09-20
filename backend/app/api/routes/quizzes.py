@@ -73,6 +73,16 @@ async def get_quiz_history(
 
 
 @router.get(
+    "/workspaces/{workspace_id}/quizzes/active",
+    response_model=Optional[QuizSessionResponse],
+)
+async def get_active_quiz_session(
+    workspace_id: str,
+) -> Optional[QuizSessionResponse]:
+    return await quiz_service.get_active_session(workspace_id)
+
+
+@router.get(
     "/workspaces/{workspace_id}/quizzes/{quiz_id}",
     response_model=QuizSessionResponse,
 )

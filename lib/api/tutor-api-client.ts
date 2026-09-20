@@ -331,6 +331,18 @@ export const tutorApiClient = {
   },
 
   // 4. QUIZ API METHODS
+  async getActiveQuizSession(workspaceId: string): Promise<any> {
+    try {
+      const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/quizzes/active`)
+      if (response.status === 404 || !response.ok) {
+        return null
+      }
+      return await response.json()
+    } catch {
+      return null
+    }
+  },
+
   async createQuizSession(
     workspaceId: string,
     data: { targetQuestionCount?: number; topic?: string; initialDifficulty?: number } = {}

@@ -205,7 +205,8 @@ class BKTRepository:
                         workspace_id,
                         user_id,
                     )
-                    return [dict(r) for r in rows]
+                    if rows:
+                        return [dict(r) for r in rows]
             except Exception as e:
                 logger.warning(f"PostgreSQL query error in list_concept_mastery: {e}")
 
@@ -288,7 +289,8 @@ class BKTRepository:
                         workspace_id,
                         user_id,
                     )
-                    return [dict(r) for r in rows]
+                    if rows:
+                        return [dict(r) for r in rows]
             except Exception as e:
                 logger.warning(f"PostgreSQL query error in list_knowledge_gaps: {e}")
 

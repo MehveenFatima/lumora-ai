@@ -161,7 +161,8 @@ class TopicMasteryRepository:
                         workspace_id,
                         user_id,
                     )
-                    return [dict(r) for r in rows]
+                    if rows:
+                        return [dict(r) for r in rows]
             except Exception as e:
                 logger.warning(f"PostgreSQL query error in list_topic_mastery: {e}")
 
@@ -255,7 +256,8 @@ class TopicMasteryRepository:
                         entity_id,
                         limit,
                     )
-                    return [dict(r) for r in rows]
+                    if rows:
+                        return [dict(r) for r in rows]
             except Exception as e:
                 logger.warning(f"PostgreSQL query error in get_recent_snapshots: {e}")
 

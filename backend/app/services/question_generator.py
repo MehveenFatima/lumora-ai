@@ -361,73 +361,78 @@ class QuestionGeneratorService:
         if not targets_to_query:
             targets_to_query = [{"concept": "Core Principles", "topic": "General", "primary_chunk": all_chunks[0], "chunks": all_chunks}]
 
-        # 2. Try Gemini generation if available
-        if self._init_gemini():
-            try:
-                import google.generativeai as genai
-                model = genai.GenerativeModel(
-                    self.model_name,
-                    generation_config={"response_mime_type": "application/json"}
+        # 2. Try Multi-Model AI Gateway Generation (Primary: OpenRouter Qwen 3.8 27B, Fallback: Gemini 3.8 Flash)
+        try:
+            from backend.app.ai.gateway import ai_gateway
+            from backend.app.ai.types import AIRequest, TaskType
+
+            for target in targets_to_query[:6]:
+                c_name = target.get("concept", "Concept")
+                t_name = target.get("topic", "Topic")
+                chunk = target.get("primary_chunk") or all_chunks[0]
+                context_sample = "\n\n".join([(c.get("content") or c.get("text") or "") for c in target.get("chunks", [chunk])[:3]])
+
+                prompt = (
+                    f"{QUESTION_GEN_PROMPT}\n\n"
+                    f"TARGET TOPIC: {t_name}\n"
+                    f"TARGET CONCEPT: {c_name}\n"
+                    f"DESIRED DIFFICULTY: {preferred_difficulty}\n"
+                    f"EXCLUDED QUESTIONS TO AVOID:\n" + "\n".join([f"- {t}" for t in excluded_qs[-5:]]) + "\n\n"
+                    f"[SOURCE CONTEXT]:\n{context_sample[:3000]}\n\n"
+                    f"Generate 2 distinct, non-overlapping JSON question objects for this concept. Return a JSON object with a 'questions' array containing the question objects."
                 )
 
-                for target in targets_to_query[:6]:
-                    c_name = target.get("concept", "Concept")
-                    t_name = target.get("topic", "Topic")
-                    chunk = target.get("primary_chunk") or all_chunks[0]
-                    context_sample = "\n\n".join([(c.get("content") or c.get("text") or "") for c in target.get("chunks", [chunk])[:3]])
+                ai_req = AIRequest(
+                    prompt=prompt,
+                    system_prompt="You are an expert assessment designer. Respond strictly in valid JSON format with a top-level 'questions' array of question objects.",
+                    task_type=TaskType.QUIZ,
+                    temperature=0.3,
+                )
 
-                    prompt = (
-                        f"{QUESTION_GEN_PROMPT}\n\n"
-                        f"TARGET TOPIC: {t_name}\n"
-                        f"TARGET CONCEPT: {c_name}\n"
-                        f"DESIRED DIFFICULTY: {preferred_difficulty}\n"
-                        f"EXCLUDED QUESTIONS TO AVOID:\n" + "\n".join([f"- {t}" for t in excluded_qs[-5:]]) + "\n\n"
-                        f"[SOURCE CONTEXT]:\n{context_sample[:3000]}\n\n"
-                        f"Generate 2 distinct, non-overlapping JSON question objects for this concept:"
-                    )
+                ai_res = await ai_gateway.generate_structured(ai_req)
+                if ai_res and ai_res.structured_data:
+                    data = ai_res.structured_data
+                    if isinstance(data, dict):
+                        items = data.get("questions") or data.get("items") or [data]
+                    elif isinstance(data, list):
+                        items = data
+                    else:
+                        items = []
 
-                    res = model.generate_content(prompt)
-                    if res and res.text:
-                        raw_json = res.text.strip()
-                        if raw_json.startswith("```"):
-                            raw_json = re.sub(r"^```(?:json)?\n?", "", raw_json)
-                            raw_json = re.sub(r"\n?```$", "", raw_json)
-
-                        items = json.loads(raw_json)
-                        if isinstance(items, dict):
-                            items = [items]
-
-                        for item in items:
-                            q_data = GeneratedQuestionData(
-                                topic=item.get("topic") or t_name,
-                                concept=item.get("concept") or c_name,
-                                difficulty=int(item.get("difficulty", preferred_difficulty)),
-                                question_type=item.get("question_type") or "conceptual",
-                                question_text=item.get("question_text", ""),
-                                options=item.get("options", []),
-                                correct_option=item.get("correct_option", "A"),
-                                explanation=item.get("explanation", ""),
-                                document_id=str(chunk.get("document_id")),
-                                document_name=chunk.get("document_name"),
-                                page_number=chunk.get("page_number", 1),
-                                source_excerpt=(chunk.get("content") or chunk.get("text") or "")[:300],
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        q_data = GeneratedQuestionData(
+                            topic=item.get("topic") or t_name,
+                            concept=item.get("concept") or c_name,
+                            difficulty=int(item.get("difficulty", preferred_difficulty)),
+                            question_type=item.get("question_type") or "conceptual",
+                            question_text=item.get("question_text", ""),
+                            options=item.get("options", []),
+                            correct_option=item.get("correct_option", "A"),
+                            explanation=item.get("explanation", ""),
+                            document_id=str(chunk.get("document_id")),
+                            document_name=chunk.get("document_name"),
+                            page_number=chunk.get("page_number", 1),
+                            source_excerpt=(chunk.get("content") or chunk.get("text") or "")[:300],
+                        )
+                        # Strict quality validation & anti-leakage check
+                        if q_data.validate():
+                            fp = q_data.fingerprint
+                            is_dupe = (
+                                fp in excluded_fps
+                                or any(fp == c.fingerprint for c in candidates)
+                                or any(is_paraphrase_duplicate(q_data.question_text, c.question_text) for c in candidates)
+                                or any(is_paraphrase_duplicate(q_data.question_text, eq) for eq in excluded_qs)
                             )
-                            # Strict quality validation & anti-leakage check
-                            if q_data.validate():
-                                fp = q_data.fingerprint
-                                is_dupe = (
-                                    fp in excluded_fps
-                                    or any(fp == c.fingerprint for c in candidates)
-                                    or any(is_paraphrase_duplicate(q_data.question_text, c.question_text) for c in candidates)
-                                    or any(is_paraphrase_duplicate(q_data.question_text, eq) for eq in excluded_qs)
-                                )
-                                if not is_dupe:
-                                    candidates.append(q_data)
+                            if not is_dupe:
+                                candidates.append(q_data)
 
-                    if len(candidates) >= target_pool_size:
-                        break
-            except Exception as e:
-                logger.warning(f"Gemini candidate pool generation warning: {e}. Supplementing with deterministic synthesis.")
+                if len(candidates) >= target_pool_size:
+                    break
+        except Exception as e:
+            logger.warning(f"AI Gateway candidate pool generation notice: {e}. Supplementing with deterministic synthesis.")
+
 
         # 3. Deterministic Grounded Synthesis (100% Leakage-Free & Distinct)
         chunk_count = len(all_chunks)

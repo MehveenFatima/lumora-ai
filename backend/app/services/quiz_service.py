@@ -145,9 +145,9 @@ class QuizService:
                 break
 
         return QuizSessionResponse(
-            id=session["id"],
-            workspace_id=session["workspace_id"],
-            user_id=session["user_id"],
+            id=str(session["id"]),
+            workspace_id=str(session["workspace_id"]),
+            user_id=str(session["user_id"]),
             status=session["status"],
             target_question_count=session["target_question_count"],
             current_question_index=len(attempts) + 1 if session["status"] == "active" else len(attempts),
@@ -310,6 +310,14 @@ class QuizService:
                     break
 
         cit = question.get("citation_metadata") or {}
+        if isinstance(cit, str):
+            import json
+            try:
+                cit = json.loads(cit)
+            except Exception:
+                cit = {}
+        if not isinstance(cit, dict):
+            cit = {}
 
         # Adaptation Explainability
         p_pct = int(round(new_p_k * 100))
@@ -319,8 +327,8 @@ class QuizService:
             adapt_reason = f"BKT Mastery adjusted to {p_pct}%. Prioritizing '{concept_name}' for targeted review."
 
         return QuizAttemptResultResponse(
-            attempt_id=attempt["id"],
-            question_id=question_id,
+            attempt_id=str(attempt["id"]),
+            question_id=str(question_id),
             selected_option=user_key,
             is_correct=is_correct,
             correct_option=correct_key,
@@ -655,19 +663,60 @@ class QuizService:
             )
         return QuizHistoryResponse(sessions=items, total_count=len(items))
 
+    async def get_active_session(
+        self,
+        workspace_id: str,
+        user_id: str = "default_user",
+    ) -> Optional[QuizSessionResponse]:
+        """
+        Retrieves the latest active (uncompleted) quiz session for the workspace,
+        along with its current unanswered question and attempts count.
+        """
+        session = await quiz_repo.get_active_session_by_workspace(workspace_id, user_id)
+        if not session:
+            return None
+        return await self.get_quiz_session(workspace_id, str(session["id"]))
+
     def _to_public_question(self, q_record: Dict[str, Any]) -> QuizQuestionPublicResponse:
         diff = q_record.get("difficulty", 2)
         diff_label = {1: "easy", 2: "medium", 3: "hard"}.get(diff, "medium")
+
         cit = q_record.get("citation_metadata") or {}
+        if isinstance(cit, str):
+            import json
+            try:
+                cit = json.loads(cit)
+            except Exception:
+                cit = {}
+        if not isinstance(cit, dict):
+            cit = {}
 
         raw_opts = q_record.get("options", [])
         if isinstance(raw_opts, str):
             import json
-            raw_opts = json.loads(raw_opts)
+            try:
+                raw_opts = json.loads(raw_opts)
+            except Exception:
+                raw_opts = []
+        if not isinstance(raw_opts, list):
+            raw_opts = []
 
-        options = [QuizOptionSchema(key=opt["key"], text=opt["text"]) for opt in raw_opts]
+        options = [
+            QuizOptionSchema(key=opt["key"], text=opt["text"])
+            for opt in raw_opts
+            if isinstance(opt, dict) and "key" in opt and "text" in opt
+        ]
 
         gen_meta = q_record.get("generation_metadata") or {}
+        if isinstance(gen_meta, str):
+            import json
+            try:
+                gen_meta = json.loads(gen_meta)
+            except Exception:
+                gen_meta = {}
+        if not isinstance(gen_meta, dict):
+            gen_meta = {}
+
         q_type = q_record.get("question_type") or gen_meta.get("question_type") or "conceptual"
 
         return QuizQuestionPublicResponse(
@@ -687,6 +736,7 @@ class QuizService:
             question_type=q_type,
             created_at=q_record.get("created_at"),
         )
+
 
 
 quiz_service = QuizService()
