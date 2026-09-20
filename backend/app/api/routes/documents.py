@@ -94,9 +94,9 @@ async def upload_document(
             content_type=file.content_type or "application/octet-stream",
         )
 
-        # Step D: Update status to extracting
+        # Step D: Update status to extracting with storage path
         await document_repo.update_status(
-            doc_id, status="extracting", page_count=page_count
+            doc_id, status="extracting", page_count=page_count, storage_path=storage_path
         )
 
         # Step E: Chunk pages into semantic chunks
@@ -105,6 +105,7 @@ async def upload_document(
             document_id=doc_id,
             pages=parsed_pages,
             document_title=doc_title,
+            source_filename=file.filename,
         )
 
         # Step F: Update status to indexing

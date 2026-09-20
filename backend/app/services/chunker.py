@@ -1,5 +1,6 @@
-from typing import List, Dict, Any, Optional
+import re
 import uuid
+from typing import List, Dict, Any, Optional
 from backend.app.services.document_parser import ParsedPage
 from backend.app.core.config import settings
 from backend.app.core.logging import get_logger
@@ -53,12 +54,18 @@ class SemanticChunkerService:
         self.target_chunk_size = target_chunk_size
         self.overlap_size = overlap_size
 
+    def _split_into_sentences(self, text: str) -> List[str]:
+        # Split text into sentences using regex lookbehind
+        sentences = [s.strip() for s in re.split(r"(?<=[.?!])\s+", text) if s.strip()]
+        return sentences if sentences else [text]
+
     def chunk_pages(
         self,
         workspace_id: str,
         document_id: str,
         pages: List[ParsedPage],
         document_title: str = "",
+        source_filename: str = "",
     ) -> List[DocumentChunkResult]:
         chunks: List[DocumentChunkResult] = []
         global_chunk_idx = 0
@@ -68,23 +75,54 @@ class SemanticChunkerService:
             if not page_text:
                 continue
 
-            # Split page text into paragraphs/sections
-            paragraphs = [p.strip() for p in page_text.split("\n\n") if p.strip()]
-            if not paragraphs:
-                paragraphs = [page_text]
+            current_heading = page.heading
+            current_breadcrumbs = getattr(page, "section_breadcrumbs", []) or ([current_heading] if current_heading else [])
+
+            # Split page into structural blocks: paragraphs or tables
+            raw_blocks = [b.strip() for b in page_text.split("\n\n") if b.strip()]
+            if not raw_blocks:
+                raw_blocks = [page_text]
+
+            blocks = []
+            for b in raw_blocks:
+                # If block is a table, keep table as atomic block
+                if b.startswith("|") and "|" in b:
+                    blocks.append(b)
+                elif len(b) > self.target_chunk_size * 1.5:
+                    # Long paragraph: break into sentences
+                    sents = self._split_into_sentences(b)
+                    accum = ""
+                    for s in sents:
+                        if len(accum) + len(s) > self.target_chunk_size and accum:
+                            blocks.append(accum.strip())
+                            accum = s
+                        else:
+                            accum = (accum + " " + s).strip()
+                    if accum:
+                        blocks.append(accum.strip())
+                else:
+                    blocks.append(b)
 
             current_chunk_text = ""
-            current_heading = page.heading
 
-            for para in paragraphs:
-                # If paragraph looks like a heading (short line, uppercase or starts with #)
-                if len(para) < 70 and (para.isupper() or para.startswith("#")):
-                    current_heading = para.lstrip("#").strip()
+            for block in blocks:
+                # Detect sub-heading
+                if len(block) < 80 and (
+                    block.isupper()
+                    or block.startswith("#")
+                    or re.match(r"^\d+(\.\d+)*\s+[A-Z]", block)
+                ):
+                    subhead = block.lstrip("#").strip()
+                    current_heading = subhead
+                    if subhead not in current_breadcrumbs:
+                        current_breadcrumbs.append(subhead)
 
-                if len(current_chunk_text) + len(para) > self.target_chunk_size and current_chunk_text:
-                    # Finalize current chunk
+                # Check if adding block exceeds target chunk size
+                if len(current_chunk_text) + len(block) > self.target_chunk_size and current_chunk_text:
                     chunk_id = str(uuid.uuid4())
                     token_estimate = len(current_chunk_text.split())
+                    has_table = "|" in current_chunk_text and "---" in current_chunk_text
+                    
                     chunks.append(
                         DocumentChunkResult(
                             id=chunk_id,
@@ -97,26 +135,36 @@ class SemanticChunkerService:
                             token_count=token_estimate,
                             metadata={
                                 "document_title": document_title,
+                                "source_filename": source_filename,
                                 "page_number": page.page_number,
                                 "heading": current_heading,
+                                "section_breadcrumbs": current_breadcrumbs,
+                                "has_table": has_table or getattr(page, "has_table", False),
+                                "has_diagram": getattr(page, "has_diagram", False),
+                                "figure_captions": getattr(page, "figure_captions", []),
                             },
                         )
                     )
                     global_chunk_idx += 1
 
-                    # Retain overlap from end of previous text
-                    overlap = current_chunk_text[-self.overlap_size :] if len(current_chunk_text) > self.overlap_size else ""
-                    current_chunk_text = overlap + "\n" + para
+                    # Retain overlap from end of previous text (skip overlap if previous block was a table)
+                    if not has_table and len(current_chunk_text) > self.overlap_size:
+                        overlap = current_chunk_text[-self.overlap_size :]
+                    else:
+                        overlap = ""
+                    current_chunk_text = (overlap + "\n\n" + block).strip()
                 else:
                     if current_chunk_text:
-                        current_chunk_text += "\n\n" + para
+                        current_chunk_text += "\n\n" + block
                     else:
-                        current_chunk_text = para
+                        current_chunk_text = block
 
-            # Remaining text in page
+            # Remaining text for this page
             if current_chunk_text.strip():
                 chunk_id = str(uuid.uuid4())
                 token_estimate = len(current_chunk_text.split())
+                has_table = "|" in current_chunk_text and "---" in current_chunk_text
+
                 chunks.append(
                     DocumentChunkResult(
                         id=chunk_id,
@@ -129,8 +177,13 @@ class SemanticChunkerService:
                         token_count=token_estimate,
                         metadata={
                             "document_title": document_title,
+                            "source_filename": source_filename,
                             "page_number": page.page_number,
                             "heading": current_heading,
+                            "section_breadcrumbs": current_breadcrumbs,
+                            "has_table": has_table or getattr(page, "has_table", False),
+                            "has_diagram": getattr(page, "has_diagram", False),
+                            "figure_captions": getattr(page, "figure_captions", []),
                         },
                     )
                 )
@@ -140,3 +193,4 @@ class SemanticChunkerService:
 
 
 chunker_service = SemanticChunkerService()
+

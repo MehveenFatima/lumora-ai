@@ -1,6 +1,6 @@
-from typing import Optional, List, Dict, Any, Tuple
-from dataclasses import dataclass, field
 import re
+from dataclasses import dataclass, field
+from typing import Optional, List, Dict, Any, Tuple
 from backend.app.repositories.documents import document_repo
 from backend.app.core.logging import get_logger
 
@@ -9,7 +9,7 @@ logger = get_logger(__name__)
 
 @dataclass
 class ResolvedQuery:
-    intent: str  # WORKSPACE_METADATA, DOCUMENT_SUMMARY, SPECIFIC_CONCEPT, PAGE_REFERENCE, PAGE_RANGE_REFERENCE, CONTEXTUAL_FOLLOWUP, DOCUMENT_TOPIC_QUERY, UNGROUNDED_QUERY, AMBIGUOUS_DOCUMENT
+    intent: str  # WORKSPACE_METADATA, DOCUMENT_SUMMARY, SPECIFIC_CONCEPT, PAGE_REFERENCE, PAGE_RANGE_REFERENCE, CONTEXTUAL_FOLLOWUP, DOCUMENT_TOPIC_QUERY, COMPARE_CONTRAST, DIAGRAM_FIGURE_QUERY, TABLE_QUERY, AMBIGUOUS_DOCUMENT
     target_document_id: Optional[str] = None
     target_document_name: Optional[str] = None
     target_document_page_count: Optional[int] = None
@@ -17,10 +17,14 @@ class ResolvedQuery:
     page_start: Optional[int] = None
     page_end: Optional[int] = None
     resolved_concept: Optional[str] = None
+    resolved_concept_a: Optional[str] = None
+    resolved_concept_b: Optional[str] = None
     resolved_reference: Optional[str] = None
     semantic_query: str = ""
     candidate_documents: List[Dict[str, Any]] = field(default_factory=list)
     clarification_message: Optional[str] = None
+    is_visual_query: bool = False
+    is_table_query: bool = False
 
 
 class QueryUnderstandingService:
@@ -29,77 +33,74 @@ class QueryUnderstandingService:
     ) -> Tuple[List[str], Optional[str], Optional[str]]:
         """
         Dynamically extracts structured concepts and the last referenced document
-        from the most recent assistant response.
+        from both the most recent assistant response and the last user prompt.
         """
         if not recent_history:
             return [], None, None
 
         last_assistant_msg = ""
+        last_user_msg = ""
         last_doc_id = None
         last_doc_name = None
 
         for msg in reversed(recent_history):
-            if msg.get("role") == "assistant" and not last_assistant_msg:
+            role = msg.get("role")
+            if role == "assistant" and not last_assistant_msg:
                 last_assistant_msg = msg.get("content", "")
                 citations = msg.get("citations", [])
                 if citations and isinstance(citations, list) and len(citations) > 0:
                     last_doc_id = str(citations[0].get("document_id"))
                     last_doc_name = citations[0].get("document_name")
-
-        if not last_assistant_msg:
-            return [], last_doc_id, last_doc_name
+            elif role == "user" and not last_user_msg:
+                last_user_msg = msg.get("content", "")
 
         concepts: List[str] = []
 
-        # 1. Numbered items: "1. SSL Handshake Protocol: ..." or "1. **Ruby Object Model**"
-        numbered = re.findall(
-            r"(?:^|\n)\s*(?:\d+[\.\)]|\([0-9]+\))\s*(?:\*\*)?([^\n\:\-\*]+?)(?:\*\*)?(?:\:|\s*\-|\s*—|\n|$)",
-            last_assistant_msg,
-        )
-        for c in numbered:
-            clean_c = c.strip(" *#-_`").strip()
-            if len(clean_c) >= 3 and clean_c.lower() not in [
-                "core concept",
-                "principles",
-                "application",
-                "step",
-                "note",
-                "summary",
-                "overview",
-                "conclusion",
-            ]:
-                concepts.append(clean_c)
-
-        # 2. Bold concept headers: "**Concept Name**"
-        if not concepts:
-            bold_items = re.findall(r"\*\*([^\*\n]+?)\*\*", last_assistant_msg)
-            for b in bold_items:
-                clean_b = b.strip()
-                if (
-                    len(clean_b) >= 3
-                    and len(clean_b.split()) <= 7
-                    and not clean_b.lower().startswith("from ")
-                    and not clean_b.lower().startswith("source")
-                    and not clean_b.lower().startswith("based on")
-                ):
-                    concepts.append(clean_b)
-
-        # 3. Bullet items: "- Concept: ..." or "* Concept: ..."
-        if not concepts:
-            bullets = re.findall(
-                r"(?:^|\n)\s*[\-\*•]\s*([^\n\:\-]+?)(?:\:|\s*\-|\n|$)",
+        # 1. Numbered items in assistant response: "1. SSL Handshake Protocol: ..." or "1. **Ruby Object Model**"
+        if last_assistant_msg:
+            numbered = re.findall(
+                r"(?:^|\n)\s*(?:\d+[\.\)]|\([0-9]+\))\s*(?:\*\*)?([^\n\:\-\*]+?)(?:\*\*)?(?:\:|\s*\-|\s*—|\n|$)",
                 last_assistant_msg,
             )
-            for b in bullets:
-                clean_b = b.strip(" *#-_`").strip()
-                if len(clean_b) >= 3:
-                    concepts.append(clean_b)
+            for c in numbered:
+                clean_c = c.strip(" *#-_`").strip()
+                if len(clean_c) >= 3 and clean_c.lower() not in [
+                    "core concept", "principles", "application", "step",
+                    "note", "summary", "overview", "conclusion",
+                ]:
+                    concepts.append(clean_c)
+
+            # 2. Bold concept headers: "**Concept Name**"
+            if not concepts:
+                bold_items = re.findall(r"\*\*([^\*\n]+?)\*\*", last_assistant_msg)
+                for b in bold_items:
+                    clean_b = b.strip()
+                    if (
+                        len(clean_b) >= 3
+                        and len(clean_b.split()) <= 6
+                        and not clean_b.lower().startswith("from ")
+                        and not clean_b.lower().startswith("source")
+                        and not clean_b.lower().startswith("based on")
+                    ):
+                        concepts.append(clean_b)
+
+        # 3. Concepts extracted from the last user message (e.g. "What is a Hash Table?")
+        if last_user_msg:
+            cleaned_u = re.sub(
+                r"\b(what is|explain|tell me about|how does|can you explain|define|describe|walk me through|a|an|the)\b",
+                "",
+                last_user_msg,
+                flags=re.IGNORECASE,
+            ).strip(" ?.!:,`*")
+            if len(cleaned_u) >= 3 and cleaned_u not in concepts:
+                concepts.insert(0, cleaned_u)
 
         return concepts, last_doc_id, last_doc_name
 
     def normalize_semantic_query(self, query: str, doc_name: Optional[str] = None) -> str:
         """
-        Strips non-semantic boilerplate, filenames, and filler references from query text.
+        Strips non-semantic conversational filler and exact filenames from query text
+        while preserving technical domain words.
         """
         cleaned = query
         if doc_name:
@@ -108,10 +109,10 @@ class QueryUnderstandingService:
             cleaned = re.sub(re.escape(fn_no_ext), "", cleaned, flags=re.IGNORECASE)
 
         fillers = [
-            r"\b(in this pdf|in this document|from this pdf|from this document|in the file|from the file)\b",
-            r"\b(summarize it|explain it|describe it|tell me about)\b",
+            r"\b(in this pdf|in this document|from this pdf|from this document|in the file|from the file|in this lecture|from the lecture)\b",
+            r"\b(can you please|could you please|please explain|tell me about|tell me|explain to me|walk me through)\b",
             r"\b(in this workspace|from this workspace)\b",
-            r"\b(according to this document|based on this document)\b",
+            r"\b(according to this document|based on this document|based on the notes)\b",
         ]
         for f in fillers:
             cleaned = re.sub(f, "", cleaned, flags=re.IGNORECASE)
@@ -128,6 +129,7 @@ class QueryUnderstandingService:
     ) -> ResolvedQuery:
         """
         Comprehensive query understanding, reference resolution, and intent classification.
+        All grounding decisions are deferred to retrieval & evidence evaluation.
         """
         q_raw = user_message.strip()
         q_lower = q_raw.lower()
@@ -168,8 +170,8 @@ class QueryUnderstandingService:
             if (
                 fn in q_lower
                 or fn_no_ext in q_lower
-                or (len(fn_no_ext) >= 4 and fn_no_ext.split()[0] in q_lower)
-                or (title and title in q_lower)
+                or (len(fn_no_ext) >= 4 and fn_no_ext in q_lower)
+                or (title and len(title) >= 4 and title in q_lower)
             ):
                 target_doc = d
                 break
@@ -178,8 +180,9 @@ class QueryUnderstandingService:
         if not target_doc and current_document_id and current_document_id in doc_map:
             target_doc = doc_map[current_document_id]
 
-        # C. If workspace has exactly 1 document, it is the sole active document
-        if not target_doc and len(docs) == 1:
+        # C. If workspace has exactly 1 document or 1 distinct filename, it is the sole active document
+        distinct_fns = set(d.get("filename") for d in docs if d.get("filename"))
+        if not target_doc and (len(docs) == 1 or len(distinct_fns) == 1) and docs:
             target_doc = docs[0]
 
         # D. Conversation context inheritance
@@ -192,9 +195,9 @@ class QueryUnderstandingService:
         target_doc_pages = target_doc.get("page_count") if target_doc else None
 
         # -------------------------------------------------------------
-        # 3. PAGE RANGE REFERENCE INTENT (e.g. "pages 5 to 8", "pages 10-12")
+        # 3. PAGE / SLIDE RANGE REFERENCE INTENT (e.g. "pages 5 to 8", "slides 2-4")
         # -------------------------------------------------------------
-        range_match = re.search(r"\bpages?\s+(\d+)\s*(?:to|\-|through|\.\.)\s*(\d+)\b", q_lower)
+        range_match = re.search(r"\b(?:pages?|slides?|pgs?)\s*#?\s*(\d+)\s*(?:to|\-|through|\.\.)\s*#?\s*(\d+)\b", q_lower)
         if range_match:
             p_start = int(range_match.group(1))
             p_end = int(range_match.group(2))
@@ -229,13 +232,16 @@ class QueryUnderstandingService:
                 target_document_page_count=target_doc_pages,
                 page_start=p_start,
                 page_end=p_end,
-                semantic_query=f"Pages {p_start} to {p_end} summary",
+                semantic_query=f"Pages {p_start} to {p_end} content and summary",
             )
 
         # -------------------------------------------------------------
-        # 4. SINGLE PAGE REFERENCE INTENT (e.g. "Explain page 7", "What does page 7 say?")
+        # 4. SINGLE PAGE / SLIDE REFERENCE INTENT (e.g. "page 3", "slide 4", "on slide 2")
         # -------------------------------------------------------------
-        page_match = re.search(r"\b(?:page|pg|page\s+number)\s+(\d+)\b", q_lower)
+        page_match = re.search(r"\b(?:page|pg|slide|slide\s+number|page\s+number)\s*#?\s*(\d+)\b", q_lower)
+        is_diagram_query = bool(re.search(r"\b(diagram|figure|chart|graph|flowchart|architecture|drawing|illustration)\b", q_lower))
+        is_table_query = bool(re.search(r"\b(table|tabular|data\s+grid|matrix)\b", q_lower))
+
         if page_match:
             p_num = int(page_match.group(1))
 
@@ -258,38 +264,83 @@ class QueryUnderstandingService:
                     clarification_message=f"Page {p_num} does not exist in **{target_doc_name}**. The document contains {target_doc_pages} pages.",
                 )
 
+            intent_type = "DIAGRAM_FIGURE_QUERY" if is_diagram_query else ("TABLE_QUERY" if is_table_query else "PAGE_REFERENCE")
             return ResolvedQuery(
-                intent="PAGE_REFERENCE",
+                intent=intent_type,
                 target_document_id=target_doc_id,
                 target_document_name=target_doc_name,
                 target_document_page_count=target_doc_pages,
                 page_number=p_num,
-                semantic_query=f"Page {p_num} explanation",
+                semantic_query=self.normalize_semantic_query(q_raw, target_doc_name),
+                is_visual_query=is_diagram_query,
+                is_table_query=is_table_query,
             )
 
         # -------------------------------------------------------------
-        # 5. CONTEXTUAL FOLLOW-UP INTENT
+        # 5. DIAGRAM / FIGURE / TABLE INTENT (Without explicit page number)
         # -------------------------------------------------------------
-        followup_patterns = [
-            r"\b(first|1st)\s+(concept|point|topic|item|algorithm|section|protocol|part)\b",
-            r"\b(second|2nd)\s+(concept|point|topic|item|algorithm|section|protocol|part)\b",
-            r"\b(third|3rd)\s+(concept|point|topic|item|algorithm|section|protocol|part)\b",
-            r"\b(fourth|4th)\s+(concept|point|topic|item|algorithm|section|protocol|part)\b",
-            r"\b(last)\s+(concept|point|topic|item|algorithm|section|protocol|part)\b",
-            r"\bexplain\s+(the\s+)?(first|second|third|fourth|last)\b",
-            r"\b(concrete\s+)?example\s+of\s+(that|this|it|the\s+first|the\s+second)\b",
-            r"\b(explain|simplify|break\s+down)\s+(it|that|this)\b",
-            r"\b(simpler|simple)\s+terms\b",
-            r"\b(what\s+you\s+just\s+explained|we\s+just\s+discussed|you\s+just\s+mentioned)\b",
-            r"\bexam\s+points\s+(from|about|on)\b",
-            r"\bwhy\s+is\s+(that|this|it)\s+(important|used|needed)\b",
-            r"\bhow\s+does\s+(that|this|it)\s+work\b",
-        ]
+        if is_diagram_query or is_table_query:
+            norm_q = self.normalize_semantic_query(q_raw, target_doc_name)
+            return ResolvedQuery(
+                intent="DIAGRAM_FIGURE_QUERY" if is_diagram_query else "TABLE_QUERY",
+                target_document_id=target_doc_id,
+                target_document_name=target_doc_name,
+                target_document_page_count=target_doc_pages,
+                semantic_query=norm_q,
+                is_visual_query=is_diagram_query,
+                is_table_query=is_table_query,
+            )
 
-        is_followup = bool(recent_history) and any(re.search(pat, q_lower) for pat in followup_patterns)
+        # -------------------------------------------------------------
+        # 6. COMPARE / CONTRAST INTENT
+        # -------------------------------------------------------------
+        compare_match = re.search(
+            r"(?:compare|difference\s+between|contrast|how\s+does\s+(.+?)\s+differ\s+from)\s+(.+?)\s+(?:and|with|to|vs|versus)\s+(.+?)(?:\?|\.|$)",
+            q_lower,
+        )
+        if not compare_match:
+            # Short pattern: "X vs Y"
+            vs_match = re.search(r"^(.+?)\s+(?:vs\.?|versus)\s+(.+?)(?:\?|\.|$)", q_lower)
+            if vs_match:
+                ca = vs_match.group(1).strip()
+                cb = vs_match.group(2).strip()
+                if len(ca) >= 2 and len(cb) >= 2:
+                    return ResolvedQuery(
+                        intent="COMPARE_CONTRAST",
+                        target_document_id=target_doc_id,
+                        target_document_name=target_doc_name,
+                        target_document_page_count=target_doc_pages,
+                        resolved_concept_a=ca,
+                        resolved_concept_b=cb,
+                        resolved_reference=f"{ca} vs {cb}",
+                        semantic_query=f"Compare {ca} and {cb}: differences, mechanisms, performance, tradeoffs",
+                    )
+        else:
+            ca = (compare_match.group(1) or compare_match.group(2)).strip()
+            cb = compare_match.group(3).strip()
+            if len(ca) >= 2 and len(cb) >= 2:
+                return ResolvedQuery(
+                    intent="COMPARE_CONTRAST",
+                    target_document_id=target_doc_id,
+                    target_document_name=target_doc_name,
+                    target_document_page_count=target_doc_pages,
+                    resolved_concept_a=ca,
+                    resolved_concept_b=cb,
+                    resolved_reference=f"{ca} vs {cb}",
+                    semantic_query=f"Compare {ca} and {cb}: differences, mechanisms, tradeoffs",
+                )
+
+        # -------------------------------------------------------------
+        # 7. CONTEXTUAL FOLLOW-UP INTENT (Pronouns / Ordinals)
+        # -------------------------------------------------------------
+        q_no_doc_ref = re.sub(r"\b(this|the)\s+(document|pdf|file|lecture|workspace|notes|material)\b", "", q_lower)
+        has_pronoun = bool(re.search(r"\b(its|it's|their|it|this|that|these|those)\b", q_no_doc_ref))
+        has_ordinal = bool(re.search(r"\b(first|1st|second|2nd|third|3rd|fourth|4th|last)\s*(concept|point|topic|item|algorithm|part|one)?\b", q_no_doc_ref))
+        has_continuation = bool(re.search(r"\b(simpler terms|in simple terms|elaborate|continue|more details|explain further|break it down|walk me through)\b", q_no_doc_ref))
+
+        is_followup = bool(recent_history) and (has_pronoun or has_ordinal or has_continuation)
 
         if is_followup and history_concepts:
-            # Ordinal resolution
             resolved_concept = None
             if re.search(r"\b(first|1st)\b", q_lower) and len(history_concepts) >= 1:
                 resolved_concept = history_concepts[0]
@@ -297,22 +348,16 @@ class QueryUnderstandingService:
                 resolved_concept = history_concepts[1]
             elif re.search(r"\b(third|3rd)\b", q_lower) and len(history_concepts) >= 3:
                 resolved_concept = history_concepts[2]
-            elif re.search(r"\b(fourth|4th)\b", q_lower) and len(history_concepts) >= 4:
-                resolved_concept = history_concepts[3]
             elif re.search(r"\b(last)\b", q_lower):
                 resolved_concept = history_concepts[-1]
             else:
                 resolved_concept = history_concepts[0]
 
-            # Formulate normalized semantic query without leaving "first concept" in text
-            if "example" in q_lower:
-                sem_q = f"Concrete example and practical mechanism of {resolved_concept}"
-            elif "simpler" in q_lower or "simplify" in q_lower:
-                sem_q = f"Fundamental principles and intuitive explanation of {resolved_concept}"
-            elif "exam" in q_lower:
-                sem_q = f"Important exam definitions and key concepts for {resolved_concept}"
-            else:
-                sem_q = f"Detailed explanation and technical architecture of {resolved_concept}"
+            # Rewrite query with antecedent substituted
+            subbed = re.sub(r"\b(its|it's|their)\b", f"the {resolved_concept}'s", q_raw, flags=re.IGNORECASE)
+            subbed = re.sub(r"\b(it|this|that)\b", f"'{resolved_concept}'", subbed, flags=re.IGNORECASE)
+            subbed = re.sub(r"\b(the first concept|the second concept|the last concept)\b", f"'{resolved_concept}'", subbed, flags=re.IGNORECASE)
+            sem_q = self.normalize_semantic_query(subbed, target_doc_name)
 
             return ResolvedQuery(
                 intent="CONTEXTUAL_FOLLOWUP",
@@ -325,7 +370,7 @@ class QueryUnderstandingService:
             )
 
         # -------------------------------------------------------------
-        # 6. DOCUMENT TOPIC QUERY INTENT
+        # 8. DOCUMENT TOPIC & SUMMARY INTENT
         # -------------------------------------------------------------
         topic_patterns = [
             r"what are the (main |key |major )?topics in this document",
@@ -349,26 +394,20 @@ class QueryUnderstandingService:
                 semantic_query=f"Main topics and key concepts in {target_doc_name or 'document'}",
             )
 
-        # -------------------------------------------------------------
-        # 7. DOCUMENT SUMMARY INTENT
-        # -------------------------------------------------------------
         summary_keywords = [
             "summar",
             "what are the concepts",
-            "what concepts",
-            "overview",
-            "all concepts",
+            "overview of this",
+            "overview of the",
             "syllabus",
-            "tell me about this",
             "explain this pdf",
             "what is this document about",
-            "key points",
+            "key takeaways",
             "table of contents",
         ]
         is_summary = any(k in q_lower for k in summary_keywords) or (
             target_doc_name and ("summarize it" in q_lower or "summarize" in q_lower)
         )
-
         if is_summary:
             if not target_doc and len(docs) > 1:
                 doc_list_text = "\n".join([f"{i+1}. {d.get('filename')}" for i, d in enumerate(docs)])
@@ -387,7 +426,7 @@ class QueryUnderstandingService:
             )
 
         # -------------------------------------------------------------
-        # 8. SPECIFIC CONCEPT INTENT
+        # 9. SPECIFIC CONCEPT (Default: all conceptual and paraphrased queries)
         # -------------------------------------------------------------
         norm_query = self.normalize_semantic_query(q_raw, target_doc_name)
         return ResolvedQuery(
@@ -400,3 +439,4 @@ class QueryUnderstandingService:
 
 
 query_understanding_service = QueryUnderstandingService()
+

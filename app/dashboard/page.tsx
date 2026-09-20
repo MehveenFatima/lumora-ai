@@ -377,10 +377,10 @@ export default function GlobalDashboardPage() {
           </div>
 
           <div className="space-y-3">
-            {activities.length === 0 ? (
+            {(activities || []).length === 0 ? (
               <p className="py-4 text-center text-xs text-muted-foreground">No recent activities.</p>
             ) : (
-              activities.slice(0, 5).map((act) => (
+              (activities || []).slice(0, 5).map((act) => (
                 <div
                   key={act.id}
                   className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-background/50 p-3.5 text-xs"

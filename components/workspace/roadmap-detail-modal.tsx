@@ -57,7 +57,7 @@ export function RoadmapDetailModal({
 
           <div className="flex items-center gap-3">
             <Badge variant="success" size="md">
-              {roadmap.overallProgress}% Completed
+              {roadmap.overallProgress ?? 0}% Completed
             </Badge>
             <button
               onClick={onClose}
@@ -120,7 +120,7 @@ export function RoadmapDetailModal({
 
           {/* Stages List */}
           <div className="space-y-6">
-            {roadmap.stages.map((stage, stageIdx) => (
+            {(roadmap.stages || []).map((stage, stageIdx) => (
               <div key={stage.id} className="rounded-2xl border border-border bg-card/60 p-5">
                 <div className="flex items-center justify-between">
                   <div>
@@ -132,7 +132,7 @@ export function RoadmapDetailModal({
                 </div>
 
                 <div className="mt-4 flex flex-col gap-3">
-                  {stage.nodes.map((node) => {
+                  {(stage.nodes || []).map((node) => {
                     const isDone = node.status === 'completed'
                     const isInProgress = node.status === 'in_progress'
 

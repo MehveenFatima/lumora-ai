@@ -20,6 +20,10 @@ import {
   LearningReadiness,
   AIRecommendation,
   Roadmap,
+  RoadmapStage,
+  RoadmapNode,
+  RoadmapNodeStatus,
+  RoadmapAdaptation,
   QuizQuestion,
   QuizResult,
   FlashcardDeck,
@@ -400,7 +404,7 @@ export const workspaceService = {
     return this.getAIRecommendation(workspaceId)
   },
 
-  async getRoadmap(workspaceId: string): Promise<any> {
+  async getRoadmap(workspaceId: string): Promise<Roadmap | null> {
     if (!workspaceId) return null
 
     try {
@@ -410,31 +414,98 @@ export const workspaceService = {
       ])
 
       if (topicsRes && topicsRes.topics && topicsRes.topics.length > 0) {
-        const steps = topicsRes.topics.map((t: any) => {
-          const mPct = t.mastery_percentage || 50
-          const state = mPct >= 75 ? 'done' : mPct >= 50 ? 'active' : 'todo'
-          const meta = mPct >= 75 ? 'Mastered' : mPct >= 50 ? `${mPct}% Mastery • In Progress` : 'Upcoming Milestone'
+        const stages: RoadmapStage[] = topicsRes.topics.map((t: any, idx: number) => {
+          const mPct =
+            t.mastery_percentage !== undefined
+              ? t.mastery_percentage
+              : Math.round((t.mastery_probability || 0.3) * 100)
+
+          const stageLevel: 'foundations' | 'core' | 'advanced' | 'mastery' =
+            idx === 0 ? 'foundations' : idx === 1 ? 'core' : idx === 2 ? 'advanced' : 'mastery'
+
+          const rawConcepts = t.concepts || []
+          const nodes: RoadmapNode[] = rawConcepts.map((c: any, cIdx: number) => {
+            const cMastery =
+              c.mastery_percentage !== undefined
+                ? c.mastery_percentage
+                : Math.round((c.p_mastery || 0.3) * 100)
+            const nodeStatus: RoadmapNodeStatus =
+              cMastery >= 75 ? 'completed' : cMastery >= 40 ? 'in_progress' : 'upcoming'
+
+            return {
+              id: `node_${workspaceId}_${idx}_${cIdx}`,
+              title: c.concept || c.name || 'Concept Node',
+              description: `Mastery: ${cMastery}% (${(c.mastery_status || 'developing').replace(/_/g, ' ')})`,
+              stage: stageLevel,
+              status: nodeStatus,
+              mastery: cMastery,
+              estimatedHours: Math.max(2, Math.round((100 - cMastery) / 15)),
+              prerequisiteIds: cIdx > 0 ? [`node_${workspaceId}_${idx}_${cIdx - 1}`] : [],
+            }
+          })
+
+          if (nodes.length === 0) {
+            const nodeStatus: RoadmapNodeStatus =
+              mPct >= 75 ? 'completed' : mPct >= 40 ? 'in_progress' : 'upcoming'
+            nodes.push({
+              id: `node_${workspaceId}_${idx}_0`,
+              title: t.topic,
+              description: `Mastery: ${mPct}% (${(t.mastery_status || 'developing').replace(/_/g, ' ')})`,
+              stage: stageLevel,
+              status: nodeStatus,
+              mastery: mPct,
+              estimatedHours: Math.max(3, (t.concept_count || 1) * 2),
+              prerequisiteIds: [],
+            })
+          }
+
           return {
-            title: t.topic,
-            meta,
-            state: state as 'done' | 'active' | 'todo',
+            id: `stg_${workspaceId}_${idx}`,
+            name: t.topic,
+            description: `${nodes.length} curriculum node${nodes.length > 1 ? 's' : ''} • ${mPct}% mastery`,
+            nodes,
           }
         })
-        const recommendations = (profileRes?.recommendations || []).map((r: any) => ({
-          title: `Review ${r.concept}`,
-          reason: `Mastery at ${Math.round(r.mastery_probability * 100)}% with ${r.gap_priority >= 0.7 ? 'high' : 'medium'} priority`,
-          tone: (r.gap_priority >= 0.7 ? 'warning' : 'default') as 'warning' | 'default' | 'success',
-        }))
-        return {
-          id: `roadmap_${workspaceId}`,
-          workspaceId,
-          steps,
-          recommendations,
-          progressPercentage: profileRes?.overall_mastery || 60,
+
+        let adaptation: RoadmapAdaptation | undefined = undefined
+        if (profileRes?.recommendations && profileRes.recommendations.length > 0) {
+          const rec = profileRes.recommendations[0]
+          adaptation = {
+            hasAdaptation: true,
+            title: `Curriculum Path Adapted: Focus on ${rec.concept}`,
+            triggerReason: `Diagnostic assessment identified ${rec.concept} with ${Math.round((rec.gap_priority || 0.5) * 100)}% gap priority in ${rec.topic}.`,
+            beforePath: stages.slice(0, 3).map((s) => s.name),
+            nowPath: [rec.concept, ...stages.slice(0, 2).map((s) => s.name)],
+            detailedExplanation: `Targeted review recommended for ${rec.concept} to reinforce prerequisites before progressing to advanced stages.`,
+            updatedAt: 'Recently',
+          }
         }
+
+        const overallProgress =
+          profileRes?.overall_mastery !== undefined
+            ? profileRes.overall_mastery
+            : topicsRes.overall_mastery !== undefined
+            ? Math.round(topicsRes.overall_mastery)
+            : Math.round(
+                stages.reduce((acc, s) => acc + (s.nodes[0]?.mastery || 0), 0) / Math.max(stages.length, 1)
+              )
+
+        const dynamicRoadmap: Roadmap = {
+          workspaceId,
+          overallProgress,
+          stages,
+          adaptation,
+        }
+
+        roadmapsCache[workspaceId] = dynamicRoadmap
+        return dynamicRoadmap
       }
     } catch (e) {
       console.warn('Failed to fetch dynamic roadmap:', e)
+    }
+
+    if (workspaceId === 'dsa' && !roadmapsCache['dsa']) {
+      return dsaRoadmap ? { ...dsaRoadmap } : null
     }
 
     return roadmapsCache[workspaceId] || null

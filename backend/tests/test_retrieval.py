@@ -6,6 +6,24 @@ from backend.app.services.retrieval import retrieval_service
 
 @pytest.mark.asyncio
 async def test_strict_workspace_isolation():
+    from backend.app.repositories.documents import document_repo
+
+    # Create documents first to satisfy foreign key constraint
+    doc_dsa = await document_repo.create(
+        workspace_id="dsa",
+        title="DSA Notes",
+        filename="DSA_Notes.pdf",
+        file_type="pdf",
+        file_size=1024,
+    )
+    doc_os = await document_repo.create(
+        workspace_id="os",
+        title="OS Notes",
+        filename="OS_Notes.pdf",
+        file_type="pdf",
+        file_size=1024,
+    )
+
     # Insert a chunk into 'dsa' workspace
     dsa_text = "Red-Black Trees maintain balance through color rotation invariants."
     dsa_emb = await embedding_service.get_embedding(dsa_text)
@@ -14,7 +32,7 @@ async def test_strict_workspace_isolation():
             {
                 "id": "chunk_dsa_1",
                 "workspace_id": "dsa",
-                "document_id": "doc_dsa_1",
+                "document_id": doc_dsa["id"],
                 "chunk_index": 0,
                 "page_number": 5,
                 "text": dsa_text,
@@ -32,7 +50,7 @@ async def test_strict_workspace_isolation():
             {
                 "id": "chunk_os_1",
                 "workspace_id": "os",
-                "document_id": "doc_os_1",
+                "document_id": doc_os["id"],
                 "chunk_index": 0,
                 "page_number": 12,
                 "text": os_text,

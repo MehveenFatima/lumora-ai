@@ -272,6 +272,7 @@ class ChunkRepository:
                             c.page_number,
                             c.heading,
                             c.text,
+                            c.metadata,
                             d.filename as document_name,
                             d.title as document_title,
                             1 - (c.embedding <=> $2::vector) AS similarity_score
@@ -288,6 +289,14 @@ class ChunkRepository:
                         top_k,
                     )
                     for r in rows:
+                        meta = r["metadata"]
+                        if isinstance(meta, str):
+                            try:
+                                meta = json.loads(meta)
+                            except Exception:
+                                meta = {}
+                        elif not isinstance(meta, dict):
+                            meta = {}
                         results.append(
                             {
                                 "id": str(r["id"]),
@@ -299,6 +308,7 @@ class ChunkRepository:
                                 "page_number": r["page_number"] or 1,
                                 "heading": r["heading"],
                                 "text": r["text"],
+                                "metadata": meta,
                                 "similarity_score": float(r["similarity_score"]),
                             }
                         )
@@ -334,11 +344,122 @@ class ChunkRepository:
                     "page_number": item.get("page_number", 1),
                     "heading": item.get("heading"),
                     "text": item["text"],
+                    "metadata": item.get("metadata", {}),
                     "similarity_score": item["similarity_score"],
                 }
             )
 
         return results
+
+    async def search_lexical_chunks(
+        self,
+        workspace_id: str,
+        query_tokens: List[str],
+        top_k: int = 15,
+        document_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Performs workspace-wide lexical search matching tokens against text and heading across all chunks.
+        """
+        results: List[Dict[str, Any]] = []
+        if not query_tokens:
+            return results
+
+        clean_tokens = [t.lower() for t in query_tokens if len(t) >= 2]
+        if not clean_tokens:
+            return results
+
+        pool = await get_db_pool()
+        if pool:
+            try:
+                doc_uuid = uuid.UUID(str(document_id)) if document_id and len(str(document_id)) == 36 else None
+                async with pool.acquire() as conn:
+                    rows = await conn.fetch(
+                        """
+                        SELECT 
+                            c.id,
+                            c.workspace_id,
+                            c.document_id,
+                            c.chunk_index,
+                            c.page_number,
+                            c.heading,
+                            c.text,
+                            c.metadata,
+                            d.filename as document_name,
+                            d.title as document_title
+                        FROM document_chunks c
+                        JOIN documents d ON d.id = c.document_id
+                        WHERE c.workspace_id = $1
+                          AND ($2::uuid IS NULL OR c.document_id = $2::uuid)
+                        """,
+                        workspace_id,
+                        doc_uuid,
+                    )
+                    scored_rows = []
+                    for r in rows:
+                        text_lower = (r["text"] or "").lower()
+                        heading_lower = (r["heading"] or "").lower()
+                        doc_name_lower = (r["document_name"] or "").lower()
+                        meta = r["metadata"]
+                        if isinstance(meta, str):
+                            try:
+                                meta = json.loads(meta)
+                            except Exception:
+                                meta = {}
+                        elif not isinstance(meta, dict):
+                            meta = {}
+
+                        matches = 0
+                        heading_matches = 0
+                        for tok in clean_tokens:
+                            if tok in heading_lower:
+                                heading_matches += 1
+                                matches += 2
+                            elif tok in text_lower:
+                                matches += 1
+                            elif tok in doc_name_lower:
+                                matches += 1
+
+                        if matches > 0:
+                            score = min(1.0, (matches / (len(clean_tokens) * 1.5)) + (0.1 if heading_matches else 0.0))
+                            scored_rows.append((r, score, meta))
+
+                    scored_rows.sort(key=lambda x: x[1], reverse=True)
+                    for r, score, meta in scored_rows[:top_k]:
+                        results.append(
+                            {
+                                "id": str(r["id"]),
+                                "workspace_id": r["workspace_id"],
+                                "document_id": str(r["document_id"]),
+                                "document_name": r["document_name"],
+                                "document_title": r["document_title"],
+                                "chunk_index": r["chunk_index"],
+                                "page_number": r["page_number"] or 1,
+                                "heading": r["heading"],
+                                "text": r["text"],
+                                "metadata": meta,
+                                "lexical_score": score,
+                            }
+                        )
+                    return results
+            except Exception as e:
+                logger.error(f"Error executing lexical search in DB: {e}")
+
+        # In-memory fallback
+        matching = []
+        for c in _memory_chunks.values():
+            if c["workspace_id"] != workspace_id:
+                continue
+            if document_id and str(c.get("document_id")) != str(document_id):
+                continue
+            text_lower = (c.get("text") or "").lower()
+            heading_lower = (c.get("heading") or "").lower()
+            matches = sum(1 for tok in clean_tokens if tok in text_lower or tok in heading_lower)
+            if matches > 0:
+                score = min(1.0, matches / len(clean_tokens))
+                matching.append(({**c, "lexical_score": score}, score))
+        matching.sort(key=lambda x: x[1], reverse=True)
+        return [item[0] for item in matching[:top_k]]
 
     async def get_chunks_by_page(
         self,

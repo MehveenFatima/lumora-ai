@@ -327,11 +327,11 @@ class TutorService:
         recent_history: List[Dict[str, Any]],
         resolved: ResolvedQuery,
     ) -> Tuple[str, List[str]]:
-        # If no chunks passed threshold, produce strict ungrounded refusal response
+        # If not grounded or no chunks, return strict truthful refusal
         if not is_grounded or not chunks:
             text = (
                 "Your workspace sources do not contain enough information to answer that reliably.\n\n"
-                f"I checked all indexed resources in **{workspace_name}**, but could not find a sufficiently relevant passage. "
+                f"I checked all indexed resources in **{workspace_name}**, but could not find relevant material covering your question. "
                 "Would you like to upload additional notes or lecture slides covering this topic?"
             )
             follow_ups = [
@@ -340,11 +340,38 @@ class TutorService:
             ]
             return text, follow_ups
 
+        # Visual Grounding: render page image if visual query and PDF available
+        page_png_bytes = None
+        has_visual_attached = False
+        if resolved.is_visual_query and chunks:
+            target_page = resolved.page_number or chunks[0].page_number
+            target_doc_id = resolved.target_document_id or chunks[0].document_id
+            doc_record = await document_repo.get_by_id(target_doc_id)
+            if doc_record:
+                file_bytes = None
+                sp = doc_record.get("storage_path")
+                if sp:
+                    from backend.app.services.storage import storage_service
+                    file_bytes = await storage_service.get_file_bytes(sp)
+                if not file_bytes:
+                    from pathlib import Path
+                    fn = doc_record.get("filename", "")
+                    for match in Path(".").glob(f"**/{fn}"):
+                        if match.is_file():
+                            file_bytes = match.read_bytes()
+                            break
+                if file_bytes and doc_record.get("file_type") == "pdf":
+                    from backend.app.services.document_parser import document_parser
+                    page_png_bytes = document_parser.render_page_image(file_bytes, target_page)
+                    has_visual_attached = page_png_bytes is not None
+
         # Build context prompt
         context_parts = []
         for i, c in enumerate(chunks, 1):
+            table_flag = " [TABLE PRESENT]" if c.has_table else ""
+            diagram_flag = " [DIAGRAM/FIGURE PRESENT]" if c.has_diagram else ""
             context_parts.append(
-                f"--- SOURCE [{i}]: {c.document_name} (Page/Slide {c.page_number}) ---\n"
+                f"--- SOURCE [{i}]: {c.document_name} (Page/Slide {c.page_number}){table_flag}{diagram_flag} ---\n"
                 f"{c.text}\n"
             )
         context_str = "\n".join(context_parts)
@@ -358,12 +385,19 @@ class TutorService:
             history_str = "RECENT CONVERSATION HISTORY:\n" + "\n".join(history_lines) + "\n\n"
 
         ref_instruction = ""
-        if resolved.intent == "PAGE_REFERENCE" and resolved.page_number:
-            ref_instruction = f"PAGE INSTRUCTION: The learner specifically asked about Page {resolved.page_number} of {resolved.target_document_name or 'the document'}. Explain the exact concepts and mechanisms from that page.\n\n"
+        if resolved.intent in ["PAGE_REFERENCE", "DIAGRAM_FIGURE_QUERY", "TABLE_QUERY"] and resolved.page_number:
+            ref_instruction = f"PAGE INSTRUCTION: The learner specifically asked about Page/Slide {resolved.page_number} of {resolved.target_document_name or 'the document'}. Ground your answer specifically in that page.\n\n"
         elif resolved.intent == "PAGE_RANGE_REFERENCE" and resolved.page_start and resolved.page_end:
-            ref_instruction = f"PAGE RANGE INSTRUCTION: The learner requested an explanation of Pages {resolved.page_start} through {resolved.page_end} of {resolved.target_document_name or 'the document'}. Summarize and explain the content from these pages.\n\n"
+            ref_instruction = f"PAGE RANGE INSTRUCTION: The learner requested an explanation of Pages/Slides {resolved.page_start} through {resolved.page_end} of {resolved.target_document_name or 'the document'}. Summarize and explain the content from these pages.\n\n"
+        elif resolved.intent == "COMPARE_CONTRAST" and resolved.resolved_concept_a and resolved.resolved_concept_b:
+            ref_instruction = f"COMPARATIVE INSTRUCTION: Compare and contrast '{resolved.resolved_concept_a}' and '{resolved.resolved_concept_b}' based strictly on the provided sources. Contrast their mechanisms, complexity, and tradeoffs.\n\n"
         elif resolved.intent == "CONTEXTUAL_FOLLOWUP" and resolved.resolved_reference:
             ref_instruction = f"CONTEXTUAL REFERENCE FOCUS: The learner's question refers to '{resolved.resolved_reference}'. Ground your explanation specifically in the provided source passages related to {resolved.resolved_reference}.\n\n"
+
+        if has_visual_attached:
+            ref_instruction += "VISUAL GROUNDING: The actual rendered page image is attached to this request. Analyze the visual elements and explain what is depicted based strictly on the image and text.\n\n"
+        elif resolved.is_visual_query:
+            ref_instruction += "NOTE ON VISUALS: No image is attached. Discuss only what is explicitly described in the text, table data, or captions. Do not fabricate visual elements.\n\n"
 
         prompt = (
             f"{TUTOR_SYSTEM_PROMPT}\n\n"
@@ -380,7 +414,11 @@ class TutorService:
             try:
                 import google.generativeai as genai
                 model = genai.GenerativeModel(self.model_name)
-                response = model.generate_content(prompt)
+                if has_visual_attached and page_png_bytes:
+                    contents = [prompt, {"mime_type": "image/png", "data": page_png_bytes}]
+                else:
+                    contents = prompt
+                response = model.generate_content(contents)
                 if response and response.text:
                     answer = response.text.strip()
                     follow_ups = [
@@ -392,27 +430,28 @@ class TutorService:
             except Exception as e:
                 logger.error(f"Gemini API text generation error: {e}")
 
-        # Dynamic synthesis directly from actual extracted chunk text
-        summary_chunks_text = "\n\n".join(
-            [f"**From {c.document_name} (Page {c.page_number})**:\n{c.text}" for c in chunks[:5]]
-        )
-        focus_header = f" regarding **{resolved.resolved_reference}**" if resolved.resolved_reference else ""
-        if resolved.intent == "PAGE_REFERENCE" and resolved.page_number:
-            focus_header = f" for **Page {resolved.page_number}**"
-        elif resolved.intent == "PAGE_RANGE_REFERENCE" and resolved.page_start:
-            focus_header = f" for **Pages {resolved.page_start}–{resolved.page_end}**"
+        # Strict Rule 1 Enforcement: If generation model is unavailable or rate-limited,
+        # do NOT locally synthesize simulated AI text. Return truthful model-unavailable
+        # notice accompanied by deterministic direct source excerpts.
+        excerpts = []
+        for c in chunks[:3]:
+            excerpts.append(
+                f"**From {c.document_name} (Page/Slide {c.page_number})**:\n> "
+                + c.text.strip().replace("\n", "\n> ")
+            )
+        excerpts_str = "\n\n".join(excerpts)
 
-        grounded_answer = (
-            f"Based on your indexed workspace resource **{chunks[0].document_name}**{focus_header}:\n\n"
-            f"{summary_chunks_text}\n\n"
-            "Would you like me to walk through any of these specific mechanisms in greater detail or provide practical exercises?"
+        deterministic_answer = (
+            "⚠️ **AI Generation Model Temporarily Rate-Limited / Unavailable**\n\n"
+            f"The following authoritative excerpts were retrieved from your indexed workspace resources for **{workspace_name}**:\n\n"
+            f"{excerpts_str}\n\n"
+            "*(Please retry in a moment when generation quota resets for conversational explanation.)*"
         )
         follow_ups = [
-            "Explain the first concept in more detail",
-            "Give a concrete example of that",
-            "What are the important exam points from what we just discussed?",
+            "What sources are currently in this workspace?",
+            "What topics are currently indexed?",
         ]
-        return grounded_answer, follow_ups
+        return deterministic_answer, follow_ups
 
 
 tutor_service = TutorService()

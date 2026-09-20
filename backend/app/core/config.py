@@ -24,11 +24,32 @@ class Settings(BaseSettings):
 
     # Google Gemini AI Configuration
     gemini_api_key: Optional[str] = Field(default=None, validation_alias="GEMINI_API_KEY")
-    gemini_model: str = Field(default="models/gemini-3.6-flash", validation_alias="GEMINI_MODEL")
+    gemini_model: str = Field(default="models/gemini-flash-latest", validation_alias="GEMINI_MODEL")
     gemini_embedding_model: str = Field(
         default="models/gemini-embedding-001", validation_alias="GEMINI_EMBEDDING_MODEL"
     )
     embedding_dimensions: int = Field(default=768, validation_alias="EMBEDDING_DIMENSIONS")
+
+    # Secondary AI Provider Configuration (OpenAI-compatible)
+    secondary_ai_provider_name: str = Field(default="openai_compatible", validation_alias="SECONDARY_AI_PROVIDER_NAME")
+    secondary_ai_api_key: Optional[str] = Field(default=None, validation_alias="SECONDARY_AI_API_KEY")
+    secondary_ai_base_url: str = Field(default="https://api.openai.com/v1", validation_alias="SECONDARY_AI_BASE_URL")
+    secondary_ai_model: str = Field(default="gpt-4o-mini", validation_alias="SECONDARY_AI_MODEL")
+    openai_api_key: Optional[str] = Field(default=None, validation_alias="OPENAI_API_KEY")
+    openai_base_url: Optional[str] = Field(default=None, validation_alias="OPENAI_BASE_URL")
+    openai_model: Optional[str] = Field(default=None, validation_alias="OPENAI_MODEL")
+
+    @property
+    def effective_secondary_api_key(self) -> Optional[str]:
+        return self.secondary_ai_api_key or self.openai_api_key
+
+    @property
+    def effective_secondary_base_url(self) -> str:
+        return self.secondary_ai_base_url or self.openai_base_url or "https://api.openai.com/v1"
+
+    @property
+    def effective_secondary_model(self) -> str:
+        return self.secondary_ai_model or self.openai_model or "gpt-4o-mini"
 
     # Supabase & PostgreSQL Credentials
     supabase_url: Optional[str] = Field(default=None, validation_alias="SUPABASE_URL")

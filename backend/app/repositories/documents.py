@@ -118,6 +118,7 @@ class DocumentRepository:
         page_count: Optional[int] = None,
         chunk_count: Optional[int] = None,
         summary: Optional[str] = None,
+        storage_path: Optional[str] = None,
         error_message: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         now = datetime.now(timezone.utc)
@@ -132,8 +133,9 @@ class DocumentRepository:
                             page_count = COALESCE($3, page_count), 
                             chunk_count = COALESCE($4, chunk_count),
                             summary = COALESCE($5, summary),
-                            error_message = $6,
-                            updated_at = $7
+                            storage_path = COALESCE($6, storage_path),
+                            error_message = $7,
+                            updated_at = $8
                         WHERE id = $1
                         """,
                         uuid.UUID(str(document_id)),
@@ -141,6 +143,7 @@ class DocumentRepository:
                         page_count,
                         chunk_count,
                         summary,
+                        storage_path,
                         error_message,
                         now,
                     )
@@ -161,6 +164,8 @@ class DocumentRepository:
                 doc["chunk_count"] = chunk_count
             if summary is not None:
                 doc["summary"] = summary
+            if storage_path is not None:
+                doc["storage_path"] = storage_path
             doc["error_message"] = error_message
             doc["updated_at"] = now
             return doc

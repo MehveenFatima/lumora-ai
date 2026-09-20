@@ -110,10 +110,11 @@ export default function WorkspaceLandingPage() {
     )
   }
 
-  const strongTopics = topics.filter((t) => t.status === 'strong')
-  const developingTopics = topics.filter((t) => t.status === 'developing')
-  const needsReviewTopics = topics.filter((t) => t.status === 'needs_review')
-  const criticalGapTopics = topics.filter((t) => t.status === 'critical_gap')
+  const safeTopics = topics || []
+  const strongTopics = safeTopics.filter((t) => t.status === 'strong')
+  const developingTopics = safeTopics.filter((t) => t.status === 'developing')
+  const needsReviewTopics = safeTopics.filter((t) => t.status === 'needs_review')
+  const criticalGapTopics = safeTopics.filter((t) => t.status === 'critical_gap')
 
   return (
     <div className="mx-auto w-full max-w-[1360px] px-4 py-6 md:px-6 md:py-8 space-y-6">
@@ -308,7 +309,7 @@ export default function WorkspaceLandingPage() {
               </Link>
             </div>
 
-            {topics.length === 0 ? (
+            {safeTopics.length === 0 ? (
               <div className="mt-5 rounded-2xl border border-dashed border-border bg-background/50 p-6 text-center">
                 <BookOpen className="mx-auto size-8 text-muted-foreground/60" />
                 <p className="mt-2 text-xs font-semibold text-foreground">No Topics Indexed Yet</p>
@@ -427,11 +428,11 @@ export default function WorkspaceLandingPage() {
                 </p>
               </div>
               <Badge variant="warning" size="sm">
-                {knowledgeGaps.length} Actionable Gaps
+                {(knowledgeGaps || []).length} Actionable Gaps
               </Badge>
             </div>
 
-            {knowledgeGaps.length === 0 ? (
+            {(knowledgeGaps || []).length === 0 ? (
               <div className="mt-4 rounded-2xl border border-dashed border-border bg-background/50 p-6 text-center">
                 <CheckCircle2 className="mx-auto size-7 text-success" />
                 <p className="mt-2 text-xs font-semibold text-foreground">No Knowledge Gaps Detected</p>
@@ -441,7 +442,7 @@ export default function WorkspaceLandingPage() {
               </div>
             ) : (
               <div className="mt-4 flex flex-col gap-3">
-                {knowledgeGaps.slice(0, 3).map((gap) => (
+                {(knowledgeGaps || []).slice(0, 3).map((gap) => (
                   <div
                     key={gap.id}
                     className="rounded-2xl border border-border bg-background/50 p-4 transition-colors hover:border-primary/40"
@@ -490,7 +491,7 @@ export default function WorkspaceLandingPage() {
           </section>
 
           {/* PRIORITY 4: "Where am I going?" → ADAPTIVE ROADMAP */}
-          {roadmap ? (
+          {roadmap && Array.isArray(roadmap.stages) && roadmap.stages.length > 0 ? (
             <section className="rounded-3xl border border-border bg-card p-5 shadow-soft md:p-6">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
@@ -530,7 +531,7 @@ export default function WorkspaceLandingPage() {
 
               {/* Compact Visual Path Preview */}
               <div className="mt-5 space-y-3">
-                {roadmap.stages.slice(0, 2).map((stage) => (
+                {(roadmap.stages || []).slice(0, 2).map((stage) => (
                   <div key={stage.id} className="rounded-2xl border border-border/80 bg-background/50 p-4">
                     <div className="flex items-center justify-between text-xs font-semibold text-foreground">
                       <span>{stage.name}</span>
@@ -538,7 +539,7 @@ export default function WorkspaceLandingPage() {
                     </div>
 
                     <div className="mt-3 flex flex-col gap-2">
-                      {stage.nodes.slice(0, 3).map((node) => (
+                      {(stage.nodes || []).slice(0, 3).map((node) => (
                         <div
                           key={node.id}
                           className="flex items-center justify-between rounded-xl border border-border/60 bg-card p-2.5 text-xs"
@@ -587,24 +588,24 @@ export default function WorkspaceLandingPage() {
                   </p>
                 </div>
                 <Badge variant="default" size="sm">
-                  {studyPlan.todayCompletedMinutes} / {studyPlan.dailyTargetMinutes} min
+                  {studyPlan.todayCompletedMinutes ?? 0} / {studyPlan.dailyTargetMinutes ?? 0} min
                 </Badge>
               </div>
 
               <div className="mt-3">
                 <Progress
-                  value={studyPlan.dailyTargetMinutes > 0 ? (studyPlan.todayCompletedMinutes / studyPlan.dailyTargetMinutes) * 100 : 0}
+                  value={(studyPlan.dailyTargetMinutes ?? 0) > 0 ? ((studyPlan.todayCompletedMinutes ?? 0) / (studyPlan.dailyTargetMinutes || 1)) * 100 : 0}
                   className="h-2"
                 />
               </div>
 
               <div className="mt-4 flex flex-col gap-2.5">
-                {studyPlan.tasks.length === 0 ? (
+                {(studyPlan.tasks || []).length === 0 ? (
                   <p className="py-4 text-center text-xs text-muted-foreground italic">
                     No scheduled tasks yet for today.
                   </p>
                 ) : (
-                  studyPlan.tasks.slice(0, 4).map((task) => (
+                  (studyPlan.tasks || []).slice(0, 4).map((task) => (
                     <div
                       key={task.id}
                       className={cn(
@@ -666,10 +667,10 @@ export default function WorkspaceLandingPage() {
             </div>
 
             <div className="mt-4 space-y-4">
-              {activities.length === 0 ? (
+              {(activities || []).length === 0 ? (
                 <p className="py-4 text-center text-xs text-muted-foreground italic">No activities recorded yet.</p>
               ) : (
-                activities.slice(0, 4).map((act) => (
+                (activities || []).slice(0, 4).map((act) => (
                   <div key={act.id} className="relative flex gap-3 text-xs">
                     <span className="mt-1 size-2 shrink-0 rounded-full bg-primary" />
                     <div className="flex-1 min-w-0">
@@ -733,7 +734,7 @@ function RoadmapDetailModal({
         </div>
 
         <div className="mt-6 space-y-6">
-          {roadmap.stages.map((stage, sIdx) => (
+          {(roadmap.stages || []).map((stage, sIdx) => (
             <div key={stage.id} className="rounded-2xl border border-border bg-background/60 p-5">
               <div className="flex items-center justify-between border-b border-border pb-3">
                 <div>
@@ -742,25 +743,25 @@ function RoadmapDetailModal({
                 </div>
                 <Badge
                   variant={
-                    stage.nodes.every((n) => n.status === 'completed')
+                    (stage.nodes || []).every((n) => n.status === 'completed')
                       ? 'success'
-                      : stage.nodes.some((n) => n.status === 'in_progress')
+                      : (stage.nodes || []).some((n) => n.status === 'in_progress')
                       ? 'default'
                       : 'neutral'
                   }
                   size="sm"
                   className="capitalize"
                 >
-                  {stage.nodes.every((n) => n.status === 'completed')
+                  {(stage.nodes || []).every((n) => n.status === 'completed')
                     ? 'Completed'
-                    : stage.nodes.some((n) => n.status === 'in_progress')
+                    : (stage.nodes || []).some((n) => n.status === 'in_progress')
                     ? 'In Progress'
                     : 'Upcoming'}
                 </Badge>
               </div>
 
               <div className="mt-4 space-y-3">
-                {stage.nodes.map((node) => (
+                {(stage.nodes || []).map((node) => (
                   <div
                     key={node.id}
                     className="flex items-center justify-between rounded-xl border border-border/80 bg-card p-3 text-xs"
