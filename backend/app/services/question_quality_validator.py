@@ -86,6 +86,38 @@ GENERIC_CONCEPT_BLACKLIST = frozenset({
     "workspace document", "introduction", "overview", "summary", "basics",
 })
 
+GENERIC_CONCEPT_PREFIX_PATTERNS = [
+    re.compile(r"^\s*(?:basics\s+of|introduction\s+to|overview\s+of|fundamentals\s+of|guide\s+to|notes\s+on|chapter\s+on|section\s+on|discussion\s+on|summary\s+of|details\s+of)\s+", re.IGNORECASE),
+]
+
+INSTRUCTIONAL_HEADING_PATTERNS = [
+    re.compile(r"^\s*here(?:'s|\s+is)\s+how\b", re.IGNORECASE),
+    re.compile(r"^\s*how\s+to\b", re.IGNORECASE),
+    re.compile(r"^\s*in\s+this\s+(?:section|chapter|unit|document|guide|tutorial|module)\b", re.IGNORECASE),
+    re.compile(r"^\s*(?:for\s+example|example\s*\d*[:\-–]|e\.g\.)\b", re.IGNORECASE),
+    re.compile(r"^\s*let(?:'s|\s+us)\s+(?:look|see|examine|explore|consider)\b", re.IGNORECASE),
+    re.compile(r"^\s*consider\s+the\s+following\b", re.IGNORECASE),
+    re.compile(r"^\s*the\s+following\s+(?:code|example|section|figure|table)\b", re.IGNORECASE),
+    re.compile(r"^\s*step\s+\d+\s*[:\-–]", re.IGNORECASE),
+    re.compile(r"^\s*see\s+(?:section|chapter|page|figure|table|slide)\b", re.IGNORECASE),
+    re.compile(r"^\s*(?:click\s+on|run\s+the\s+command|open\s+the\s+file|download|install)\b", re.IGNORECASE),
+    re.compile(r"^\s*as\s+shown\s+in\b", re.IGNORECASE),
+]
+
+STEM_ROLE_PURPOSE_PATTERNS = [
+    re.compile(r"\barchitectural\s+responsibility\b", re.IGNORECASE),
+    re.compile(r"\bcore\s+responsibility\b", re.IGNORECASE),
+    re.compile(r"\bprimary\s+responsibility\b", re.IGNORECASE),
+    re.compile(r"\bprimary\s+purpose\b", re.IGNORECASE),
+    re.compile(r"\bcore\s+purpose\b", re.IGNORECASE),
+    re.compile(r"\boperational\s+role\b", re.IGNORECASE),
+    re.compile(r"\bprimary\s+role\b", re.IGNORECASE),
+    re.compile(r"\bprogrammatic\s+role\b", re.IGNORECASE),
+    re.compile(r"\bfunctional\s+role\b", re.IGNORECASE),
+    re.compile(r"\bprimary\s+objective\b", re.IGNORECASE),
+    re.compile(r"\bfoundational\s+objective\b", re.IGNORECASE),
+]
+
 PROMPT_LEAK_PATTERNS = [
     re.compile(r"^(?:here is a question|based on the provided context|according to the text|question:|as an ai)\b", re.IGNORECASE),
     re.compile(r"\b(?:json format|output format|return a json)\b", re.IGNORECASE),
@@ -360,6 +392,184 @@ class QuestionQualityValidator:
 
         return max(0.0, score), notes
 
+    def check_instructional_or_heading_answer(
+        self,
+        correct_text: str,
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Detects if the correct answer is merely an instructional sentence, conversational hook,
+        or tutorial heading (e.g. 'Here's how to...', 'How to...', 'Example:', 'Step 1:'),
+        which is copied raw from textbook sections rather than being a valid conceptual answer.
+        """
+        for pat in INSTRUCTIONAL_HEADING_PATTERNS:
+            if pat.search(correct_text):
+                return True, f"Correct option is an instructional tutorial heading or conversational phrase: '{correct_text[:60]}...'"
+        return False, None
+
+    def check_concept_naming_quality(
+        self,
+        concept: Optional[str],
+        stem: str,
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Detects if the target concept or question stem embeds generic section prefixes
+        like 'Basics of...', 'Introduction to...', 'Overview of...'.
+        """
+        if concept:
+            for pat in GENERIC_CONCEPT_PREFIX_PATTERNS:
+                if pat.search(concept):
+                    return True, f"Target concept '{concept}' embeds a generic document division prefix (e.g. 'Basics of')."
+        stem_lower = stem.lower()
+        for pat in GENERIC_CONCEPT_PREFIX_PATTERNS:
+            match = pat.search(stem_lower)
+            if match:
+                return True, f"Question stem embeds a generic document division prefix: '{match.group(0).strip()}'."
+            if "by basics of " in stem_lower or "by introduction to " in stem_lower:
+                return True, "Question stem embeds a generic document division heading ('Basics of / Introduction to')."
+        return False, None
+
+    def check_semantic_stem_answer_compatibility(
+        self,
+        stem: str,
+        correct_text: str,
+        options: List[Dict[str, str]],
+        concept: Optional[str] = None,
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Verifies that the correct answer semantically and structurally answers the question stem.
+        Rejects when:
+        1. Stem asks for an architectural responsibility / role / purpose, but answer is an instructional heading or fragment.
+        2. Stem asks about one cognitive intent (e.g. role, mechanism) but answer belongs to an unrelated semantic category.
+        3. Option can be answered by recognizing copied phrasing rather than understanding the concept.
+        """
+        stem_lower = stem.lower()
+        ans_lower = correct_text.lower().strip()
+
+        # 1. Architectural responsibility / purpose / role questions
+        is_role_question = any(pat.search(stem) for pat in STEM_ROLE_PURPOSE_PATTERNS)
+        if is_role_question:
+            if any(ans_lower.startswith(prefix) for prefix in [
+                "here's how", "here is how", "how to", "in this section", "for example",
+                "let's", "consider", "step 1", "click on", "run the", "open the"
+            ]):
+                return True, f"Question asks for an architectural responsibility/purpose, but correct option is an instructional tutorial heading: '{correct_text[:60]}...'"
+
+            if ans_lower.startswith("read ") or ans_lower.startswith("write ") or ans_lower.startswith("get ") or ans_lower.startswith("set "):
+                if len(ans_lower.split()) < 5:
+                    return True, f"Correct option is a brief command/action ('{correct_text}') rather than a substantive architectural responsibility."
+
+        # 2. Complexity analysis questions
+        is_complexity_question = any(kw in stem_lower for kw in [
+            "computational efficiency", "resource trade-off", "runtime scaling",
+            "complexity bound", "performance constraint"
+        ])
+        if is_complexity_question:
+            has_complexity_term = any(term in ans_lower for term in [
+                "o(", "logarithmic", "linear", "quadratic", "constant", "exponential",
+                "worst-case", "average-case", "amortized", "space complexity", "time complexity",
+                "trade-off", "bound", "memory footprint", "latency"
+            ])
+            if not has_complexity_term:
+                return True, f"Question asks for complexity/performance constraint, but correct option does not contain complexity bounds: '{correct_text[:60]}...'"
+
+        # 3. Cryptographic / Security guarantee questions
+        is_crypto_guarantee = any(kw in stem_lower for kw in [
+            "cryptographic integrity", "security guarantee", "prevent unauthorized",
+            "mitigate adversarial", "cryptographic property"
+        ])
+        if is_crypto_guarantee:
+            has_sec_term = any(term in ans_lower for term in [
+                "encrypt", "cipher", "mac", "hmac", "integrity", "confidentiality",
+                "tampering", "authentication", "signature", "certificate", "nonce",
+                "replay", "key exchange", "hash", "secret", "secrecy", "handshake",
+                "security", "protocol", "alert", "closure", "notification", "key",
+                "compromise", "protect", "transmit", "channel", "parameter"
+            ])
+            if not has_sec_term:
+                return True, f"Question asks for cryptographic security guarantee, but correct option lacks security mechanisms: '{correct_text[:60]}...'"
+
+        return False, None
+
+    def check_unusual_token_and_code_leakage(
+        self,
+        stem: str,
+        options: List[Dict[str, str]],
+        correct_key: str,
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Detects if one option is dramatically more distinctive because it contains code syntax,
+        brackets, assignment operators, filenames, commands, or unusual source wording while distractors do not,
+        making the correct answer trivially identifiable without understanding the concept.
+
+        Allows code syntax when the question stem genuinely tests code/syntax.
+        """
+        code_syntax_patterns = [
+            r"\[.*?\]",               # Array brackets e.g. params['val']
+            r"\{.*?\}",               # Curly braces / blocks
+            r"[a-zA-Z0-9_]+\s*=\s*",  # Variable assignment
+            r"->|::|=>",              # Code operators
+            r"\bdef\s+[a-zA-Z0-9_]+", # Method definition
+            r"\bclass\s+[A-Z]",       # Class definition
+            r"\$[a-zA-Z0-9_]+",       # Shell/global variable
+            r"@[a-zA-Z0-9_]+",        # Instance variable
+            r"\b[a-zA-Z0-9_]+\.[a-z0-9_]+\(.*?\)", # Method call with parens
+        ]
+        code_regex = re.compile("|".join(code_syntax_patterns))
+
+        stem_lower = stem.lower()
+        is_code_question = any(kw in stem_lower for kw in [
+            "syntax", "code", "keyword", "method", "function", "expression",
+            "snippet", "statement", "command", "implementation", "call", "declaration",
+            "trace", "output", "returns", "parameter", "which of the following creates",
+            "which code", "how do you"
+        ])
+
+        opt_has_code = []
+        for opt in options:
+            t = opt.get("text", "")
+            has_c = bool(code_regex.search(t))
+            opt_has_code.append((opt.get("key"), has_c))
+
+        code_count = sum(1 for _, has_c in opt_has_code if has_c)
+
+        if not is_code_question:
+            if code_count == 1:
+                leaked_key = next(k for k, has_c in opt_has_code if has_c)
+                if leaked_key == correct_key:
+                    return True, "Correct option is leaked by distinctive code/syntax tokens while distractors are plain prose statements."
+                else:
+                    return True, "Option structural imbalance: one distractor uniquely contains code syntax."
+        else:
+            if code_count == 1 and opt_has_code[0][0] == correct_key:
+                return True, "Option structural imbalance in code question: correct option is code syntax while distractors are generic prose."
+
+        return False, None
+
+    def check_distractor_structural_balance(
+        self,
+        options: List[Dict[str, str]],
+        correct_key: str,
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Detects if option grammatical structure or category makes the correct answer trivially identifiable.
+        E.g. 1 option is an imperative phrase ('Here is how to...') while 3 options are formal 3rd-person declarations.
+        """
+        opt_is_instruction = []
+        for opt in options:
+            t = opt.get("text", "")
+            is_inst = any(pat.search(t) for pat in INSTRUCTIONAL_HEADING_PATTERNS)
+            opt_is_instruction.append((opt.get("key"), is_inst))
+
+        inst_count = sum(1 for _, is_inst in opt_is_instruction if is_inst)
+        if inst_count == 1:
+            leaked_key = next(k for k, is_inst in opt_is_instruction if is_inst)
+            if leaked_key == correct_key:
+                return True, "Correct option is structurally distinctive (instructional heading) compared to declarative distractors."
+            else:
+                return True, "Option structural imbalance: one distractor is an instructional heading while others are declarative."
+
+        return False, None
+
     def validate_question(
         self,
         question_text: str,
@@ -405,6 +615,10 @@ class QuestionQualityValidator:
                 rejections.append(f"Target concept '{concept}' is an invalid or generic document section header.")
             elif len(clean_c) < 3:
                 rejections.append(f"Target concept '{concept}' is too short (< 3 characters).")
+
+        has_bad_concept, bad_concept_msg = self.check_concept_naming_quality(concept, clean_q)
+        if has_bad_concept and bad_concept_msg:
+            rejections.append(bad_concept_msg)
 
         # 1c. Markdown table and parser artifact checks on question stem
         if "|" in clean_q:
@@ -466,6 +680,28 @@ class QuestionQualityValidator:
                     if bad_kw in opt_lower:
                         rejections.append(f"Option '{opt_key}' contains unrelated security distractor '{bad_kw}'.")
                         break
+
+        # 1e. Instructional heading / tutorial sentence answer check
+        has_inst_ans, inst_ans_msg = self.check_instructional_or_heading_answer(correct_text)
+        if has_inst_ans and inst_ans_msg:
+            rejections.append(inst_ans_msg)
+
+        # 1f. Semantic stem-answer compatibility check
+        has_sem_incompat, sem_incompat_msg = self.check_semantic_stem_answer_compatibility(
+            clean_q, correct_text, options, concept
+        )
+        if has_sem_incompat and sem_incompat_msg:
+            rejections.append(sem_incompat_msg)
+
+        # 1g. Code-token leakage / structural imbalance check
+        has_code_leak, code_leak_msg = self.check_unusual_token_and_code_leakage(clean_q, options, correct_option)
+        if has_code_leak and code_leak_msg:
+            rejections.append(code_leak_msg)
+
+        # 1h. Distractor structural balance check
+        has_struct_imbal, struct_imbal_msg = self.check_distractor_structural_balance(options, correct_option)
+        if has_struct_imbal and struct_imbal_msg:
+            rejections.append(struct_imbal_msg)
 
         # 2. Direct verbatim leakage
         has_verbatim, verbatim_msg = self.check_verbatim_leakage(question_text, correct_text, options)
@@ -667,4 +903,17 @@ def validate_mcq_production_gate(
         page_number=page_number,
         question_type=question_type,
     )
+
+
+def check_instructional_or_heading_answer(correct_text: str) -> Tuple[bool, Optional[str]]:
+    return question_quality_validator.check_instructional_or_heading_answer(correct_text)
+
+
+def check_concept_naming_quality(concept: Optional[str], stem: str) -> Tuple[bool, Optional[str]]:
+    return question_quality_validator.check_concept_naming_quality(concept, stem)
+
+
+def check_semantic_compatibility(stem: str, correct_text: str, options: List[Dict[str, str]], concept: Optional[str] = None) -> Tuple[bool, Optional[str]]:
+    return question_quality_validator.check_semantic_stem_answer_compatibility(stem, correct_text, options, concept)
+
 

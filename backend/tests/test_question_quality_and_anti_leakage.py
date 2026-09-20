@@ -121,6 +121,81 @@ class TestAntiLeakageValidation:
         assert len(result.rejection_reasons) > 0
         assert any("citation" in v.lower() or "leakage" in v.lower() or "verbatim" in v.lower() for v in result.rejection_reasons)
 
+    def test_exact_broken_cgi_question_is_strictly_rejected(self):
+        """
+        Regression Test for FAILURE 2:
+        Question: 'What core architectural responsibility is fulfilled by Basics of CGI Scripts in application development?'
+        Correct answer: 'Here's how to read form values.'
+        MUST be rejected for instructional heading answer, concept prefix, and semantic incompatibility.
+        """
+        stem = "What core architectural responsibility is fulfilled by Basics of CGI Scripts in application development?"
+        options = [
+            {"key": "A", "text": "Here's how to read form values."},
+            {"key": "B", "text": "Bypasses runtime execution flow to render output without initializing necessary object state."},
+            {"key": "C", "text": "Directly reinterprets byte-level instructions without dispatching standard event handlers."},
+            {"key": "D", "text": "Dispatches unmanaged asynchronous callbacks without binding to application scope."},
+        ]
+        result = validate_question(
+            question_text=stem,
+            options=options,
+            correct_key="A",
+            concept="Basics of CGI Scripts",
+            topic="Ruby Web Development",
+        )
+        assert result.is_valid is False
+        assert len(result.rejection_reasons) > 0
+        # Verify specific rejection reasons
+        has_inst = any("instructional" in r.lower() or "tutorial" in r.lower() for r in result.rejection_reasons)
+        has_prefix = any("basics of" in r.lower() or "division" in r.lower() for r in result.rejection_reasons)
+        has_compat = any("responsibility" in r.lower() or "semantic" in r.lower() for r in result.rejection_reasons)
+        assert has_inst or has_prefix or has_compat
+
+    def test_code_syntax_leakage_imbalance_rejected(self):
+        """
+        When question is conceptual and correct answer uniquely contains code syntax
+        while distractors are plain prose, it must be rejected for code token leakage.
+        """
+        stem = "What primary operational role is fulfilled by Parameter Parser in web requests?"
+        options = [
+            {"key": "A", "text": "params['username'] = sanitize(input)"},
+            {"key": "B", "text": "Validates incoming HTTP session headers and token state."},
+            {"key": "C", "text": "Coordinates database query caching across execution threads."},
+            {"key": "D", "text": "Serializes response bodies into standard wire representations."},
+        ]
+        result = validate_question(
+            question_text=stem,
+            options=options,
+            correct_key="A",
+            concept="Parameter Parser",
+        )
+        assert result.is_valid is False
+        assert any("code" in r.lower() or "syntax" in r.lower() or "imbalance" in r.lower() for r in result.rejection_reasons)
+
+    def test_legitimate_code_syntax_question_is_accepted(self):
+        """
+        Positive test: When the question stem genuinely asks about code or syntax,
+        and all answer choices are code expressions, the question MUST be accepted.
+        """
+        stem = "Which code syntax is used to bind an event command block to a TkButton in Ruby?"
+        options = [
+            {"key": "A", "text": "button.command { puts 'Clicked' }"},
+            {"key": "B", "text": "button.on_click { puts 'Clicked' }"},
+            {"key": "C", "text": "button.bind_action { puts 'Clicked' }"},
+            {"key": "D", "text": "button.attach_event { puts 'Clicked' }"},
+        ]
+        result = validate_question(
+            question_text=stem,
+            options=options,
+            correct_key="A",
+            concept="TkButton Event Binding",
+            topic="Ruby GUI",
+            question_type="application",
+        )
+        assert result.is_valid is True
+        assert result.quality_score >= 0.70
+        assert len(result.rejection_reasons) == 0
+
+
 
 class TestQuestionGeneratorAntiLeakage:
     """Tests that GeneratedQuestionData and candidate generation enforce quality standards."""

@@ -532,7 +532,7 @@ async def test_tutor_truthful_fallback_when_provider_unavailable(ssl_workspace: 
     """
     12. Truthful Provider Fallback:
     - When AI Gateway fails or hits rate-limit cooldown
-    - Returns authoritative direct source excerpts
+    - Returns structured pedagogical synthesis directly from verified sources
     - Never claims fallback is AI-generated
     - Citations preserved
     - is_fallback = True, model_name = 'source_fallback'
@@ -547,7 +547,108 @@ async def test_tutor_truthful_fallback_when_provider_unavailable(ssl_workspace: 
         assert res.retrieval.is_fallback is True
         assert res.retrieval.model_name == "source_fallback"
         assert "⚠️ **AI Generation Model Temporarily Rate-Limited / Unavailable**" in res.message.content
-        assert "The following authoritative excerpts were retrieved directly" in res.message.content
+        assert "without generative AI" in res.message.content
+        assert "Premaster Secret" in res.message.content
+        assert "|" not in res.message.content
+
+
+@pytest.mark.asyncio
+async def test_tutor_fallback_summary_is_structured_summary_not_raw_dump(ssl_workspace: str):
+    """
+    Regression Test 1 for FAILURE 1:
+    - Summary fallback must be an actual multi-point structured summary, NOT raw excerpt concatenation.
+    """
+    with patch("backend.app.services.tutor.ai_gateway.generate_text", new_callable=AsyncMock) as mock_gen:
+        mock_gen.side_effect = Exception("HTTP 429 Rate limit cooldown active")
+
+        res = await tutor_service.answer_question(ssl_workspace, "Summarize the SSL architecture protocols")
+
+        assert res.retrieval.grounded is True
+        assert res.retrieval.is_fallback is True
+        assert res.retrieval.model_name == "source_fallback"
+        assert res.retrieval.pedagogical_mode == "summary"
+
+        content = res.message.content
+        # 1. Must be structured summary with executive overview and key topics
+        assert "### Document Synthesis:" in content
+        assert "**Executive Overview**:" in content
+        assert "**Key Document Topics & Components**:" in content
+        assert "**Core Synthesis Takeaway**:" in content
+        assert "> **From SSL-UNIT" not in content  # No raw paragraph dump!
+        # 2. Contains structured bullet points
+        assert "- **" in content
+        # 3. Preserves clean citations
+        assert len(res.citations) > 0
+        assert len(res.suggested_follow_ups) >= 2
+
+
+@pytest.mark.asyncio
+async def test_tutor_fallback_simplify_is_pedagogically_formatted(ssl_workspace: str):
+    """
+    Regression Test 2 for FAILURE 1:
+    - Simplify fallback is pedagogically formatted with plain-terms definition and simple steps.
+    """
+    with patch("backend.app.services.tutor.ai_gateway.generate_text", new_callable=AsyncMock) as mock_gen:
+        mock_gen.side_effect = Exception("HTTP 429 Rate limit cooldown active")
+
+        res = await tutor_service.answer_question(ssl_workspace, "Explain the SSL Record Protocol simply for a beginner")
+
+        assert res.retrieval.grounded is True
+        assert res.retrieval.is_fallback is True
+        assert res.retrieval.pedagogical_mode == "simplify"
+
+        content = res.message.content
+        assert "### Simplified Concept Overview:" in content
+        assert "**Core Definition (In Plain Terms)**:" in content
+        assert "**How It Works in Simple Steps**:" in content
+        assert "1. **Foundation**:" in content
+        assert "2. **Operation**:" in content
+        assert "3. **Outcome**:" in content
+        assert "**Key Takeaway**:" in content
+
+
+@pytest.mark.asyncio
+async def test_tutor_fallback_page_specific_excludes_unrelated_pages(ssl_workspace: str):
+    """
+    Regression Test 3 for FAILURE 1:
+    - Page-specific fallback strictly anchors to requested page and excludes unrelated pages.
+    """
+    with patch("backend.app.services.tutor.ai_gateway.generate_text", new_callable=AsyncMock) as mock_gen:
+        mock_gen.side_effect = Exception("HTTP 429 Rate limit cooldown active")
+
+        res = await tutor_service.answer_question(ssl_workspace, "Explain the content on page 7")
+
+        assert res.retrieval.grounded is True
+        assert res.retrieval.is_fallback is True
+        assert res.retrieval.pedagogical_mode == "page_focus"
+
+        content = res.message.content
+        assert "Page 7" in content
+        assert "Restricted strictly to verified content from Page 7" in content
+        for cit in res.citations:
+            assert cit.page_or_slide == 7
+
+
+@pytest.mark.asyncio
+async def test_tutor_fallback_no_markdown_table_pipe_garbage_leaks(ssl_workspace: str):
+    """
+    Regression Test 4 for FAILURE 1:
+    - No Markdown table-pipe garbage leaks into the learner-facing response.
+    """
+    with patch("backend.app.services.tutor.ai_gateway.generate_text", new_callable=AsyncMock) as mock_gen:
+        mock_gen.side_effect = Exception("HTTP 429 Rate limit cooldown active")
+
+        # Chunk 5 on page 8 has table metadata and markdown table formatting
+        res = await tutor_service.answer_question(ssl_workspace, "What is the Record Protocol architecture on page 8?")
+
+        assert res.retrieval.grounded is True
+        assert res.retrieval.is_fallback is True
+
+        content = res.message.content
+        assert "|" not in content
+        assert "|---|---|" not in content
+        assert "Record Protocol" in content
+
 
 
 @pytest.mark.asyncio

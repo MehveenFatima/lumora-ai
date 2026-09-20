@@ -298,7 +298,7 @@ class QueryUnderstandingService:
         # 4. SINGLE PAGE / SLIDE REFERENCE INTENT (e.g. "page 3", "slide 4", "on slide 2")
         # -------------------------------------------------------------
         page_match = re.search(r"\b(?:page|pg|slide|slide\s+number|page\s+number)\s*#?\s*(\d+)\b", q_lower)
-        is_diagram_query = bool(re.search(r"\b(diagram|figure|chart|graph|flowchart|architecture|drawing|illustration)\b", q_lower))
+        is_diagram_query = bool(re.search(r"\b(diagram|figure|chart|graph|flowchart|architecture\s+diagram|architectural\s+diagram|drawing|illustration)\b", q_lower))
         is_table_query = bool(re.search(r"\b(table|tabular|data\s+grid|matrix)\b", q_lower))
 
         if page_match:

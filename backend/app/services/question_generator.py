@@ -512,31 +512,34 @@ class QuestionGeneratorService:
             s.strip() for s in re.split(r"(?<=[.!?])\s+", text)
             if len(s.strip()) > 30
             and not any(ext in s.lower() for ext in [".pdf", ".docx", ".pptx", ".txt"])
-            and not any(bad in s.lower() for bad in ["code:", "syntax:", "handling form", "cgi script", "cookie", "procfile", "extracted table", "statement "])
+            and not any(bad in s.lower() for bad in [
+                "code:", "syntax:", "handling form", "procfile", "extracted table", "statement ",
+                "here's how", "here is how", "how to", "in this section", "this section covers",
+                "for example", "example:", "let's look", "consider the following", "the following code",
+                "the following example", "step 1", "step 2", "click on", "run the command", "open the file",
+                "as shown in", "refer to", "see section", "see chapter"
+            ])
             and "|" not in s
             and not s.strip().startswith("#")
         ]
         if not raw_sentences:
             return None
 
-        # Pick sentence deterministically based on iteration seed
-        sentence_idx = (iteration_seed + chunk_index) % len(raw_sentences)
-        target_sentence = raw_sentences[sentence_idx]
-
-        # Clean sentence from chapter/page headings
-        clean_sentence = re.sub(r"^(?:Page|Unit|Chapter|Section|Example)\s*\d*\s*[:\-–]?\s*", "", target_sentence, flags=re.IGNORECASE).strip()
-        first_line_clean = clean_sentence.split("\n")[0].strip()
-
         # 3. Extract and validate concept candidate
+        first_line_raw = text.split("\n")[0].strip() if text else ""
+        first_line_clean = re.sub(r"^(?:Page|Unit|Chapter|Section|Example)\s*\d*\s*[:\-–]?\s*", "", first_line_raw, flags=re.IGNORECASE).strip()
+
         concept = None
         if heading and heading.lower() not in ("core principle", "general", "workspace document", "introduction", "overview", "summary"):
-            # Check heading isn't a division title
+            # Check heading isn't a division title and strip generic division prefixes
             clean_head = re.sub(r"^(?:Page|Unit|Chapter|Section|Example)\s*\d*\s*[:\-–]?\s*", "", heading, flags=re.IGNORECASE).strip()
-            if len(clean_head) >= 3 and clean_head.lower() not in ("unit", "chapter", "section", "page"):
+            clean_head = re.sub(r"^(?:Basics\s+of|Introduction\s+to|Overview\s+of|Fundamentals\s+of|Guide\s+to|Notes\s+on|Chapter\s+on|Section\s+on|Discussion\s+on|Summary\s+of)\s+", "", clean_head, flags=re.IGNORECASE).strip()
+            if len(clean_head) >= 3 and clean_head.lower() not in ("unit", "chapter", "section", "page", "basics", "overview", "summary"):
                 concept = clean_head
 
         if not concept:
             trimmed_line = re.sub(r"^(?:Regarding|In|For|When|With|The|According|During|By|As|From|To)\s+", "", first_line_clean, flags=re.IGNORECASE).strip()
+            trimmed_line = re.sub(r"^(?:Basics\s+of|Introduction\s+to|Overview\s+of|Fundamentals\s+of|Guide\s+to|Notes\s+on)\s+", "", trimmed_line, flags=re.IGNORECASE).strip()
             concept_match = re.search(r"([A-Z][a-z0-9]+(?:[ \t]+[A-Z][a-z0-9]+){1,3})", trimmed_line)
             if not concept_match:
                 concept_match = re.search(r"([A-Z][a-z0-9]+)", trimmed_line)
@@ -550,7 +553,8 @@ class QuestionGeneratorService:
 
         # Clean concept
         concept = re.sub(r"[:\-–|].*$", "", concept).strip()
-        if len(concept) < 3 or concept.lower() in ("unit", "chapter", "section", "page", "example", "syntax", "code"):
+        concept = re.sub(r"^(?:Basics\s+of|Introduction\s+to|Overview\s+of|Fundamentals\s+of|Guide\s+to|Notes\s+on)\s+", "", concept, flags=re.IGNORECASE).strip()
+        if len(concept) < 3 or concept.lower() in ("unit", "chapter", "section", "page", "example", "syntax", "code", "basics"):
             return None
 
         # 4. Identify domain for same-domain distractors
@@ -571,15 +575,7 @@ class QuestionGeneratorService:
             domain = "general"
 
         # Determine question type and templates
-        s_lower = clean_sentence.lower()
-        if any(w in s_lower for w in ["o(", "complexity", "worst-case", "average", "logarithmic", "linear", "quadratic"]):
-            q_type = "complexity_analysis"
-            stem_templates = [
-                f"What computational efficiency or resource trade-off is associated with {concept}?",
-                f"How is the runtime scaling behavior of {concept} formally characterized?",
-                f"Which complexity bound or performance constraint applies to {concept}?",
-            ]
-        elif domain == "ruby_scripting":
+        if domain == "ruby_scripting":
             q_type = "application"
             stem_templates = [
                 f"What core architectural responsibility is fulfilled by {concept} in application development?",
@@ -627,26 +623,7 @@ class QuestionGeneratorService:
 
         q_stem = stem_templates[iteration_seed % len(stem_templates)]
 
-        # 5. Synthesize clean correct answer
-        clean_ans = clean_sentence
-        clean_ans = re.sub(r"[A-Za-z0-9_\-\s]+\.(?:pdf|docx|pptx|txt)\s*[:\-–]?\s*", "", clean_ans, flags=re.IGNORECASE).strip()
-        clean_ans = re.sub(r"^(?:page|example|unit|chapter|section)\s*\d*\s*[:\-–]?\s*", "", clean_ans, flags=re.IGNORECASE).strip()
-
-        if len(clean_ans) > 130:
-            first_clause = re.split(r"[,;.]", clean_ans)[0].strip()
-            if len(first_clause) >= 30:
-                clean_ans = first_clause + "."
-            else:
-                clean_ans = clean_ans[:115].rsplit(" ", 1)[0] + "."
-
-        clean_ans = clean_ans[0].upper() + clean_ans[1:] if clean_ans else ""
-        if clean_ans and not clean_ans.endswith("."):
-            clean_ans += "."
-
-        if len(clean_ans) < 20 or "|" in clean_ans:
-            return None
-
-        # 6. Domain-coherent distractors (NEVER cross-domain, NEVER table garbage)
+        # 5. Domain-coherent distractors (NEVER cross-domain, NEVER table garbage)
         if domain == "ruby_scripting":
             distractor_pools = [
                 [
@@ -735,37 +712,77 @@ class QuestionGeneratorService:
         pos_keys = ["A", "B", "C", "D"]
         correct_key = pos_keys[iteration_seed % 4]
 
-        options = []
-        d_idx = 0
-        for k in pos_keys:
-            if k == correct_key:
-                options.append({"key": k, "text": clean_ans})
-            else:
-                options.append({"key": k, "text": chosen_distractors[d_idx % len(chosen_distractors)]})
-                d_idx += 1
-
         diff = max(1, min(3, (iteration_seed % 3) + 1 if target_difficulty == 2 else target_difficulty))
 
-        q_obj = GeneratedQuestionData(
-            topic=heading or "Core Principle",
-            concept=concept,
-            difficulty=diff,
-            question_type=q_type,
-            question_text=q_stem,
-            options=options,
-            correct_option=correct_key,
-            explanation=f"Based on {heading or 'curriculum'} ({concept}): {clean_ans}",
-            document_id=str(chunk.get("document_id")),
-            document_name=doc_name,
-            page_number=page_num,
-            source_excerpt=text[:300],
-        )
+        # 6. Try sentences deterministically to find a valid synthesis
+        start_idx = (iteration_seed + chunk_index) % len(raw_sentences)
+        for offset in range(len(raw_sentences)):
+            sentence_idx = (start_idx + offset) % len(raw_sentences)
+            target_sentence = raw_sentences[sentence_idx]
 
-        # 7. Validate through production gate
-        if not q_obj.validate():
-            return None
+            # Clean sentence from chapter/page headings
+            clean_sentence = re.sub(r"^(?:Page|Unit|Chapter|Section|Example)\s*\d*\s*[:\-–]?\s*", "", target_sentence, flags=re.IGNORECASE).strip()
 
-        return q_obj
+            clean_ans = clean_sentence
+            clean_ans = re.sub(r"[A-Za-z0-9_\-\s]+\.(?:pdf|docx|pptx|txt)\s*[:\-–]?\s*", "", clean_ans, flags=re.IGNORECASE).strip()
+            clean_ans = re.sub(r"^(?:page|example|unit|chapter|section)\s*\d*\s*[:\-–]?\s*", "", clean_ans, flags=re.IGNORECASE).strip()
+
+            if len(clean_ans) > 130:
+                first_clause = re.split(r"[,;.]", clean_ans)[0].strip()
+                if len(first_clause) >= 30:
+                    clean_ans = first_clause + "."
+                else:
+                    clean_ans = clean_ans[:115].rsplit(" ", 1)[0] + "."
+
+            clean_ans = clean_ans[0].upper() + clean_ans[1:] if clean_ans else ""
+            if clean_ans and not clean_ans.endswith("."):
+                clean_ans += "."
+
+            if len(clean_ans) < 20 or "|" in clean_ans:
+                continue
+
+            has_inst, _ = question_quality_validator.check_instructional_or_heading_answer(clean_ans)
+            if has_inst:
+                continue
+
+            has_bad_concept, _ = question_quality_validator.check_concept_naming_quality(concept, q_stem)
+            if has_bad_concept:
+                continue
+
+            dummy_opts = [{"key": "A", "text": clean_ans}, {"key": "B", "text": "distractor"}, {"key": "C", "text": "distractor"}, {"key": "D", "text": "distractor"}]
+            has_incompat, _ = question_quality_validator.check_semantic_stem_answer_compatibility(q_stem, clean_ans, dummy_opts, concept)
+            if has_incompat:
+                continue
+
+            options = []
+            d_idx = 0
+            for k in pos_keys:
+                if k == correct_key:
+                    options.append({"key": k, "text": clean_ans})
+                else:
+                    options.append({"key": k, "text": chosen_distractors[d_idx % len(chosen_distractors)]})
+                    d_idx += 1
+
+            q_obj = GeneratedQuestionData(
+                topic=heading or "Core Principle",
+                concept=concept,
+                difficulty=diff,
+                question_type=q_type,
+                question_text=q_stem,
+                options=options,
+                correct_option=correct_key,
+                explanation=f"Based on {heading or 'curriculum'} ({concept}): {clean_ans}",
+                document_id=str(chunk.get("document_id")),
+                document_name=doc_name,
+                page_number=page_num,
+                source_excerpt=text[:300],
+            )
+
+            # Validate through production gate
+            if q_obj.validate():
+                return q_obj
+
+        return None
 
     async def generate_question(
         self,
