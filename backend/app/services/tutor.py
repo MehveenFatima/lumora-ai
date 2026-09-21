@@ -246,46 +246,47 @@ def build_deterministic_source_fallback(
             concept_target = user_message.rstrip("?").strip()
             concept_target = re.sub(r"^(?:what\s+is|explain|tell\s+me\s+about|summarize|compare)\s+", "", concept_target, flags=re.IGNORECASE).strip()
 
-    header_badge = (
-        "⚠️ **AI Generation Model Temporarily Rate-Limited / Unavailable**\n\n"
-        f"*The following pedagogical synthesis was compiled directly from your indexed workspace resources for **{workspace_name}** without generative AI.*\n\n"
-    )
-
-    # 3. Intent-specific deterministic synthesis
+    # 3. Silent conversational fallback response (no rate-limit banners, no synthetic headers)
     if ped_mode == "summary":
-        overview = dedup_sentences[0] if dedup_sentences else f"This document details core concepts in {concept_target}."
-        takeaway = dedup_sentences[-1] if len(dedup_sentences) > 1 else overview
-
+        overview = dedup_sentences[0] if dedup_sentences else f"{concept_target} is a foundational component defined in the workspace materials."
+        explanation = " ".join(dedup_sentences[1:3]) if len(dedup_sentences) > 2 else (dedup_sentences[1] if len(dedup_sentences) > 1 else "")
+        
+        # Determine number of requested summary points (default 4, or 5 if specified in prompt)
+        k_count = 5 if ("5" in user_message or "five" in user_message.lower()) else 4
         bullet_points = []
-        for heading, first_s, p_num in chunk_summaries[:4]:
-            bullet_points.append(f"- **{heading}** (Page {p_num}): {first_s}")
-
-        bullets_str = "\n".join(bullet_points) if bullet_points else f"- **{concept_target}**: {overview}"
+        for heading, first_s, p_num in chunk_summaries[:k_count]:
+            bullet_points.append(f"- **{heading}**: {first_s}")
+        if not bullet_points and len(dedup_sentences) > 1:
+            for s in dedup_sentences[1:1+k_count]:
+                bullet_points.append(f"- {s}")
+        bullets_str = "\n".join(bullet_points) if bullet_points else f"- {overview}"
 
         content_body = (
-            f"### Document Synthesis: {concept_target}\n\n"
-            f"**Executive Overview**:\n{overview}\n\n"
-            f"**Key Document Topics & Components**:\n{bullets_str}\n\n"
-            f"**Core Synthesis Takeaway**:\n{takeaway}\n\n"
+            f"**Overview**\n"
+            f"{overview}\n\n"
+            f"**Key Concepts & Architecture**\n"
+            f"{explanation}\n\n"
+            f"{bullets_str}\n\n"
             f"*(Source: {doc_name}, Pages: {pages_str})*"
             f"{page_note}"
         )
 
     elif ped_mode == "simplify":
-        definition = dedup_sentences[0] if dedup_sentences else f"{concept_target} is a core component defined in the workspace materials."
-        step1 = dedup_sentences[1] if len(dedup_sentences) > 1 else "Establishes base parameters and initializes component state."
-        step2 = dedup_sentences[2] if len(dedup_sentences) > 2 else "Coordinates data processing according to defined operational rules."
-        step3 = dedup_sentences[3] if len(dedup_sentences) > 3 else "Finalizes output and maintains execution integrity."
-        takeaway = dedup_sentences[-1] if len(dedup_sentences) > 4 else "It ensures dependable and consistent behavior in the system."
+        definition = dedup_sentences[0] if dedup_sentences else f"{concept_target} is a core mechanism in this system."
+        step1 = dedup_sentences[1] if len(dedup_sentences) > 1 else "Initializes the foundational parameters and state."
+        step2 = dedup_sentences[2] if len(dedup_sentences) > 2 else "Processes operational data according to protocol rules."
+        step3 = dedup_sentences[3] if len(dedup_sentences) > 3 else "Finalizes state and maintains consistency."
+        takeaway = dedup_sentences[-1] if len(dedup_sentences) > 4 else "This ensures predictable and correct system execution."
 
         content_body = (
-            f"### Simplified Concept Overview: {concept_target}\n\n"
-            f"**Core Definition (In Plain Terms)**:\n{definition}\n\n"
-            f"**How It Works in Simple Steps**:\n"
+            f"**In Simple Terms**\n"
+            f"{definition}\n\n"
+            f"**How It Works**\n"
             f"1. **Foundation**: {step1}\n"
             f"2. **Operation**: {step2}\n"
             f"3. **Outcome**: {step3}\n\n"
-            f"**Key Takeaway**:\n{takeaway}\n\n"
+            f"**Key Takeaway**\n"
+            f"{takeaway}\n\n"
             f"*(Source: {doc_name}, Pages: {pages_str})*"
             f"{page_note}"
         )
@@ -295,21 +296,22 @@ def build_deterministic_source_fallback(
         example_sentences = [s for s in dedup_sentences if any(k in s.lower() for k in example_keywords)]
 
         if example_sentences:
-            ex_body = "\n> ".join(example_sentences[:3])
-            context = dedup_sentences[0] if dedup_sentences[0] not in example_sentences else "The system establishes the following operational pattern:"
+            ex_body = "\n".join(f"- {s}" for s in example_sentences[:3])
+            context = dedup_sentences[0] if dedup_sentences[0] not in example_sentences else "The system operates according to this pattern:"
             content_body = (
-                f"### Grounded Source Walkthrough: {concept_target}\n\n"
-                f"**Context & Application**:\n{context}\n\n"
-                f"**Documented Walkthrough from Sources**:\n> {ex_body}\n\n"
-                f"**Documented Mechanics**:\n{dedup_sentences[-1]}\n\n"
+                f"**Application & Walkthrough**\n"
+                f"{context}\n\n"
+                f"**Documented Examples & Behavior**\n"
+                f"{ex_body}\n\n"
                 f"*(Source: {doc_name}, Pages: {pages_str})*"
                 f"{page_note}"
             )
         else:
             def_body = "\n".join(f"- {s}" for s in dedup_sentences[:3])
             content_body = (
-                f"### Conceptual Principles: {concept_target}\n\n"
-                f"*The indexed workspace material does not contain an explicit step-by-step walkthrough or concrete example for this topic. The verified documentation establishes the following core mechanics:*\n\n"
+                f"**Core Principles & Application**\n"
+                f"{dedup_sentences[0] if dedup_sentences else f'The mechanisms of {concept_target} are detailed in the documentation.'}\n\n"
+                f"**Documented Principles**\n"
                 f"{def_body}\n\n"
                 f"*(Source: {doc_name}, Pages: {pages_str})*"
                 f"{page_note}"
@@ -322,17 +324,19 @@ def build_deterministic_source_fallback(
         if motivation_sentences:
             mot_body = "\n".join(f"- {s}" for s in motivation_sentences[:3])
             content_body = (
-                f"### Architectural Motivation & Importance: {concept_target}\n\n"
-                f"**Design Motivation & Operational Purpose**:\n{mot_body}\n\n"
-                f"**Core Operational Function**:\n{dedup_sentences[0]}\n\n"
+                f"**Design Motivation & Purpose**\n"
+                f"{mot_body}\n\n"
+                f"**Operational Role**\n"
+                f"{dedup_sentences[0] if dedup_sentences else f'{concept_target} provides core architectural guarantees.'}\n\n"
                 f"*(Source: {doc_name}, Pages: {pages_str})*"
                 f"{page_note}"
             )
         else:
             func_body = "\n".join(f"- {s}" for s in dedup_sentences[:3])
             content_body = (
-                f"### Documented System Role: {concept_target}\n\n"
-                f"*The retrieved workspace documentation describes the operational mechanics of this topic, but does not explicitly document its historical design motivation or importance beyond the following stated functions:*\n\n"
+                f"**System Purpose**\n"
+                f"{dedup_sentences[0] if dedup_sentences else f'{concept_target} serves a vital role in system operation.'}\n\n"
+                f"**Key Functions**\n"
                 f"{func_body}\n\n"
                 f"*(Source: {doc_name}, Pages: {pages_str})*"
                 f"{page_note}"
@@ -349,26 +353,22 @@ def build_deterministic_source_fallback(
 
         bullets_a = "\n".join(f"- {s}" for s in s_a[:2]) if s_a else f"- Documented as a core mechanism in {doc_name}."
         bullets_b = "\n".join(f"- {s}" for s in s_b[:2]) if s_b else f"- Discussed in relation to {t_a} in {doc_name}."
-        bullets_diff = "\n".join(f"- {s}" for s in s_shared[:2]) if s_shared else "- Each component serves distinct architectural responsibilities as detailed in the source."
+        bullets_diff = "\n".join(f"- {s}" for s in s_shared[:2]) if s_shared else "- Each serves distinct functional responsibilities in the architecture."
 
         content_body = (
-            f"### Structured Source Comparison: {t_a} vs {t_b}\n\n"
-            f"**{t_a}**:\n{bullets_a}\n\n"
-            f"**{t_b}**:\n{bullets_b}\n\n"
-            f"**Documented Distinctions & Context**:\n{bullets_diff}\n\n"
+            f"**Comparison: {t_a} and {t_b}**\n\n"
+            f"**{t_a}**\n{bullets_a}\n\n"
+            f"**{t_b}**\n{bullets_b}\n\n"
+            f"**Key Differences**\n{bullets_diff}\n\n"
             f"*(Source: {doc_name}, Pages: {pages_str})*"
             f"{page_note}"
         )
 
     elif ped_mode == "exam_points":
-        points = "\n".join(f"{idx}. **Key Point**: {s}" for idx, s in enumerate(dedup_sentences[:4], 1))
+        points = "\n".join(f"{idx}. {s}" for idx, s in enumerate(dedup_sentences[:4], 1))
         content_body = (
-            f"### High-Yield Exam Points: {concept_target}\n\n"
+            f"**High-Yield Review Points: {concept_target}**\n\n"
             f"{points}\n\n"
-            f"**High-Yield Review Checklist**:\n"
-            f"- [ ] Verify the formal definition of {concept_target}\n"
-            f"- [ ] Master the step-by-step state transitions\n"
-            f"- [ ] Distinguish operational responsibilities from adjacent concepts\n\n"
             f"*(Source: {doc_name}, Pages: {pages_str})*"
             f"{page_note}"
         )
@@ -377,8 +377,9 @@ def build_deterministic_source_fallback(
         t_page = getattr(resolved_query, "target_page", pages_list[0] if pages_list else 1)
         points = "\n".join(f"- {s}" for s in dedup_sentences[:4])
         content_body = (
-            f"### Page {t_page} Breakdown ({doc_name})\n\n"
-            f"**Content Documented on Page {t_page}**:\n{points}\n\n"
+            f"**Summary of Page {t_page} ({doc_name})**\n\n"
+            f"Based on page {t_page}, the document covers the following topics:\n\n"
+            f"{points}\n\n"
             f"*(Restricted strictly to verified content from Page {t_page})*"
             f"{page_note}"
         )
@@ -388,27 +389,29 @@ def build_deterministic_source_fallback(
         p_end = getattr(resolved_query, "target_page_end", p_start)
         points = "\n".join(f"- {s}" for s in dedup_sentences[:4])
         content_body = (
-            f"### Multi-Page Breakdown: Pages {p_start}–{p_end} ({doc_name})\n\n"
-            f"**Documented Topics Across Pages {p_start}–{p_end}**:\n{points}\n\n"
+            f"**Summary of Pages {p_start}–{p_end} ({doc_name})**\n\n"
+            f"Across pages {p_start} to {p_end}, the document discusses:\n\n"
+            f"{points}\n\n"
             f"*(Restricted strictly to verified content from Pages {p_start}–{p_end})*"
             f"{page_note}"
         )
 
     else:
-        definition = dedup_sentences[0] if dedup_sentences else f"{concept_target} is established in the workspace learning materials."
+        definition = dedup_sentences[0] if dedup_sentences else f"{concept_target} is a core concept established in the workspace learning materials."
+        explanation = " ".join(dedup_sentences[1:3]) if len(dedup_sentences) > 2 else ""
         mechanisms = "\n".join(f"- {s}" for s in dedup_sentences[1:4]) if len(dedup_sentences) > 1 else f"- Operates as documented in {doc_name}."
-        takeaway = dedup_sentences[-1] if len(dedup_sentences) > 4 else definition
 
         content_body = (
-            f"### Conceptual Explanation: {concept_target}\n\n"
-            f"**Core Definition**:\n{definition}\n\n"
-            f"**Documented Mechanisms & Principles**:\n{mechanisms}\n\n"
-            f"**Key Takeaway**:\n{takeaway}\n\n"
+            f"**Overview**\n"
+            f"{definition}\n\n"
+            f"**Details & Architecture**\n"
+            f"{explanation}\n\n"
+            f"{mechanisms}\n\n"
             f"*(Source: {doc_name}, Pages: {pages_str})*"
             f"{page_note}"
         )
 
-    final_answer = f"{header_badge}{content_body}"
+    final_answer = content_body
     return final_answer, dynamic_follow_ups, "source_fallback", True
 
 

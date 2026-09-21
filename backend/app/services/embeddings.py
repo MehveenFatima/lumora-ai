@@ -89,6 +89,36 @@ DOMAIN_TOPIC_RULES = [
         "topic_cloud_microservices",
         2,
     ),
+    # Database Systems & Query Processing (CMU 15-445 Relational Model)
+    (
+        {"database", "databases", "relational", "schema", "query", "queries", "sql", "buffer", "pool", "index", "indexing", "btree", "storage", "transaction", "relation", "tuple", "attribute", "algebra", "projection", "selection"},
+        "topic_database_systems_query",
+        2,
+    ),
+    # Machine Learning Foundations (Supervised & Regression)
+    (
+        {"learning", "supervised", "regression", "linear", "gradient", "descent", "loss", "cost", "function", "hypothesis", "training", "parameter", "parameters"},
+        "topic_machine_learning_regression",
+        2,
+    ),
+    # OS / Kernel xv6 Architecture
+    (
+        {"xv6", "kernel", "system", "call", "calls", "process", "processes", "scheduling", "interrupt", "trap", "cpu", "riscv"},
+        "topic_os_kernel_xv6",
+        2,
+    ),
+    # Computer Networks — TCP (RFC 9293)
+    (
+        {"tcp", "transmission", "segment", "sequence", "acknowledgement", "ack", "syn", "fin", "connection", "handshake", "retransmission", "flow", "congestion", "window", "socket"},
+        "topic_computer_networks_tcp",
+        2,
+    ),
+    # Transport Security — TLS 1.3
+    (
+        {"tls", "handshake", "cipher", "ciphersuite", "certificate", "clienthello", "serverhello", "record", "diffie", "hellman", "cryptographic", "keyexchange", "resumption"},
+        "topic_transport_security_tls",
+        2,
+    ),
 ]
 
 

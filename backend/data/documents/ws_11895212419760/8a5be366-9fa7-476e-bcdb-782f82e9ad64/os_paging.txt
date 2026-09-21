@@ -1,0 +1,4 @@
+Virtual Memory and Paging Mechanics (Chapter 8, Page 115):
+The Memory Management Unit (MMU) translates logical addresses to physical frames using page tables.
+A TLB hit avoids secondary memory lookups. In LRU and Clock page replacement, the victim page is evicted.
+Process context switches save registers and flush the translation lookaside buffer.

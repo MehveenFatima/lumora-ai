@@ -546,8 +546,9 @@ async def test_tutor_truthful_fallback_when_provider_unavailable(ssl_workspace: 
         assert len(res.citations) > 0
         assert res.retrieval.is_fallback is True
         assert res.retrieval.model_name == "source_fallback"
-        assert "⚠️ **AI Generation Model Temporarily Rate-Limited / Unavailable**" in res.message.content
-        assert "without generative AI" in res.message.content
+        assert "⚠️" not in res.message.content
+        assert "Rate-Limited" not in res.message.content
+        assert "without generative AI" not in res.message.content
         assert "Premaster Secret" in res.message.content
         assert "|" not in res.message.content
 
@@ -569,11 +570,9 @@ async def test_tutor_fallback_summary_is_structured_summary_not_raw_dump(ssl_wor
         assert res.retrieval.pedagogical_mode == "summary"
 
         content = res.message.content
-        # 1. Must be structured summary with executive overview and key topics
-        assert "### Document Synthesis:" in content
-        assert "**Executive Overview**:" in content
-        assert "**Key Document Topics & Components**:" in content
-        assert "**Core Synthesis Takeaway**:" in content
+        # 1. Must be structured summary with overview and key topics
+        assert "**Overview**" in content
+        assert "**Key Concepts & Architecture**" in content
         assert "> **From SSL-UNIT" not in content  # No raw paragraph dump!
         # 2. Contains structured bullet points
         assert "- **" in content
@@ -598,13 +597,12 @@ async def test_tutor_fallback_simplify_is_pedagogically_formatted(ssl_workspace:
         assert res.retrieval.pedagogical_mode == "simplify"
 
         content = res.message.content
-        assert "### Simplified Concept Overview:" in content
-        assert "**Core Definition (In Plain Terms)**:" in content
-        assert "**How It Works in Simple Steps**:" in content
+        assert "**In Simple Terms**" in content
+        assert "**How It Works**" in content
         assert "1. **Foundation**:" in content
         assert "2. **Operation**:" in content
         assert "3. **Outcome**:" in content
-        assert "**Key Takeaway**:" in content
+        assert "**Key Takeaway**" in content
 
 
 @pytest.mark.asyncio

@@ -43,9 +43,9 @@ class FlashcardRepository:
             item = {
                 "id": cid,
                 "workspace_id": workspace_id,
-                "front": c["front"],
-                "back": c["back"],
-                "concept": c.get("concept", "General"),
+                "front": c["front"].replace("\x00", "") if isinstance(c.get("front"), str) else "",
+                "back": c["back"].replace("\x00", "") if isinstance(c.get("back"), str) else "",
+                "concept": c.get("concept", "General").replace("\x00", "") if isinstance(c.get("concept"), str) else "General",
                 "source_document": c.get("source_document", "Workspace Notes"),
                 "source_page": c.get("source_page", 1),
                 "interval_days": c.get("interval_days", 1),
@@ -89,6 +89,8 @@ class FlashcardRepository:
         ] + saved
 
         return saved
+
+    save_deck = save_flashcards
 
 
 class StudyPlanRepository:
@@ -193,7 +195,7 @@ class ActivityRepository:
     ) -> Dict[str, Any]:
         now = datetime.now(timezone.utc)
         aid = f"act_{int(now.timestamp() * 1000)}"
-        ts_str = timestamp or now.strftime("%I:%M %p")
+        ts_str = timestamp or now.isoformat()
         item = {
             "id": aid,
             "workspace_id": workspace_id,

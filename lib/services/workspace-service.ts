@@ -69,6 +69,25 @@ const flashcardDecksCache: Record<string, FlashcardDeck[]> = {
   dsa: [...dsaFlashcardDecks],
 }
 
+function formatActivityTimestamp(rawTs: any): string {
+  if (!rawTs) return 'Just now'
+  if (typeof rawTs === 'string') {
+    const trimmed = rawTs.trim()
+    if (/^\d{1,2}:\d{2}\s*(AM|PM)?$/i.test(trimmed) || trimmed.toLowerCase() === 'just now') {
+      return trimmed
+    }
+    const d = new Date(trimmed)
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    }
+    return trimmed
+  }
+  if (rawTs instanceof Date && !isNaN(rawTs.getTime())) {
+    return rawTs.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  }
+  return 'Just now'
+}
+
 export const workspaceService = {
   async getUser(): Promise<User> {
     return { ...demoUser }
@@ -698,7 +717,7 @@ export const workspaceService = {
           type: (a.event_type || 'tutor_session') as ActivityType,
           title: a.title,
           description: a.description,
-          timestamp: a.timestamp ? new Date(a.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recent',
+          timestamp: formatActivityTimestamp(a.timestamp || a.created_at),
         }))
         if (workspaceId) {
           activitiesCache[workspaceId] = mapped

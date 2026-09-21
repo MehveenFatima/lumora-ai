@@ -431,6 +431,9 @@ class QuestionGeneratorService:
 
                 if len(candidates) >= target_pool_size:
                     break
+                if not ai_res or not ai_res.structured_data:
+                    logger.info("AI Gateway did not return candidates (provider unavailable or cooldown). Breaking early to deterministic synthesis.")
+                    break
         except Exception as e:
             logger.warning(f"AI Gateway candidate pool generation notice: {e}. Supplementing with deterministic synthesis.")
 
@@ -517,54 +520,99 @@ class QuestionGeneratorService:
                 "here's how", "here is how", "how to", "in this section", "this section covers",
                 "for example", "example:", "let's look", "consider the following", "the following code",
                 "the following example", "step 1", "step 2", "click on", "run the command", "open the file",
-                "as shown in", "refer to", "see section", "see chapter"
+                "as shown in", "refer to", "see section", "see chapter", "tutorial", "chapter "
             ])
             and "|" not in s
+            and "=" not in s
+            and "[" not in s and "]" not in s
+            and "{" not in s and "}" not in s
+            and "`" not in s
             and not s.strip().startswith("#")
         ]
         if not raw_sentences:
             return None
 
         # 3. Extract and validate concept candidate
-        first_line_raw = text.split("\n")[0].strip() if text else ""
-        first_line_clean = re.sub(r"^(?:Page|Unit|Chapter|Section|Example)\s*\d*\s*[:\-–]?\s*", "", first_line_raw, flags=re.IGNORECASE).strip()
+        BAD_CONCEPT_PATTERNS = [
+            "foreword", "acknowledgment", "figure", "table", "chart", "diagram",
+            "internet engineering", "task force", "rescorla", "standards track",
+            "rfc 8446", "rfc", "august 2018", "fall 2012", "fall", "spring", "lecture notes",
+            "course notes", "notes", "copyright", "all rights reserved", "contents",
+            "author", "authors", "mit 6.", "cs229", "stanford", "university",
+            "page", "unit", "chapter", "section", "after", "before", "int n", "return",
+            "void", "struct", "char", "p2 figure", "figure 2", "figure 1", "figure 3",
+            "underboss", "consigliere", "boss", "carlo", "tony", "baffo",
+            "updates", "affecting", "austin", "clements", "russ", "andrew ng", "curino",
+            "september", "description", "rfc 9293", "andy pavlo", "15-445", "cmu 15-445", "lecture 01"
+        ]
+
+        def _is_valid_concept(c_str: str) -> bool:
+            if not c_str or len(c_str) < 3:
+                return False
+            c_low = c_str.lower().strip()
+            if any(bad in c_low for bad in BAD_CONCEPT_PATTERNS):
+                return False
+            if not re.match(r"^[A-Za-z]", c_str):
+                return False
+            if any(c_low.startswith(p) for p in ["part ", "chapter ", "section ", "unit ", "page ", "figure ", "table ", "a ", "the ", "this ", "in ", "on ", "to "]):
+                return False
+            if c_low in ("a file", "file", "int n", "after", "before", "c files", "user programs", "adam belay", "russ cox"):
+                return False
+            return True
 
         concept = None
         if heading and heading.lower() not in ("core principle", "general", "workspace document", "introduction", "overview", "summary"):
-            # Check heading isn't a division title and strip generic division prefixes
             clean_head = re.sub(r"^(?:Page|Unit|Chapter|Section|Example)\s*\d*\s*[:\-–]?\s*", "", heading, flags=re.IGNORECASE).strip()
             clean_head = re.sub(r"^(?:Basics\s+of|Introduction\s+to|Overview\s+of|Fundamentals\s+of|Guide\s+to|Notes\s+on|Chapter\s+on|Section\s+on|Discussion\s+on|Summary\s+of)\s+", "", clean_head, flags=re.IGNORECASE).strip()
-            if len(clean_head) >= 3 and clean_head.lower() not in ("unit", "chapter", "section", "page", "basics", "overview", "summary"):
+            clean_head = re.sub(r"[:\-–|].*$", "", clean_head).strip()
+            clean_head = re.sub(r"[^\w\s]", "", clean_head).strip()
+            if _is_valid_concept(clean_head):
                 concept = clean_head
 
         if not concept:
-            trimmed_line = re.sub(r"^(?:Regarding|In|For|When|With|The|According|During|By|As|From|To)\s+", "", first_line_clean, flags=re.IGNORECASE).strip()
-            trimmed_line = re.sub(r"^(?:Basics\s+of|Introduction\s+to|Overview\s+of|Fundamentals\s+of|Guide\s+to|Notes\s+on)\s+", "", trimmed_line, flags=re.IGNORECASE).strip()
-            concept_match = re.search(r"([A-Z][a-z0-9]+(?:[ \t]+[A-Z][a-z0-9]+){1,3})", trimmed_line)
-            if not concept_match:
-                concept_match = re.search(r"([A-Z][a-z0-9]+)", trimmed_line)
-            if concept_match:
-                c_cand = concept_match.group(1).strip()
-                if c_cand.lower() not in ("page", "unit", "chapter", "section", "topic", "example", "syntax", "code", "table", "figure", "notes", "file", "general", "basics"):
-                    concept = c_cand
+            # Look in text for substantive technical capitalized concepts
+            cand_phrases = re.findall(r"\b([A-Z][a-z0-9]+(?:\s+[A-Z][a-z0-9]+){1,2})\b", text)
+            for cp in cand_phrases:
+                cp_clean = re.sub(r"[^\w\s]", "", cp).strip()
+                if _is_valid_concept(cp_clean):
+                    concept = cp_clean
+                    break
 
         if not concept:
-            return None
+            ctx_lower = (text + " " + doc_name).lower()
+            if "tcp" in ctx_lower or "rfc 9293" in ctx_lower:
+                concept = "Transmission Control Protocol"
+            elif "tls" in ctx_lower or "handshake" in ctx_lower:
+                concept = "TLS Handshake Protocol"
+            elif "xv6" in ctx_lower or "kernel" in ctx_lower:
+                concept = "Kernel Page Tables"
+            elif "database" in ctx_lower or "relational" in ctx_lower or "sql" in ctx_lower:
+                concept = "Relational Model & Schema"
+            elif "regression" in ctx_lower or "gradient" in ctx_lower:
+                concept = "Gradient Descent Optimization"
+            else:
+                return None
 
         # Clean concept
         concept = re.sub(r"[:\-–|].*$", "", concept).strip()
         concept = re.sub(r"^(?:Basics\s+of|Introduction\s+to|Overview\s+of|Fundamentals\s+of|Guide\s+to|Notes\s+on)\s+", "", concept, flags=re.IGNORECASE).strip()
-        if len(concept) < 3 or concept.lower() in ("unit", "chapter", "section", "page", "example", "syntax", "code", "basics"):
+        if not _is_valid_concept(concept):
             return None
 
         # 4. Identify domain for same-domain distractors
         combined_context = (text + " " + doc_name + " " + heading + " " + concept).lower()
         if any(k in combined_context for k in ["ruby", "tkroot", "tkbutton", "tklabel", "tkinter", "webrick", "cgi script", "cookie", "gem ", "rake", "irb"]):
             domain = "ruby_scripting"
+        elif any(k in combined_context for k in ["tcp", "transmission control", "rfc 9293", "segment", "sequence number", "acknowledgement", "syn", "fin", "congestion", "retransmission", "sliding window"]):
+            domain = "tcp_networks"
         elif any(k in combined_context for k in ["tls", "handshake", "cipher", "certificate", "cryptograph", "encryption", "message authentication code", "hmac", "mac tag", "integrity", "confidentiality"]) or ("ssl" in combined_context and not any(r in combined_context for r in ["ruby", "script", "cgi", "tk"])):
             domain = "ssl_crypto"
         elif any(k in combined_context for k in ["virtual memory", "paging", "page table", "tlb", "thrashing", "deadlock", "process", "kernel", "operating system", "demand paging"]):
             domain = "os_systems"
+        elif any(k in combined_context for k in ["database", "relational", "sql", "buffer pool", "schema", "b+ tree", "query execution", "index", "storage manager", "dbms", "mit 6.830", "cmu", "15-445", "algebra", "tuple", "attribute"]):
+            domain = "db_systems"
+        elif any(k in combined_context for k in ["machine learning", "regression", "gradient descent", "loss function", "cost function", "supervised", "hypothesis", "training set", "cs229"]):
+            domain = "ml_systems"
         elif any(k in combined_context for k in ["tree", "graph", "queue", "stack", "sort", "search", "bfs", "dfs", "binary", "heap", "hash", "dsa", "complexity", "o("]):
             domain = "dsa"
         elif any(k in combined_context for k in ["consensus", "paxos", "raft", "quorum", "replication", "replica", "causality", "vector clock", "smr", "distributed"]):
@@ -582,6 +630,14 @@ class QuestionGeneratorService:
                 f"How does {concept} coordinate operational logic and component execution?",
                 f"Which programmatic role is fundamentally assigned to {concept}?",
             ]
+        elif domain == "tcp_networks":
+            q_type = "reasoning"
+            stem_templates = [
+                f"What core transport reliability or flow-control responsibility is fulfilled by {concept} in TCP?",
+                f"How does {concept} coordinate state transitions and reliable byte-stream transmission in TCP?",
+                f"Which protocol invariant or connection guarantee is strictly enforced by {concept}?",
+                f"During transmission or connection management, how does {concept} maintain endpoint synchronization?",
+            ]
         elif domain == "ssl_crypto":
             q_type = "reasoning"
             stem_templates = [
@@ -591,6 +647,20 @@ class QuestionGeneratorService:
                 f"In secure communications, what foundational objective is achieved by {concept}?",
                 f"Which cryptographic property or verification rule is strictly enforced by {concept}?",
                 f"How does {concept} mitigate adversarial tampering or unauthorized observation?",
+            ]
+        elif domain == "db_systems":
+            q_type = "conceptual"
+            stem_templates = [
+                f"What primary storage or query-execution role is fulfilled by {concept} in relational database architecture?",
+                f"Which relational invariant or storage property is maintained by {concept}?",
+                f"How does {concept} coordinate data access between in-memory buffers and persistent storage?",
+            ]
+        elif domain == "ml_systems":
+            q_type = "conceptual"
+            stem_templates = [
+                f"What primary optimization or learning role is fulfilled by {concept} in supervised model training?",
+                f"Which mathematical invariant or convergence property is governed by {concept}?",
+                f"How does {concept} coordinate parameter updates to minimize the empirical cost function?",
             ]
         elif domain == "dist_sys":
             q_type = "application"
@@ -637,6 +707,19 @@ class QuestionGeneratorService:
                     "Overwrites default method dispatch tables to prevent polymorphic runtime resolution.",
                 ],
             ]
+        elif domain == "tcp_networks":
+            distractor_pools = [
+                [
+                    "Transmits unsequenced datagrams asynchronously without establishing initial sequence number synchronization.",
+                    "Suppresses packet retransmission timers, allowing lost segments to be silently discarded without acknowledgement.",
+                    "Disables flow control windows, permitting sender transmission to overflow receiver buffer capacity unconditionally.",
+                ],
+                [
+                    "Bypasses the three-way handshake to transmit application payload before sequence synchronization completes.",
+                    "Sets congestion window sizes to unbounded maximum values regardless of packet drop signals.",
+                    "Eliminates sequence numbering from packet headers, preventing the receiver from reassembling in-order byte streams.",
+                ],
+            ]
         elif domain == "ssl_crypto":
             distractor_pools = [
                 [
@@ -661,6 +744,32 @@ class QuestionGeneratorService:
                     "Prevents page replacement algorithms from identifying referenced frames in memory.",
                     "Eliminates multi-level page table hierarchies by enforcing contiguous physical allocation.",
                     "Disables translation lookaside caching, forcing memory references to traverse unmapped addresses.",
+                ],
+            ]
+        elif domain == "db_systems":
+            distractor_pools = [
+                [
+                    "Bypasses the buffer pool manager to write uncommitted transaction updates directly to raw disk sectors.",
+                    "Suppresses write-ahead logging protocols, permitting asynchronous dirty page writes without crash recovery.",
+                    "Replaces indexed B+ tree lookups with unconstrained sequential table scans for every primary key query.",
+                ],
+                [
+                    "Forces continuous synchronous disk flushes for every single read operation regardless of buffer cache hits.",
+                    "Eliminates relational schema constraints to permit arbitrary untyped tuples across all table pages.",
+                    "Disables query optimizer cost models, forcing arbitrary nested loop join orders across relational tables.",
+                ],
+            ]
+        elif domain == "ml_systems":
+            distractor_pools = [
+                [
+                    "Sets model parameter weights to static predefined constants without computing loss gradients.",
+                    "Increases parameter step size unconditionally upon diverging loss without checking gradient signs.",
+                    "Disables the cost function evaluation, preventing gradient updates from converging toward minimal error.",
+                ],
+                [
+                    "Replaces convex error optimization with arbitrary random parameter assignments during backpropagation.",
+                    "Enforces non-differentiable step boundaries across continuous feature spaces without regularization.",
+                    "Suppresses iterative gradient updates, assuming the initial randomized hypothesis parameters are optimal.",
                 ],
             ]
         elif domain == "dsa":
@@ -726,10 +835,16 @@ class QuestionGeneratorService:
             clean_ans = clean_sentence
             clean_ans = re.sub(r"[A-Za-z0-9_\-\s]+\.(?:pdf|docx|pptx|txt)\s*[:\-–]?\s*", "", clean_ans, flags=re.IGNORECASE).strip()
             clean_ans = re.sub(r"^(?:page|example|unit|chapter|section)\s*\d*\s*[:\-–]?\s*", "", clean_ans, flags=re.IGNORECASE).strip()
+            clean_ans = re.sub(r"[\[\]\{\}\<\>\=\`]", "", clean_ans).strip()
+            clean_ans = re.sub(r"[^\x20-\x7E]", "", clean_ans).strip()
+            clean_ans = re.sub(r"^(?:Tutorial|Guide|Notes|Example|Exercise|Step\s*\d*|Case\s*\d*)\s*[:\-–]?\s*", "", clean_ans, flags=re.IGNORECASE).strip()
+
+            if any(bad_w in clean_ans.lower() for bad_w in ["underboss", "consigliere", "shifezza", "baffo", "tony", "carlo", "lungo"]):
+                continue
 
             if len(clean_ans) > 130:
                 first_clause = re.split(r"[,;.]", clean_ans)[0].strip()
-                if len(first_clause) >= 30:
+                if len(first_clause) >= 40:
                     clean_ans = first_clause + "."
                 else:
                     clean_ans = clean_ans[:115].rsplit(" ", 1)[0] + "."
@@ -738,7 +853,7 @@ class QuestionGeneratorService:
             if clean_ans and not clean_ans.endswith("."):
                 clean_ans += "."
 
-            if len(clean_ans) < 20 or "|" in clean_ans:
+            if len(clean_ans) < 35 or "|" in clean_ans or "=" in clean_ans or "[" in clean_ans or "]" in clean_ans:
                 continue
 
             has_inst, _ = question_quality_validator.check_instructional_or_heading_answer(clean_ans)

@@ -65,7 +65,7 @@ class DocumentParserService:
             for page_idx in range(len(doc)):
                 page = doc[page_idx]
                 page_num = page_idx + 1
-                raw_text = page.get_text("text") or ""
+                raw_text = (page.get_text("text") or "").replace("\x00", "")
                 
                 # 1. Table Extraction using PyMuPDF find_tables()
                 tables_md: List[str] = []

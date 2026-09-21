@@ -1,0 +1,5 @@
+Raft Consensus Protocol Specification (Page 1):
+In the Raft consensus algorithm, a leader maintains term numbers and heartbeats.
+When a follower detects a leader election timeout, it transitions to candidate state,
+increments the currentTerm counter, votes for itself, and broadcasts RequestVote RPCs.
+A candidate wins election if it receives votes from a majority of servers in the cluster.

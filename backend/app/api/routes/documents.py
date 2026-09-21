@@ -1,6 +1,7 @@
 import os
 from typing import List
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status
+from fastapi.responses import Response
 from backend.app.schemas.documents import (
     DocumentResponse,
     DocumentUploadResponse,
@@ -9,6 +10,7 @@ from backend.app.schemas.documents import (
 from backend.app.repositories.workspaces import workspace_repo
 from backend.app.repositories.documents import document_repo
 from backend.app.repositories.chunks import chunk_repo
+from backend.app.repositories.secondary import activity_repo
 from backend.app.services.document_parser import document_parser
 from backend.app.services.chunker import chunker_service
 from backend.app.services.embeddings import embedding_service
@@ -139,6 +141,16 @@ async def upload_document(
         # Increment workspace document count
         await workspace_repo.increment_doc_count(workspace_id, delta=1)
 
+        try:
+            await activity_repo.add_activity(
+                workspace_id=workspace_id,
+                event_type="source_added",
+                title=f"Source Added: {file.filename}",
+                description=f"Indexed {page_count} pages ({len(chunks)} vectors) for grounded RAG.",
+            )
+        except Exception:
+            pass
+
         return DocumentResponse(**updated_doc)
 
     except Exception as e:
@@ -181,6 +193,64 @@ async def get_document(document_id: str) -> DocumentResponse:
             detail=f"Document '{document_id}' not found.",
         )
     return DocumentResponse(**doc)
+
+
+@router.get("/documents/{document_id}/download")
+async def download_document(document_id: str):
+    doc = await document_repo.get_by_id(document_id)
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document '{document_id}' not found.",
+        )
+    storage_path = doc.get("storage_path")
+    if not storage_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Storage path for document '{document_id}' not found.",
+        )
+    file_bytes = await storage_service.get_file_bytes(storage_path)
+    if not file_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File content could not be retrieved.",
+        )
+    filename = doc.get("filename", "document.pdf")
+    media_type = "application/pdf" if filename.lower().endswith(".pdf") else "application/octet-stream"
+    return Response(
+        content=file_bytes,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/documents/{document_id}/view")
+async def view_document(document_id: str):
+    doc = await document_repo.get_by_id(document_id)
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document '{document_id}' not found.",
+        )
+    storage_path = doc.get("storage_path")
+    if not storage_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Storage path for document '{document_id}' not found.",
+        )
+    file_bytes = await storage_service.get_file_bytes(storage_path)
+    if not file_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File content could not be retrieved.",
+        )
+    filename = doc.get("filename", "document.pdf")
+    media_type = "application/pdf" if filename.lower().endswith(".pdf") else "application/octet-stream"
+    return Response(
+        content=file_bytes,
+        media_type=media_type,
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
 
 
 @router.delete("/documents/{document_id}", status_code=status.HTTP_200_OK)

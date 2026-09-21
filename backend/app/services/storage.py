@@ -41,6 +41,17 @@ class StorageService:
         """
         path = f"workspace/{workspace_id}/documents/{document_id}/{filename}"
 
+        # 1. Always ensure local persistent disk backup exists
+        try:
+            local_dir = os.path.join(os.getcwd(), "backend", "data", "documents", workspace_id, document_id)
+            os.makedirs(local_dir, exist_ok=True)
+            local_file = os.path.join(local_dir, filename)
+            with open(local_file, "wb") as f:
+                f.write(file_bytes)
+        except Exception as err:
+            logger.warning(f"Could not write local document backup: {err}")
+
+        # 2. Upload to Supabase Storage if configured
         if self._client:
             try:
                 self._client.storage.from_(self.bucket_name).upload(
@@ -55,6 +66,21 @@ class StorageService:
         return path
 
     async def get_file_bytes(self, storage_path: str) -> Optional[bytes]:
+        # 1. Check local persistent disk cache first
+        try:
+            parts = storage_path.split("/")
+            if len(parts) >= 5 and parts[0] == "workspace" and parts[2] == "documents":
+                ws_id = parts[1]
+                doc_id = parts[3]
+                fname = "/".join(parts[4:])
+                local_file = os.path.join(os.getcwd(), "backend", "data", "documents", ws_id, doc_id, fname)
+                if os.path.exists(local_file):
+                    with open(local_file, "rb") as f:
+                        return f.read()
+        except Exception as err:
+            logger.warning(f"Local storage cache read error: {err}")
+
+        # 2. Fall back to Supabase Storage download
         if self._client:
             try:
                 res = self._client.storage.from_(self.bucket_name).download(storage_path)

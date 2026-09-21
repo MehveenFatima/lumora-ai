@@ -649,5 +649,150 @@ class QuizRepository:
         matching.sort(key=lambda x: x.get("answered_at") or datetime.min.replace(tzinfo=timezone.utc))
         return matching
 
+    async def add_to_question_bank(
+        self,
+        workspace_id: str,
+        topic: str,
+        concept: str,
+        difficulty: int,
+        question_text: str,
+        options: List[Dict[str, str]],
+        correct_option: str,
+        explanation: str,
+        document_id: Optional[str] = None,
+        source_chunk_id: Optional[str] = None,
+        page_number: Optional[int] = None,
+        source_excerpt: Optional[str] = None,
+        citation_metadata: Optional[Dict[str, Any]] = None,
+        generation_metadata: Optional[Dict[str, Any]] = None,
+        fingerprint: Optional[str] = None,
+        question_type: Optional[str] = "conceptual",
+        quality_score: Optional[float] = 1.0,
+    ) -> Dict[str, Any]:
+        q_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc)
+        topic = (topic or "").replace("\x00", "")
+        concept = (concept or "").replace("\x00", "")
+        question_text = (question_text or "").replace("\x00", "")
+        explanation = (explanation or "").replace("\x00", "")
+        source_excerpt = source_excerpt.replace("\x00", "") if source_excerpt else None
+        options = [
+            {"key": o.get("key", ""), "text": (o.get("text") or "").replace("\x00", "")}
+            if isinstance(o, dict) else o
+            for o in (options or [])
+        ]
+        record = {
+            "id": q_id,
+            "workspace_id": workspace_id,
+            "topic": topic,
+            "concept": concept,
+            "difficulty": difficulty,
+            "question_text": question_text,
+            "options": options,
+            "correct_option": correct_option,
+            "explanation": explanation,
+            "document_id": document_id,
+            "source_chunk_id": source_chunk_id,
+            "page_number": page_number,
+            "source_excerpt": source_excerpt,
+            "citation_metadata": citation_metadata or {},
+            "generation_metadata": generation_metadata or {},
+            "fingerprint": fingerprint,
+            "question_type": question_type or "conceptual",
+            "quality_score": float(quality_score) if quality_score is not None else 1.0,
+            "created_at": now,
+        }
+
+        pool = await get_db_pool()
+        if pool:
+            try:
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        """
+                        INSERT INTO workspace_question_bank
+                        (id, workspace_id, topic, concept, difficulty, question_text, options, correct_option, explanation, document_id, source_chunk_id, page_number, source_excerpt, citation_metadata, generation_metadata, fingerprint, question_type, quality_score, created_at)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+                        ON CONFLICT (fingerprint) DO UPDATE SET
+                            topic = EXCLUDED.topic,
+                            concept = EXCLUDED.concept,
+                            question_text = EXCLUDED.question_text,
+                            options = EXCLUDED.options,
+                            correct_option = EXCLUDED.correct_option,
+                            explanation = EXCLUDED.explanation
+                        """,
+                        _safe_uuid(q_id),
+                        workspace_id,
+                        topic,
+                        concept,
+                        difficulty,
+                        question_text,
+                        json.dumps(options),
+                        correct_option,
+                        explanation,
+                        _safe_uuid(document_id) if document_id else None,
+                        source_chunk_id,
+                        page_number,
+                        source_excerpt,
+                        json.dumps(citation_metadata or {}),
+                        json.dumps(generation_metadata or {}),
+                        fingerprint,
+                        question_type or "conceptual",
+                        float(quality_score) if quality_score is not None else 1.0,
+                        now,
+                    )
+            except Exception as e:
+                logger.error(f"Error inserting into workspace_question_bank: {e}")
+
+        return record
+
+    async def list_question_bank(
+        self,
+        workspace_id: str,
+        excluded_fingerprints: Optional[Set[str]] = None,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        excluded = set(excluded_fingerprints or [])
+        pool = await get_db_pool()
+        if pool:
+            try:
+                async with pool.acquire() as conn:
+                    rows = await conn.fetch(
+                        """
+                        SELECT * FROM workspace_question_bank
+                        WHERE workspace_id = $1
+                        ORDER BY created_at ASC
+                        """,
+                        workspace_id,
+                    )
+                    if rows:
+                        results = []
+                        for r in rows:
+                            d = dict(r)
+                            if isinstance(d.get("options"), str):
+                                d["options"] = json.loads(d["options"])
+                            if d.get("fingerprint") and d["fingerprint"] in excluded:
+                                continue
+                            results.append(d)
+                            if len(results) >= limit:
+                                break
+                        return results
+            except Exception as e:
+                logger.error(f"Error listing workspace_question_bank: {e}")
+        return []
+
+    async def count_question_bank(self, workspace_id: str) -> int:
+        pool = await get_db_pool()
+        if pool:
+            try:
+                async with pool.acquire() as conn:
+                    return await conn.fetchval(
+                        "SELECT count(*) FROM workspace_question_bank WHERE workspace_id = $1",
+                        workspace_id,
+                    ) or 0
+            except Exception as e:
+                logger.error(f"Error counting workspace_question_bank: {e}")
+        return 0
+
 
 quiz_repo = QuizRepository()
+

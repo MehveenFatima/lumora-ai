@@ -18,6 +18,8 @@ import {
   Sparkles,
   Loader2,
   Trash2,
+  Eye,
+  Download,
 } from 'lucide-react'
 import { workspaceService } from '@/lib/services/workspace-service'
 import {
@@ -251,6 +253,26 @@ export default function SourcesPage() {
                 {selectedDoc.summary ||
                   'Document has been pre-processed with semantic chunking and layout parsing. Citations are ready for the AI Tutor.'}
               </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <a
+                href={`/api/v1/documents/${selectedDoc.id}/view`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center justify-center gap-1.5 rounded-xl border border-border bg-background py-2 text-xs font-semibold text-foreground transition-colors hover:bg-accent/40"
+              >
+                <Eye className="size-3.5" />
+                <span>View PDF</span>
+              </a>
+              <a
+                href={`/api/v1/documents/${selectedDoc.id}/download`}
+                download
+                className="flex items-center justify-center gap-1.5 rounded-xl border border-border bg-background py-2 text-xs font-semibold text-foreground transition-colors hover:bg-accent/40"
+              >
+                <Download className="size-3.5" />
+                <span>Download</span>
+              </a>
             </div>
 
             <div className="border-t border-border pt-3">

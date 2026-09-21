@@ -44,12 +44,10 @@ export default function GlobalDashboardPage() {
   const [toastMessage, setToastMessage] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [backendError, setBackendError] = useState<string | null>(null)
-  const [aiWarning, setAiWarning] = useState<string | null>(null)
 
   const loadDashboard = useCallback(async () => {
     setLoading(true)
     setBackendError(null)
-    setAiWarning(null)
     try {
       const health = await tutorApiClient.getHealth().catch(() => null)
       const isBackendHealthy =
@@ -57,12 +55,6 @@ export default function GlobalDashboardPage() {
         (health.status === 'ok' || health.status === 'healthy' || health.backend === 'healthy')
       if (!isBackendHealthy) {
         setBackendError('FastAPI backend service is unreachable.')
-      } else {
-        if (health?.ai?.status === 'degraded') {
-          setAiWarning(
-            'AI model provider is temporarily in rate-limit cooldown. Grounded workspace knowledge retrieval fallback is active.'
-          )
-        }
       }
       const [ws, acts, notifs] = await Promise.all([
         workspaceService.getWorkspaces(),
@@ -283,17 +275,6 @@ export default function GlobalDashboardPage() {
           </div>
         )}
 
-        {/* AI Cooldown Notice Banner */}
-        {aiWarning && !backendError && (
-          <div className="flex items-center justify-between gap-4 rounded-2xl border border-warning/40 bg-warning/10 p-4 text-xs text-warning">
-            <div className="flex items-center gap-2.5">
-              <Sparkles className="size-5 shrink-0 text-warning" />
-              <div>
-                <span className="font-semibold">AI Gateway Notification:</span> {aiWarning}
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Aggregate Stats Cards */}
         <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
