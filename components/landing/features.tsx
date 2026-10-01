@@ -45,8 +45,8 @@ const features = [
   {
     icon: Layers,
     title: 'Flashcards From Your Sources',
-    desc: 'Concept cards generated from your documents, with Again / Hard / Good / Easy self-rating while you review.',
-    tag: 'Active Recall',
+    desc: 'Concept cards from your documents, rescheduled with SM-2 spaced repetition from your Again / Hard / Good / Easy ratings.',
+    tag: 'Spaced Repetition',
   },
 ]
 

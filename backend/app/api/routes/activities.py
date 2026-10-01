@@ -1,7 +1,9 @@
 from typing import List, Optional
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel
+from backend.app.api.deps import CurrentUser, get_current_user, require_workspace
 from backend.app.repositories.secondary import activity_repo
+from backend.app.repositories.workspaces import workspace_repo
 
 router = APIRouter(tags=["Activities"])
 
@@ -23,6 +25,7 @@ class ActivityListResponse(BaseModel):
 @router.get(
     "/workspaces/{workspace_id}/activity",
     response_model=ActivityListResponse,
+    dependencies=[Depends(require_workspace)],
 )
 async def get_workspace_activities(
     workspace_id: str,
@@ -41,8 +44,14 @@ async def get_workspace_activities(
 )
 async def get_all_activities(
     limit: int = Query(default=30, ge=1, le=100),
+    user: CurrentUser = Depends(get_current_user),
 ) -> ActivityListResponse:
-    acts = await activity_repo.list_by_workspace(None, limit=limit)
+    # Merge the most recent events across the workspaces this user owns
+    acts = []
+    for ws in await workspace_repo.list_by_owner(user["id"]):
+        acts.extend(await activity_repo.list_by_workspace(ws["id"], limit=limit))
+    acts.sort(key=lambda a: str(a.get("timestamp", "")), reverse=True)
+    acts = acts[:limit]
     return ActivityListResponse(
         total_count=len(acts),
         activities=[ActivityItem(**a) for a in acts],
@@ -60,6 +69,7 @@ class AddActivityRequest(BaseModel):
     "/workspaces/{workspace_id}/activity",
     response_model=ActivityItem,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_workspace)],
 )
 async def create_activity(
     workspace_id: str,

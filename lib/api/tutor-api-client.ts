@@ -108,6 +108,13 @@ async function apiFetch(path: string, options: RequestInit = {}): Promise<Respon
 
   try {
     const res = await fetch(url, fetchOptions)
+    // Session expired or missing: send the user to sign in, then back to where they were
+    if (res.status === 401 && isBrowser && !window.location.pathname.startsWith('/login')) {
+      const next = encodeURIComponent(window.location.pathname + window.location.search)
+      // Clear the stale cookie first, otherwise the route guard would bounce back to /dashboard
+      await fetch('/api/v1/auth/logout', { method: 'POST' }).catch(() => null)
+      window.location.assign(`/login?next=${next}`)
+    }
     return res
   } catch (err: any) {
     console.error(`[API Client] apiFetch failed for endpoint ${cleanPath}:`, err)
@@ -183,9 +190,9 @@ export const tutorApiClient = {
     }
   },
 
-  async getWorkspaces(): Promise<Workspace[]> {
+  async getWorkspaces(init: RequestInit = {}): Promise<Workspace[]> {
     try {
-      const response = await apiFetch('/api/v1/workspaces')
+      const response = await apiFetch('/api/v1/workspaces', init)
       if (!response.ok) return []
       const data = await response.json()
       return (data.workspaces || []).map((ws: any) => ({
@@ -211,9 +218,9 @@ export const tutorApiClient = {
     }
   },
 
-  async getWorkspaceById(workspaceId: string): Promise<Workspace | null> {
+  async getWorkspaceById(workspaceId: string, init: RequestInit = {}): Promise<Workspace | null> {
     try {
-      const response = await apiFetch(`/api/v1/workspaces/${workspaceId}`)
+      const response = await apiFetch(`/api/v1/workspaces/${workspaceId}`, init)
       if (!response.ok) return null
       const ws = await response.json()
       return {
@@ -607,6 +614,26 @@ export const tutorApiClient = {
   async getFlashcards(workspaceId: string): Promise<any> {
     const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/flashcards`)
     if (!response.ok) return { workspace_id: workspaceId, total_count: 0, flashcards: [] }
+    return response.json()
+  },
+
+  async getMasteryHistory(workspaceId: string, days = 30): Promise<{ points: { date: string; mastery_percentage: number }[] }> {
+    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/mastery/history?days=${days}`)
+    if (!response.ok) return { points: [] }
+    return response.json()
+  },
+
+  async reviewFlashcard(
+    workspaceId: string,
+    cardId: string,
+    rating: 'again' | 'hard' | 'good' | 'easy'
+  ): Promise<any> {
+    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/flashcards/${cardId}/review`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rating }),
+    })
+    if (!response.ok) throw new Error(`Failed to save flashcard review (${response.status})`)
     return response.json()
   },
 

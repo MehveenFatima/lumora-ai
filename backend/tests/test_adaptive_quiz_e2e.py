@@ -15,6 +15,7 @@ Validates the full adaptive learning lifecycle:
 import uuid
 import pytest
 from httpx import AsyncClient, ASGITransport
+from backend.tests.conftest import auth_headers_for_test_user
 
 from backend.app.main import app
 from backend.app.repositories.workspaces import workspace_repo
@@ -110,7 +111,7 @@ async def test_quiz_session_persistence_and_active_resumption():
     transport = ASGITransport(app=app)
 
     try:
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers_for_test_user()) as ac:
             # 1. No active session initially
             initial_active = await ac.get(f"/api/v1/workspaces/{ws_id}/quizzes/active")
             assert initial_active.status_code == 200
@@ -152,7 +153,7 @@ async def test_question_structure_and_answer_concealment():
     transport = ASGITransport(app=app)
 
     try:
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers_for_test_user()) as ac:
             res = await ac.post(
                 f"/api/v1/workspaces/{ws_id}/quizzes",
                 json={"target_question_count": 3, "initial_difficulty": 2},
@@ -190,7 +191,7 @@ async def test_bkt_posterior_updates_correct_and_incorrect():
     transport = ASGITransport(app=app)
 
     try:
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers_for_test_user()) as ac:
             res = await ac.post(
                 f"/api/v1/workspaces/{ws_id}/quizzes",
                 json={"target_question_count": 4, "initial_difficulty": 2},
@@ -254,7 +255,7 @@ async def test_knowledge_gap_and_topic_mastery_recalculation():
     transport = ASGITransport(app=app)
 
     try:
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers_for_test_user()) as ac:
             res = await ac.post(
                 f"/api/v1/workspaces/{ws_id}/quizzes",
                 json={"target_question_count": 2, "initial_difficulty": 2},
@@ -372,7 +373,7 @@ async def test_quiz_completion_and_history():
     transport = ASGITransport(app=app)
 
     try:
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers_for_test_user()) as ac:
             res = await ac.post(
                 f"/api/v1/workspaces/{ws_id}/quizzes",
                 json={"target_question_count": 2, "initial_difficulty": 2},
@@ -429,7 +430,7 @@ async def test_edge_cases_and_workspace_isolation():
     transport = ASGITransport(app=app)
 
     try:
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers_for_test_user()) as ac:
             # 1. Empty workspace rejection
             empty_ws_id = f"ws_empty_{uuid.uuid4().hex[:8]}"
             await workspace_repo.create(workspace_id=empty_ws_id, name="Empty Space", goal="Test Empty")

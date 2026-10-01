@@ -26,6 +26,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from backend.app.core.config import settings
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _api_auth  # noqa: E402,F401  (signs in and authenticates every API request)
 
 FASTAPI_URL = "http://127.0.0.1:8000"
 PROXY_URL = "http://localhost:3000"

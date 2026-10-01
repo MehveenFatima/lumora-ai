@@ -9,9 +9,11 @@ import urllib.request
 import json
 import uuid
 import fitz  # PyMuPDF
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _api_auth  # noqa: E402,F401  (signs in and authenticates every API request)
 
 API_BASE = "http://127.0.0.1:8000/api/v1"
-DSA_WORKSPACE_ID = "dsa"
+DSA_WORKSPACE_ID = os.environ.get("LUMORA_DSA_WORKSPACE_ID", "dsa")  # id of a DSA workspace you own
 
 
 def generate_dsa_fundamentals_pdf() -> bytes:

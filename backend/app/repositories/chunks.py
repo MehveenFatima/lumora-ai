@@ -58,8 +58,10 @@ class ChunkRepository:
                     )
             except Exception as e:
                 logger.error(f"Error inserting chunks into DB: {e}")
+                raise
+            return
 
-        # In-memory store
+        # In-memory store (only when no database is configured)
         for c in chunks_data:
             _memory_chunks[c["id"]] = c
 
@@ -249,10 +251,14 @@ class ChunkRepository:
         query_embedding: List[float],
         top_k: int = 5,
         similarity_threshold: float = 0.65,
+        embedding_model: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Retrieves top-k chunks matching the query embedding.
         STRICTLY SCOPED to the specified workspace_id.
+
+        `embedding_model` restricts the search to chunks embedded with that model ("" selects
+        legacy chunks that predate model tagging); None searches all chunks.
         """
         results: List[Dict[str, Any]] = []
         pool = await get_db_pool()
@@ -280,6 +286,7 @@ class ChunkRepository:
                         JOIN documents d ON d.id = c.document_id
                         WHERE c.workspace_id = $1
                           AND 1 - (c.embedding <=> $2::vector) >= $3
+                          AND ($5::text IS NULL OR COALESCE(c.metadata->>'embedding_model', '') = $5::text)
                         ORDER BY similarity_score DESC
                         LIMIT $4
                         """,
@@ -287,6 +294,7 @@ class ChunkRepository:
                         embedding_str,
                         similarity_threshold,
                         top_k,
+                        embedding_model,
                     )
                     for r in rows:
                         meta = r["metadata"]
@@ -322,6 +330,12 @@ class ChunkRepository:
         ]
         scored_chunks = []
 
+        if embedding_model is not None:
+            scoped_chunks = [
+                c for c in scoped_chunks
+                if ((c.get("metadata") or {}).get("embedding_model") or "") == embedding_model
+            ]
+
         for chunk in scoped_chunks:
             if "embedding" in chunk and chunk["embedding"]:
                 score = cosine_similarity(query_embedding, chunk["embedding"])
@@ -350,6 +364,25 @@ class ChunkRepository:
             )
 
         return results
+
+    async def list_embedding_models(self, workspace_id: str) -> List[str]:
+        """Distinct embedding-model tags used by a workspace's chunks ("" for untagged legacy chunks)."""
+        pool = await get_db_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT DISTINCT COALESCE(metadata->>'embedding_model', '') AS model
+                    FROM document_chunks WHERE workspace_id = $1
+                    """,
+                    workspace_id,
+                )
+                return [r["model"] for r in rows]
+        return sorted({
+            ((c.get("metadata") or {}).get("embedding_model") or "")
+            for c in _memory_chunks.values()
+            if c["workspace_id"] == workspace_id
+        })
 
     async def search_lexical_chunks(
         self,

@@ -1,6 +1,8 @@
 import urllib.request
 import json
 import time
+import os, sys; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _api_auth  # noqa: E402,F401  (signs in and authenticates every API request)
 
 base = 'http://localhost:3000/api/v1/workspaces/ws_computer_networks/quizzes'
 

@@ -108,15 +108,15 @@ async def test_complete_cross_workspace_isolation(async_client: AsyncClient):
         await async_client.post(
             f"/api/v1/workspaces/{ws_a_id}/mastery/seed",
             json={
-                "user_ids": ["test-isolated-user"],
+                "user_ids": ["default_user"],
                 "concepts": [
                     {"concept": "AVL Rotations", "topic": "Balanced Trees", "p_mastery": 0.85, "is_correct": True}
                 ],
             },
         )
 
-        # Check Beta mastery: Must have 0 concepts and not_assessed for test-isolated-user
-        prof_b = await async_client.get(f"/api/v1/workspaces/{ws_b_id}/learner-profile?user_id=test-isolated-user")
+        # Check Beta mastery: Must have 0 concepts and not_assessed
+        prof_b = await async_client.get(f"/api/v1/workspaces/{ws_b_id}/learner-profile")
         assert prof_b.status_code == 200
         b_data = prof_b.json()
         assert b_data["status"] == "not_assessed"
@@ -124,7 +124,7 @@ async def test_complete_cross_workspace_isolation(async_client: AsyncClient):
         assert len(b_data["top_knowledge_gaps"]) == 0
 
         # Check Alpha mastery overview: Must have Balanced Trees topic
-        ov_a = await async_client.get(f"/api/v1/workspaces/{ws_a_id}/mastery?user_id=test-isolated-user")
+        ov_a = await async_client.get(f"/api/v1/workspaces/{ws_a_id}/mastery")
         assert ov_a.status_code == 200
         a_data = ov_a.json()
         assert len(a_data["topics"]) >= 1

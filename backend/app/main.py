@@ -28,6 +28,14 @@ async def lifespan(app: FastAPI):
             f"expected 'gemini-3.8-flash'. Obsolete model fallback is strictly prohibited."
         )
 
+    if settings.is_production:
+        if not settings.jwt_secret or len(settings.jwt_secret) < 32:
+            raise RuntimeError(
+                "JWT_SECRET must be set to a random value of at least 32 characters when ENVIRONMENT=production."
+            )
+        if not settings.database_url:
+            logger.warning("ENVIRONMENT=production without DATABASE_URL: data will not survive a restart.")
+
     await get_db_pool()
     yield
     # Shutdown

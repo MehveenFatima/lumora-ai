@@ -1,6 +1,9 @@
 import urllib.request
 import json
 import sys
+import os, sys; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _api_auth  # noqa: E402,F401  (signs in and authenticates every API request)
+DSA_WS = os.environ.get("LUMORA_DSA_WORKSPACE_ID", "dsa")  # id of a DSA workspace you own
 
 BASE_URL = "http://localhost:3000"
 
@@ -19,9 +22,9 @@ def test_dsa_presentation_seed():
 
     # 1. Verify DSA Workspace Metadata
     print("[STEP 1] Verifying DSA Workspace Metadata from PostgreSQL...")
-    ws_req = urllib.request.Request(f"{BASE_URL}/api/v1/workspaces/dsa")
+    ws_req = urllib.request.Request(f"{BASE_URL}/api/v1/workspaces/{DSA_WS}")
     with urllib.request.urlopen(ws_req) as ws_res:
-        assert_true(ws_res.status == 200, "GET /api/v1/workspaces/dsa returned HTTP 200")
+        assert_true(ws_res.status == 200, "GET /api/v1/workspaces/{DSA_WS} returned HTTP 200")
         ws = json.loads(ws_res.read().decode())
     
     assert_true(ws["id"] == "dsa", f"Workspace ID is '{ws['id']}'")
@@ -31,9 +34,9 @@ def test_dsa_presentation_seed():
 
     # 2. Verify Sources
     print("\n[STEP 2] Verifying Seeded OpenDSA Sources in DSA Workspace...")
-    docs_req = urllib.request.Request(f"{BASE_URL}/api/v1/workspaces/dsa/documents")
+    docs_req = urllib.request.Request(f"{BASE_URL}/api/v1/workspaces/{DSA_WS}/documents")
     with urllib.request.urlopen(docs_req) as docs_res:
-        assert_true(docs_res.status == 200, "GET /api/v1/workspaces/dsa/documents returned HTTP 200")
+        assert_true(docs_res.status == 200, "GET /api/v1/workspaces/{DSA_WS}/documents returned HTTP 200")
         docs_data = json.loads(docs_res.read().decode())
         docs = docs_data.get("documents", [])
 
@@ -50,7 +53,7 @@ def test_dsa_presentation_seed():
     # Q1: BFS vs DFS
     q1 = "What is the difference between BFS and DFS?"
     tutor_req1 = urllib.request.Request(
-        f"{BASE_URL}/api/v1/workspaces/dsa/tutor",
+        f"{BASE_URL}/api/v1/workspaces/{DSA_WS}/tutor",
         data=json.dumps({"message": q1}).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -67,7 +70,7 @@ def test_dsa_presentation_seed():
     # Q2: Binary Search Complexity
     q2 = "Explain why binary search is O(log n)."
     tutor_req2 = urllib.request.Request(
-        f"{BASE_URL}/api/v1/workspaces/dsa/tutor",
+        f"{BASE_URL}/api/v1/workspaces/{DSA_WS}/tutor",
         data=json.dumps({"message": q2}).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -84,7 +87,7 @@ def test_dsa_presentation_seed():
     # Q3: Min-Heap Property
     q3 = "What is the key ordering property of a Min-Heap?"
     tutor_req3 = urllib.request.Request(
-        f"{BASE_URL}/api/v1/workspaces/dsa/tutor",
+        f"{BASE_URL}/api/v1/workspaces/{DSA_WS}/tutor",
         data=json.dumps({"message": q3}).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",

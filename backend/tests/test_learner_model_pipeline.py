@@ -19,6 +19,7 @@ import math
 import pytest
 from datetime import datetime, timezone
 from httpx import AsyncClient, ASGITransport
+from backend.tests.conftest import auth_headers_for_test_user
 
 from backend.app.main import app
 from backend.app.db.connection import get_db_pool
@@ -357,7 +358,7 @@ async def test_phase_f_and_i_cross_session_state_and_adaptive_reactivity():
     transport = ASGITransport(app=app)
 
     try:
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers_for_test_user()) as ac:
             # --- SESSION 1 ---
             res1 = await ac.post(f"/api/v1/workspaces/{ws_id}/quizzes", json={"target_question_count": 1})
             assert res1.status_code == 201
@@ -525,7 +526,7 @@ async def test_phase_j_frontend_data_contracts():
     transport = ASGITransport(app=app)
 
     try:
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers_for_test_user()) as ac:
             # 1. Learner Profile on empty workspace
             prof_res = await ac.get(f"/api/v1/workspaces/{ws_id}/learner-profile")
             assert prof_res.status_code == 200

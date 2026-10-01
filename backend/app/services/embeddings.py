@@ -160,6 +160,17 @@ def generate_deterministic_mock_embedding(text: str, dim: int = 768) -> List[flo
     return (vec / norm).tolist()
 
 
+# Every stored chunk records which embedding model produced its vector, so queries are always
+# embedded in the same vector space as the chunks they are compared with.
+OFFLINE_EMBEDDING_TAG = "offline-hash-v1"
+GEMINI_BATCH_SIZE = 100
+_RETRY_DELAYS_SECONDS = (2.0, 5.0, 12.0)
+
+
+class EmbeddingUnavailableError(Exception):
+    """Raised when the configured embedding provider cannot embed a document."""
+
+
 class EmbeddingService:
     def __init__(
         self,
@@ -251,6 +262,101 @@ class EmbeddingService:
                 )
 
         return generate_deterministic_mock_embedding(clean_query, self.dimension)
+
+    @property
+    def gemini_tag(self) -> str:
+        return self.model_name.replace("models/", "")
+
+    @property
+    def active_model_tag(self) -> str:
+        """The embedding model new documents are indexed with."""
+        return self.gemini_tag if self.api_key else OFFLINE_EMBEDDING_TAG
+
+    def _normalize_vector(self, raw: List[float]) -> List[float]:
+        if len(raw) > self.dimension:
+            raw = raw[: self.dimension]
+        elif len(raw) < self.dimension:
+            raw = raw + [0.0] * (self.dimension - len(raw))
+        return l2_normalize(raw)
+
+    async def embed_documents(self, texts: List[str]) -> tuple:
+        """
+        Embeds document chunks in batches. Returns (vectors, model_tag).
+
+        With a Gemini key configured, failures are retried and then raised as
+        EmbeddingUnavailableError; offline vectors are never mixed into a Gemini-indexed
+        workspace. Without a key, the deterministic offline embedder is used consistently.
+        """
+        clean = [(t or "").replace("\n", " ").strip() or "empty" for t in texts]
+        if not self.api_key:
+            return [generate_deterministic_mock_embedding(t, self.dimension) for t in clean], OFFLINE_EMBEDDING_TAG
+
+        import google.generativeai as genai
+
+        if not self._gemini_client_initialized:
+            genai.configure(api_key=self.api_key)
+            self._gemini_client_initialized = True
+
+        vectors: List[List[float]] = []
+        for start in range(0, len(clean), GEMINI_BATCH_SIZE):
+            batch = clean[start : start + GEMINI_BATCH_SIZE]
+            last_error: Optional[Exception] = None
+            for attempt in range(len(_RETRY_DELAYS_SECONDS) + 1):
+                try:
+                    result = await asyncio.to_thread(
+                        genai.embed_content,
+                        model=self.model_name,
+                        content=batch,
+                        task_type="retrieval_document",
+                        output_dimensionality=self.dimension,
+                    )
+                    batch_vectors = result["embedding"]
+                    if len(batch) == 1 and batch_vectors and isinstance(batch_vectors[0], (int, float)):
+                        batch_vectors = [batch_vectors]
+                    if len(batch_vectors) != len(batch):
+                        raise ValueError(f"expected {len(batch)} embeddings, got {len(batch_vectors)}")
+                    vectors.extend(self._normalize_vector(list(v)) for v in batch_vectors)
+                    last_error = None
+                    break
+                except Exception as e:
+                    last_error = e
+                    if attempt < len(_RETRY_DELAYS_SECONDS):
+                        logger.warning(f"Embedding batch failed (attempt {attempt + 1}): {e}. Retrying.")
+                        await asyncio.sleep(_RETRY_DELAYS_SECONDS[attempt])
+            if last_error is not None:
+                raise EmbeddingUnavailableError(
+                    "The embedding service is unavailable or rate-limited. Please try the upload again in a few minutes."
+                ) from last_error
+        return vectors, self.gemini_tag
+
+    async def embed_query_for(self, query: str, model_tag: Optional[str]) -> Optional[List[float]]:
+        """
+        Embeds a query in the vector space identified by `model_tag`. Returns None when that
+        space cannot be produced right now (for example Gemini is rate-limited), in which case
+        retrieval relies on keyword matching instead of comparing incompatible vectors.
+        """
+        clean = (query or "").replace("\n", " ").strip() or "query"
+        tag = model_tag or self.active_model_tag
+        if tag == OFFLINE_EMBEDDING_TAG:
+            return generate_deterministic_mock_embedding(clean, self.dimension)
+        if tag != self.gemini_tag or not self._init_gemini():
+            return None
+        try:
+            import google.generativeai as genai
+
+            result = await asyncio.to_thread(
+                genai.embed_content,
+                model=self.model_name,
+                content=clean,
+                task_type="retrieval_query",
+                output_dimensionality=self.dimension,
+            )
+            return self._normalize_vector(list(result["embedding"]))
+        except Exception as e:
+            if "429" in str(e) or "quota" in str(e).lower():
+                self._cooldown_until = time.time() + 60.0
+            logger.warning(f"Query embedding failed ({e}); falling back to keyword retrieval.")
+            return None
 
     async def get_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
         """Generates embeddings for a batch of chunks."""

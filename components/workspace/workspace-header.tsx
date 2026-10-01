@@ -13,6 +13,7 @@ import {
   ExternalLink,
   GraduationCap,
 } from 'lucide-react'
+import { UserMenu } from '@/components/auth/user-menu'
 import { Workspace, NotificationItem } from '@/lib/types/domain'
 import { WorkspaceSwitcher } from './workspace-switcher'
 import { ThemeToggle } from '@/components/ui/theme-toggle'
@@ -224,18 +225,7 @@ export function WorkspaceHeader({
         </div>
 
         {/* User Profile */}
-        <Link
-          href="/dashboard"
-          className="flex items-center gap-2 rounded-xl border border-border bg-card p-1 pr-2.5 transition-colors hover:bg-accent/40"
-        >
-          <span className="flex size-7 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-chart-2 text-[11px] font-bold text-primary-foreground">
-            MF
-          </span>
-          <span className="hidden text-left leading-none md:block">
-            <span className="block text-xs font-medium text-foreground">Mehveen</span>
-            <span className="mt-0.5 block text-[10px] text-muted-foreground">Learner</span>
-          </span>
-        </Link>
+        <UserMenu />
       </div>
     </header>
   )

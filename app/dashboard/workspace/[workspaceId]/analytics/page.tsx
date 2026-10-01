@@ -8,6 +8,7 @@ import { tutorApiClient } from '@/lib/api/tutor-api-client'
 import { Workspace, Topic } from '@/lib/types/domain'
 import { Progress } from '@/components/ui/progress'
 import { computeStudyStreak } from '@/lib/learning-stats'
+import { MasteryTrendChart, type MasteryPoint } from '@/components/workspace/mastery-trend-chart'
 
 interface RecentPerformance {
   quizzesCompleted: number
@@ -96,17 +97,20 @@ export default function AnalyticsPage() {
   const [topics, setTopics] = useState<Topic[]>([])
   const [perf, setPerf] = useState<RecentPerformance | null>(null)
   const [streakDays, setStreakDays] = useState(0)
+  const [history, setHistory] = useState<MasteryPoint[] | null>(null)
 
   useEffect(() => {
     if (!workspaceId) return
 
     async function loadAnalytics() {
-      const [ws, top, profile, acts] = await Promise.all([
+      const [ws, top, profile, acts, hist] = await Promise.all([
         workspaceService.getWorkspaceById(workspaceId),
         workspaceService.getTopics(workspaceId),
         tutorApiClient.getLearnerProfile(workspaceId).catch(() => null),
         workspaceService.getActivities(workspaceId).catch(() => []),
+        tutorApiClient.getMasteryHistory(workspaceId, 30).catch(() => ({ points: [] })),
       ])
+      setHistory(hist.points || [])
       setWorkspace(ws)
       setTopics(top)
       setPerf(profile ? toRecentPerformance(profile) : null)
@@ -178,7 +182,15 @@ export default function AnalyticsPage() {
         </div>
       </div>
 
-      {/* Center Charts: Line Chart + Topic Breakdown */}
+      <section className="rounded-3xl border border-border bg-card p-6 shadow-soft">
+        <h3 className="font-display text-base font-semibold text-foreground">Mastery over time</h3>
+        <p className="text-xs text-muted-foreground">
+          Daily workspace mastery for the last 30 days, from Bayesian Knowledge Tracing snapshots
+        </p>
+        <div className="mt-4">{history === null ? null : <MasteryTrendChart points={history} />}</div>
+      </section>
+
+      {/* Center Charts: Recent Performance + Topic Breakdown */}
       <div className="grid gap-6 lg:grid-cols-12">
         <div className="lg:col-span-7">
           <RecentPerformanceCard perf={perf} />

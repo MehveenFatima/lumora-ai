@@ -1,6 +1,7 @@
 import uuid
 from typing import List
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from backend.app.api.deps import CurrentUser, get_current_user, require_workspace
 from backend.app.schemas.workspaces import (
     WorkspaceCreateRequest,
     WorkspaceResponse,
@@ -21,9 +22,12 @@ router = APIRouter(tags=["Workspaces"])
     response_model=WorkspaceResponse,
     status_code=status.HTTP_201_CREATED,
 )
-async def create_workspace(request: WorkspaceCreateRequest) -> WorkspaceResponse:
+async def create_workspace(
+    request: WorkspaceCreateRequest, user: CurrentUser = Depends(get_current_user)
+) -> WorkspaceResponse:
     try:
-        ws_id = request.id or f"ws_{int(uuid.uuid4().hex[:12], 16)}"
+        # IDs are always generated server-side so a client cannot target an existing workspace
+        ws_id = f"ws_{uuid.uuid4().hex[:16]}"
         created = await workspace_repo.create(
             workspace_id=ws_id,
             name=request.name,
@@ -33,6 +37,7 @@ async def create_workspace(request: WorkspaceCreateRequest) -> WorkspaceResponse
             daily_target_minutes=request.daily_target_minutes,
             description=request.description or "",
             icon_name=request.icon_name or "FolderKanban",
+            owner_id=user["id"],
         )
         return WorkspaceResponse(
             id=created["id"],
@@ -54,7 +59,7 @@ async def create_workspace(request: WorkspaceCreateRequest) -> WorkspaceResponse
         logger.error(f"Failed to create workspace '{request.name}': {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create workspace: {str(e)}",
+            detail="Failed to create workspace.",
         )
 
 
@@ -62,11 +67,13 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, status, Query
 
 @router.get("/workspaces", response_model=WorkspaceListResponse)
-async def list_workspaces(name: Optional[str] = Query(default=None)) -> WorkspaceListResponse:
+async def list_workspaces(
+    name: Optional[str] = Query(default=None), user: CurrentUser = Depends(get_current_user)
+) -> WorkspaceListResponse:
+    workspaces = await workspace_repo.list_by_owner(user["id"])
     if name:
-        workspaces = await workspace_repo.get_by_exact_name(name)
-    else:
-        workspaces = await workspace_repo.list_all()
+        target = name.strip().lower()
+        workspaces = [w for w in workspaces if (w.get("name") or "").strip().lower() == target]
     responses = []
     for w in workspaces:
         docs = await document_repo.list_by_workspace(w["id"])
@@ -96,8 +103,7 @@ async def list_workspaces(name: Optional[str] = Query(default=None)) -> Workspac
 
 
 @router.get("/workspaces/{workspace_id}", response_model=WorkspaceResponse)
-async def get_workspace(workspace_id: str) -> WorkspaceResponse:
-    ws = await workspace_repo.get_by_id(workspace_id)
+async def get_workspace(workspace_id: str, ws: dict = Depends(require_workspace)) -> WorkspaceResponse:
     if not ws:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -125,8 +131,7 @@ async def get_workspace(workspace_id: str) -> WorkspaceResponse:
 
 
 @router.delete("/workspaces/{workspace_id}", status_code=status.HTTP_200_OK)
-async def delete_workspace(workspace_id: str):
-    ws = await workspace_repo.get_by_id(workspace_id)
+async def delete_workspace(workspace_id: str, ws: dict = Depends(require_workspace)):
     if not ws:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

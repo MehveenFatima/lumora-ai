@@ -92,6 +92,47 @@ class FlashcardRepository:
 
     save_deck = save_flashcards
 
+    async def record_review(
+        self,
+        workspace_id: str,
+        card_id: str,
+        rating: str,
+        repetitions: int,
+        interval_days: int,
+        ease_factor: float,
+        due_date,
+    ) -> Optional[Dict[str, Any]]:
+        """Persists one review's SM-2 schedule. Returns the updated card, or None if it doesn't exist."""
+        today = datetime.now(timezone.utc).date()
+        pool = await get_db_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    UPDATE flashcards
+                    SET repetitions = $3, interval_days = $4, ease_factor = $5, due_date = $6,
+                        last_rating = $7, last_reviewed = $8, review_count = review_count + 1
+                    WHERE id = $1 AND workspace_id = $2
+                    RETURNING *
+                    """,
+                    card_id, workspace_id, repetitions, interval_days, ease_factor, due_date, rating, today,
+                )
+                return dict(row) if row else None
+
+        for card in _memory_flashcards.get(workspace_id, []):
+            if card["id"] == card_id:
+                card.update(
+                    repetitions=repetitions,
+                    interval_days=interval_days,
+                    ease_factor=ease_factor,
+                    due_date=due_date,
+                    last_rating=rating,
+                    last_reviewed=today,
+                    review_count=int(card.get("review_count") or 0) + 1,
+                )
+                return card
+        return None
+
 
 class StudyPlanRepository:
     async def get_by_workspace(self, workspace_id: str) -> Optional[Dict[str, Any]]:

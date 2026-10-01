@@ -58,7 +58,7 @@ const loopSteps = [
   {
     step: '08',
     title: 'REVISION & MASTERY',
-    desc: 'Review flashcards and retake quizzes until your critical gaps are closed.',
+    desc: 'Review spaced-repetition flashcards and retake quizzes until your critical gaps are closed.',
     icon: Target,
   },
 ]

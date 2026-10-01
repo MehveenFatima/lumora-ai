@@ -1,10 +1,11 @@
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from backend.app.api.deps import require_workspace
 from pydantic import BaseModel
 from backend.app.repositories.secondary import study_plan_repo
 from backend.app.services.secondary_service import secondary_service
 
-router = APIRouter(tags=["Study Plans"])
+router = APIRouter(tags=["Study Plans"], dependencies=[Depends(require_workspace)])
 
 
 class StudyTaskItem(BaseModel):

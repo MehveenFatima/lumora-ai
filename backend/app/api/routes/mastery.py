@@ -5,7 +5,8 @@ and the Learner Knowledge Profile.
 """
 from typing import Optional, List, Dict, Any
 from backend.app.core.config import settings
-from fastapi import APIRouter, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+from backend.app.api.deps import require_workspace
 from pydantic import BaseModel
 
 from backend.app.core.logging import get_logger
@@ -28,7 +29,15 @@ from backend.app.schemas.mastery import (
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/workspaces/{workspace_id}", tags=["Topic Mastery & Profile"])
+router = APIRouter(prefix="/workspaces/{workspace_id}", tags=["Topic Mastery & Profile"], dependencies=[Depends(require_workspace)])
+
+
+def learner_id() -> str:
+    """
+    Learner-model rows are keyed by workspace; each workspace has exactly one owner, so the
+    internal learner id is fixed. It is no longer accepted from the client.
+    """
+    return "default_user"
 
 
 @router.get(
@@ -38,7 +47,7 @@ router = APIRouter(prefix="/workspaces/{workspace_id}", tags=["Topic Mastery & P
 )
 async def get_workspace_learner_profile(
     workspace_id: str,
-    user_id: str = Query(default="default_user"),
+    user_id: str = Depends(learner_id),
 ) -> LearnerProfileResponse:
     ws = await workspace_repo.get_by_id(workspace_id)
     if not ws:
@@ -58,7 +67,7 @@ async def get_workspace_learner_profile(
 )
 async def get_workspace_mastery_overview(
     workspace_id: str,
-    user_id: str = Query(default="default_user"),
+    user_id: str = Depends(learner_id),
 ) -> WorkspaceMasteryOverviewResponse:
     ws = await workspace_repo.get_by_id(workspace_id)
     if not ws:
@@ -128,7 +137,7 @@ async def get_workspace_mastery_overview(
 )
 async def list_workspace_topics(
     workspace_id: str,
-    user_id: str = Query(default="default_user"),
+    user_id: str = Depends(learner_id),
 ) -> TopicMasteryListResponse:
     ws = await workspace_repo.get_by_id(workspace_id)
     if not ws:
@@ -202,7 +211,7 @@ async def list_workspace_topics(
 async def get_topic_detail(
     workspace_id: str,
     topic: str,
-    user_id: str = Query(default="default_user"),
+    user_id: str = Depends(learner_id),
 ) -> TopicMasteryDetail:
     ws = await workspace_repo.get_by_id(workspace_id)
     if not ws:
@@ -321,3 +330,46 @@ async def seed_workspace_mastery(
 
     return {"status": "ok", "workspace_id": workspace_id, "seeded_concepts": len(request.concepts)}
 
+
+
+@router.get(
+    "/mastery/history",
+    summary="Workspace mastery over time",
+)
+async def get_mastery_history(
+    workspace_id: str,
+    days: int = Query(default=30, ge=1, le=365),
+    user_id: str = Depends(learner_id),
+):
+    """
+    Daily workspace mastery for the last `days` days, computed from the topic snapshots stored
+    after every answer: each day's value is the mean of every topic's latest mastery so far.
+    Days without new evidence carry the previous value forward.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    start_day = (now - timedelta(days=days - 1)).date()
+    snaps = await topic_mastery_repo.list_snapshots_since(
+        workspace_id, datetime.combine(start_day, datetime.min.time(), tzinfo=timezone.utc), user_id=user_id
+    )
+
+    latest_by_topic: Dict[str, float] = {}
+    by_day: Dict[str, float] = {}
+    for snap in snaps:
+        created = snap["created_at"]
+        if isinstance(created, str):
+            created = datetime.fromisoformat(created)
+        latest_by_topic[snap["entity_id"]] = float(snap["mastery_probability"])
+        by_day[created.date().isoformat()] = sum(latest_by_topic.values()) / len(latest_by_topic)
+
+    points = []
+    last_value = None
+    for i in range(days):
+        day = (start_day + timedelta(days=i)).isoformat()
+        if day in by_day:
+            last_value = by_day[day]
+        if last_value is not None:
+            points.append({"date": day, "mastery_percentage": round(last_value * 100, 1)})
+
+    return {"workspace_id": workspace_id, "days": days, "points": points}

@@ -164,6 +164,7 @@ class GeneratedQuestionData:
             document_name=self.document_name,
             page_number=self.page_number,
             question_type=self.question_type,
+            difficulty=self.difficulty,
         )
 
         self.quality_score = val_res.quality_score

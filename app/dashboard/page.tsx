@@ -33,8 +33,11 @@ import { CreateWorkspaceModal } from '@/components/workspace/create-workspace-mo
 import { DeleteWorkspaceModal } from '@/components/workspace/delete-workspace-modal'
 import { cn } from '@/lib/utils'
 import { computeStudyStreak } from '@/lib/learning-stats'
+import { UserMenu } from '@/components/auth/user-menu'
+import { firstNameOf, useCurrentUser } from '@/lib/api/auth-client'
 
 export default function GlobalDashboardPage() {
+  const currentUser = useCurrentUser()
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [activities, setActivities] = useState<LearningActivity[]>([])
   const [notifications, setNotifications] = useState<NotificationItem[]>([])
@@ -167,18 +170,7 @@ export default function GlobalDashboardPage() {
 
           <ThemeToggle />
 
-          <Link
-            href="/dashboard"
-            className="flex items-center gap-2 rounded-xl border border-border bg-card p-1 pr-2.5 transition-colors hover:bg-accent/40"
-          >
-            <span className="flex size-7 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-chart-2 text-[11px] font-bold text-primary-foreground">
-              MF
-            </span>
-            <span className="hidden text-left leading-none md:block">
-              <span className="block text-xs font-medium text-foreground">Mehveen</span>
-              <span className="mt-0.5 block text-[10px] text-muted-foreground">Learner</span>
-            </span>
-          </Link>
+          <UserMenu />
         </div>
       </header>
 
@@ -195,7 +187,7 @@ export default function GlobalDashboardPage() {
               </span>
             </div>
             <h1 className="mt-1 font-display text-2xl font-semibold tracking-tight text-foreground md:text-3xl">
-              Welcome back, Mehveen
+              Welcome back, {firstNameOf(currentUser?.name)}
             </h1>
             <p className="mt-1 text-xs text-muted-foreground">
               {streakDays > 0

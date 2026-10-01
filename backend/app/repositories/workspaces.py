@@ -78,6 +78,7 @@ class WorkspaceRepository:
         daily_target_minutes: int = 45,
         description: str = "",
         icon_name: str = "FolderKanban",
+        owner_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         now = datetime.now(timezone.utc)
         # Ensure a clean YYYY-MM-DD string for PostgreSQL DATE casting
@@ -105,6 +106,7 @@ class WorkspaceRepository:
             "document_count": 0,
             "topics_count": 0,
             "flashcards_due_count": 0,
+            "owner_id": owner_id,
             "created_at": now,
             "updated_at": now,
         }
@@ -118,13 +120,14 @@ class WorkspaceRepository:
                     await conn.execute(
                         """
                         INSERT INTO workspaces 
-                        (id, name, goal, level, target_date, daily_target_minutes, description, overall_mastery, mastery_delta, status, icon_name, document_count, created_at, updated_at)
-                        VALUES ($1, $2, $3, $4, $5::date, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                        (id, name, goal, level, target_date, daily_target_minutes, description, overall_mastery, mastery_delta, status, icon_name, document_count, created_at, updated_at, owner_id)
+                        VALUES ($1, $2, $3, $4, $5::date, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
                         ON CONFLICT (id) DO UPDATE SET
                             name = EXCLUDED.name,
                             goal = EXCLUDED.goal,
                             description = EXCLUDED.description,
                             updated_at = EXCLUDED.updated_at
+                        WHERE workspaces.owner_id IS NOT DISTINCT FROM EXCLUDED.owner_id
                         """,
                         workspace_id,
                         name,
@@ -140,6 +143,7 @@ class WorkspaceRepository:
                         0,
                         now,
                         now,
+                        owner_id,
                     )
             except Exception as e:
                 logger.error(f"Error inserting workspace {workspace_id} into DB: {e}")
@@ -195,6 +199,42 @@ class WorkspaceRepository:
             if ws.get("name", "").strip().lower() == target_name
         ]
         return matches
+
+    async def list_by_owner(self, owner_id: str) -> List[Dict[str, Any]]:
+        """Workspaces owned by one user, newest first."""
+        pool = await get_db_pool()
+        check_presentation_mode_database_availability(pool)
+
+        if pool:
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT * FROM workspaces WHERE owner_id = $1 ORDER BY created_at DESC", owner_id
+                )
+                return [dict(r) for r in rows]
+        from backend.app.repositories.documents import document_repo
+        result = []
+        for ws in sorted(_memory_workspaces.values(), key=lambda w: str(w.get("created_at", "")), reverse=True):
+            if ws.get("owner_id") != owner_id:
+                continue
+            docs = await document_repo.list_by_workspace(ws["id"])
+            result.append({**ws, "document_count": len(docs)})
+        return result
+
+    async def claim_unowned(self, owner_id: str) -> int:
+        """Assigns every workspace without an owner to `owner_id`. Returns the number claimed."""
+        pool = await get_db_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                result = await conn.execute(
+                    "UPDATE workspaces SET owner_id = $1 WHERE owner_id IS NULL", owner_id
+                )
+                return int(result.split()[-1]) if result else 0
+        count = 0
+        for ws in _memory_workspaces.values():
+            if not ws.get("owner_id"):
+                ws["owner_id"] = owner_id
+                count += 1
+        return count
 
     async def list_all(self) -> List[Dict[str, Any]]:
         pool = await get_db_pool()

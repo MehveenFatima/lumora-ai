@@ -1,5 +1,6 @@
 from typing import Optional
-from fastapi import APIRouter, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+from backend.app.api.deps import require_workspace
 from backend.app.schemas.quizzes import (
     QuizSessionCreateRequest,
     QuizSessionResponse,
@@ -17,7 +18,7 @@ from backend.app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-router = APIRouter(tags=["Quizzes"])
+router = APIRouter(tags=["Quizzes"], dependencies=[Depends(require_workspace)])
 
 
 @router.post(

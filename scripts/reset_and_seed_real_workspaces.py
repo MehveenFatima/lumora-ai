@@ -32,7 +32,7 @@ from backend.app.repositories.bkt import bkt_repo
 from backend.app.services.document_parser import document_parser
 from backend.app.services.chunker import chunker_service
 from backend.app.services.storage import storage_service
-from backend.app.services.embeddings import generate_deterministic_mock_embedding
+from backend.app.services.embeddings import OFFLINE_EMBEDDING_TAG, generate_deterministic_mock_embedding
 from backend.app.services.question_generator import question_generator_service
 from backend.app.services.topic_mastery_engine import topic_mastery_engine
 
@@ -188,41 +188,46 @@ CURATED_FLASHCARDS = {
 
 
 async def reset_database(pool):
-    print("--- [1/6] Safely resetting workspace-scoped tables ---")
+    """Removes only the sample workspaces (and their data) so they can be re-seeded.
+    Other users' workspaces and all accounts are left untouched."""
+    print("--- [1/6] Removing previous copies of the sample workspaces ---")
+    sample_ids = [cfg["id"] for cfg in WORKSPACES_CONFIG]
     async with pool.acquire() as conn:
-        tables_to_clear = [
-            "quiz_attempts",
-            "quiz_question_fingerprints",
-            "quiz_questions",
-            "quiz_sessions",
-            "workspace_question_bank",
-            "learner_mastery_snapshots",
-            "learner_topic_mastery",
-            "learner_knowledge_gaps",
-            "learner_concept_mastery",
-            "tutor_messages",
-            "tutor_conversations",
-            "activity_events",
-            "study_plans",
-            "flashcards",
-            "chunks",
-            "document_chunks",
-            "documents",
-            "workspaces",
+        tables = [
+            r["table_name"]
+            for r in await conn.fetch(
+                """
+                SELECT table_name FROM information_schema.columns
+                WHERE table_schema = 'public' AND column_name = 'workspace_id'
+                """
+            )
         ]
-        for t in tables_to_clear:
-            # Skip tables that are not part of this database's schema (e.g. legacy tables)
-            if await conn.fetchval("SELECT to_regclass($1) IS NOT NULL;", f"public.{t}"):
-                await conn.execute(f"DELETE FROM {t};")
-        print("Cleared all workspace tables.")
+        for t in tables:
+            await conn.execute(f"DELETE FROM {t} WHERE workspace_id = ANY($1::text[]);", sample_ids)
+        await conn.execute("DELETE FROM workspaces WHERE id = ANY($1::text[]);", sample_ids)
+        print(f"Cleared sample workspaces: {', '.join(sample_ids)}")
 
 
-async def seed_workspaces():
+async def ensure_owner(email: str, password: str, name: str) -> dict:
+    from backend.app.core.security import hash_password
+    from backend.app.repositories.users import user_repo
+
+    user = await user_repo.get_by_email(email)
+    if user:
+        print(f"Using existing account {email} as owner.")
+        return user
+    user = await user_repo.create(email=email, name=name, password_hash=hash_password(password))
+    print(f"Created demo account {email}.")
+    return user
+
+
+async def seed_workspaces(owner_email: str, owner_password: str, owner_name: str):
     pool = await get_db_pool()
     if not pool:
         print("Database connection pool unavailable.")
         return
 
+    owner = await ensure_owner(owner_email, owner_password, owner_name)
     await reset_database(pool)
 
     report_data = []
@@ -240,6 +245,7 @@ async def seed_workspaces():
             goal=ws_cfg["goal"],
             description=ws_cfg["description"],
             workspace_id=ws_id,
+            owner_id=owner["id"],
         )
 
         # 2. Read and parse real PDF
@@ -291,6 +297,7 @@ async def seed_workspaces():
         for c in chunks:
             c_dict = c.to_dict()
             c_dict["embedding"] = generate_deterministic_mock_embedding(c.text, 768)
+            c_dict["metadata"] = {**(c_dict.get("metadata") or {}), "embedding_model": OFFLINE_EMBEDDING_TAG}
             c_dict["document_name"] = ws_cfg["doc_filename"]
             c_dict["document_title"] = ws_cfg["doc_title"]
             chunk_dicts.append(c_dict)
@@ -314,6 +321,51 @@ async def seed_workspaces():
         seen_fps = set()
         step = max(1, chunk_count // 55)
 
+        async def _bank(q):
+            await quiz_repo.add_to_question_bank(
+                workspace_id=ws_id,
+                topic=q.topic,
+                concept=q.concept,
+                difficulty=q.difficulty,
+                question_text=q.question_text,
+                options=q.options,
+                correct_option=q.correct_option,
+                explanation=q.explanation,
+                document_id=doc_id,
+                page_number=q.page_number,
+                source_excerpt=q.source_excerpt,
+                citation_metadata={"document_name": ws_cfg["doc_filename"], "page_number": q.page_number},
+                fingerprint=q.fingerprint,
+                question_type=getattr(q, "question_type", "conceptual"),
+                quality_score=getattr(q, "quality_score", 1.0),
+            )
+
+        # Prefer LLM-written questions when an AI provider is configured (they pass the same
+        # quality checks); the template synthesiser below fills any remaining slots.
+        from backend.app.ai.gateway import ai_gateway
+
+        if any(p.is_configured() for p in ai_gateway.providers.values()):
+            seen_texts = []
+            for round_idx, diff in enumerate([1, 2, 3, 2, 1, 3, 2, 3]):
+                if seeded_q_count >= 20:
+                    break
+                pool = await question_generator_service.generate_candidate_pool(
+                    workspace_id=ws_id,
+                    target_count=5,
+                    excluded_fingerprints=seen_fps,
+                    excluded_texts=seen_texts,
+                    preferred_difficulty=diff,
+                    chunks=chunk_dicts,
+                )
+                for q in pool:
+                    if seeded_q_count >= 20 or q.fingerprint in seen_fps:
+                        continue
+                    seen_fps.add(q.fingerprint)
+                    seen_texts.append(q.question_text)
+                    await _bank(q)
+                    seeded_q_count += 1
+            print(f"AI-generated questions banked: {seeded_q_count}")
+
         for i in range(250):
             if seeded_q_count >= 20:
                 break
@@ -332,23 +384,7 @@ async def seed_workspaces():
                 fp = synth_q.fingerprint
                 if fp not in seen_fps:
                     seen_fps.add(fp)
-                    await quiz_repo.add_to_question_bank(
-                        workspace_id=ws_id,
-                        topic=synth_q.topic,
-                        concept=synth_q.concept,
-                        difficulty=synth_q.difficulty,
-                        question_text=synth_q.question_text,
-                        options=synth_q.options,
-                        correct_option=synth_q.correct_option,
-                        explanation=synth_q.explanation,
-                        document_id=doc_id,
-                        page_number=synth_q.page_number,
-                        source_excerpt=synth_q.source_excerpt,
-                        citation_metadata={"document_name": ws_cfg["doc_filename"], "page_number": synth_q.page_number},
-                        fingerprint=fp,
-                        question_type=getattr(synth_q, "question_type", "conceptual"),
-                        quality_score=getattr(synth_q, "quality_score", 1.0),
-                    )
+                    await _bank(synth_q)
                     seeded_q_count += 1
 
         bank_total = await quiz_repo.count_question_bank(ws_id)
@@ -453,4 +489,15 @@ async def seed_workspaces():
 
 
 if __name__ == "__main__":
-    asyncio.run(seed_workspaces())
+    import argparse
+    import secrets
+
+    parser = argparse.ArgumentParser(description="Seed the four sample workspaces for a demo account.")
+    parser.add_argument("--email", default=os.environ.get("LUMORA_DEMO_EMAIL", "demo@lumora.local"))
+    parser.add_argument("--password", default=os.environ.get("LUMORA_DEMO_PASSWORD"))
+    parser.add_argument("--name", default="Demo Learner")
+    args = parser.parse_args()
+    password = args.password or secrets.token_urlsafe(12) + "9"
+    asyncio.run(seed_workspaces(args.email, password, args.name))
+    if not args.password:
+        print(f"\nSign in as {args.email} with password: {password}  (only shown once; ignored if the account already existed)")

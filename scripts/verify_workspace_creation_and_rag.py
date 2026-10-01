@@ -3,6 +3,8 @@ import json
 import uuid
 import sys
 import fitz
+import os, sys; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _api_auth  # noqa: E402,F401  (signs in and authenticates every API request)
 
 BASE_URL = "http://localhost:3000"
 

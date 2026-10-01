@@ -1,5 +1,6 @@
 from typing import Optional
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from backend.app.api.deps import require_workspace
 from backend.app.schemas.tutor import (
     TutorRequest,
     TutorResponse,
@@ -13,7 +14,7 @@ from backend.app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-router = APIRouter(tags=["AI Tutor"])
+router = APIRouter(tags=["AI Tutor"], dependencies=[Depends(require_workspace)])
 
 
 @router.post(

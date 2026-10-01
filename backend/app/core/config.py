@@ -83,6 +83,23 @@ class Settings(BaseSettings):
         default=8, validation_alias="CONVERSATION_HISTORY_LIMIT"
     )
 
+    # Authentication & sessions
+    # JWT_SECRET must be set to a long random value in production (see .env.example).
+    jwt_secret: Optional[str] = Field(default=None, validation_alias="JWT_SECRET")
+    session_ttl_hours: int = Field(default=24 * 7, validation_alias="SESSION_TTL_HOURS")
+    session_cookie_name: str = Field(default="lumora_session", validation_alias="SESSION_COOKIE_NAME")
+    # Secure cookies require HTTPS; defaults to on in production
+    cookie_secure: Optional[bool] = Field(default=None, validation_alias="COOKIE_SECURE")
+    allow_registration: bool = Field(default=True, validation_alias="ALLOW_REGISTRATION")
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment.strip().lower() == "production"
+
+    @property
+    def effective_cookie_secure(self) -> bool:
+        return self.cookie_secure if self.cookie_secure is not None else self.is_production
+
     # Chunking Configuration
     chunk_size_chars: int = 1000
     chunk_overlap_chars: int = 150

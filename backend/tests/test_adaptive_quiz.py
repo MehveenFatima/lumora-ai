@@ -3,6 +3,7 @@ import sys
 import uuid
 from pathlib import Path
 from httpx import AsyncClient, ASGITransport
+from backend.tests.conftest import auth_headers_for_test_user
 
 # Add project root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -80,7 +81,7 @@ async def run_all_tests():
     ws_id = await setup_workspace()
     transport = ASGITransport(app=app)
 
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers_for_test_user()) as ac:
         # TEST 1: Quiz Creation & Hidden Answer Key
         print("[TEST 1] Creating Quiz Session and verifying initial question structure...")
         res = await ac.post(

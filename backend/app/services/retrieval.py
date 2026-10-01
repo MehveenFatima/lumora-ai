@@ -85,6 +85,31 @@ class RetrievalService:
         self.similarity_threshold = similarity_threshold
         self.max_context_tokens = max_context_tokens
 
+    async def _vector_search(
+        self, workspace_id: str, text: str, top_k: int, similarity_threshold: float = 0.35
+    ) -> List[Dict[str, Any]]:
+        """
+        Vector search that compares the query only with chunks embedded by the same model.
+        A workspace can hold chunks from more than one model (for example offline-seeded data
+        and documents uploaded with a Gemini key), so each group is searched with a query
+        embedded in its own vector space.
+        """
+        results: List[Dict[str, Any]] = []
+        for model in await chunk_repo.list_embedding_models(workspace_id):
+            query_emb = await embedding_service.embed_query_for(text, model or None)
+            if query_emb is None:
+                continue
+            results.extend(
+                await chunk_repo.search_similar_chunks(
+                    workspace_id,
+                    query_emb,
+                    top_k=top_k,
+                    similarity_threshold=similarity_threshold,
+                    embedding_model=model,
+                )
+            )
+        return results
+
     def _extract_query_tokens(self, query_text: str) -> List[str]:
         words = re.split(r"[\s\:\-\_\,\?\.\!\;\'\"\(\)\[\]]+", query_text.lower())
         tokens = [w for w in words if len(w) >= 2 and w not in STOP_WORDS]
@@ -267,11 +292,8 @@ class RetrievalService:
         # 3. Compare / Contrast Retrieval (Dual-Concept Hybrid)
         # -------------------------------------------------------------
         elif resolved.intent == "COMPARE_CONTRAST" and resolved.resolved_concept_a and resolved.resolved_concept_b:
-            emb_a = await embedding_service.get_query_embedding(resolved.resolved_concept_a)
-            emb_b = await embedding_service.get_query_embedding(resolved.resolved_concept_b)
-
-            vec_a = await chunk_repo.search_similar_chunks(workspace_id, emb_a, top_k=4, similarity_threshold=0.35)
-            vec_b = await chunk_repo.search_similar_chunks(workspace_id, emb_b, top_k=4, similarity_threshold=0.35)
+            vec_a = await self._vector_search(workspace_id, resolved.resolved_concept_a, top_k=4)
+            vec_b = await self._vector_search(workspace_id, resolved.resolved_concept_b, top_k=4)
 
             tokens_a = self._extract_query_tokens(resolved.resolved_concept_a)
             tokens_b = self._extract_query_tokens(resolved.resolved_concept_b)
@@ -289,12 +311,8 @@ class RetrievalService:
         # -------------------------------------------------------------
         if not candidate_chunks:
             # A. Vector Retrieval
-            query_emb = await embedding_service.get_query_embedding(resolved.semantic_query)
-            vec_candidates = await chunk_repo.search_similar_chunks(
-                workspace_id=workspace_id,
-                query_embedding=query_emb,
-                top_k=max(self.top_k * 2, 8),
-                similarity_threshold=0.35,
+            vec_candidates = await self._vector_search(
+                workspace_id, resolved.semantic_query, top_k=max(self.top_k * 2, 8)
             )
             candidate_chunks.extend(vec_candidates)
 

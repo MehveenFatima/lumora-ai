@@ -1,6 +1,7 @@
-import { workspaceService } from '@/lib/services/workspace-service'
+import { redirect } from 'next/navigation'
+import { tutorApiClient } from '@/lib/api/tutor-api-client'
+import { serverAuthInit } from '@/lib/api/server-auth'
 import { WorkspaceShell } from '@/components/workspace/workspace-shell'
-import { Workspace } from '@/lib/types/domain'
 
 interface WorkspaceLayoutProps {
   children: React.ReactNode
@@ -9,9 +10,15 @@ interface WorkspaceLayoutProps {
 
 export default async function WorkspaceLayout({ children, params }: WorkspaceLayoutProps) {
   const { workspaceId } = await params
-  const workspaces = await workspaceService.getWorkspaces()
-  let currentWorkspace = await workspaceService.getWorkspaceById(workspaceId)
-  const notifications = await workspaceService.getNotifications()
+  const { init, hasSession } = await serverAuthInit()
+  if (!hasSession) redirect(`/login?next=${encodeURIComponent(`/dashboard/workspace/${workspaceId}`)}`)
+
+  // Uncached, per-request calls made with this user's own session
+  const [workspaces, currentWorkspace] = await Promise.all([
+    tutorApiClient.getWorkspaces(init),
+    tutorApiClient.getWorkspaceById(workspaceId, init),
+  ])
+  const notifications: never[] = []
 
   if (!currentWorkspace) {
     return (
@@ -22,9 +29,15 @@ export default async function WorkspaceLayout({ children, params }: WorkspaceLay
           </div>
           <h2 className="font-display text-lg font-semibold text-foreground">Workspace Not Found</h2>
           <p className="mt-2 text-xs text-muted-foreground leading-relaxed">
-            The workspace <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground">{workspaceId}</code> does not exist in the database. It may have been deleted or created prior to database migration.
+            The workspace <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground">{workspaceId}</code> does not exist, or you don&apos;t have access to it. If your session has expired, sign in again.
           </p>
           <div className="mt-6 flex justify-center gap-3">
+            <a
+              href="/login"
+              className="inline-flex h-10 items-center justify-center rounded-xl border border-border bg-card px-5 text-xs font-semibold text-foreground transition-colors hover:bg-accent/40"
+            >
+              Sign in again
+            </a>
             <a
               href="/dashboard"
               className="inline-flex h-10 items-center justify-center rounded-xl bg-primary px-5 text-xs font-semibold text-primary-foreground shadow-glow transition-opacity hover:opacity-90"

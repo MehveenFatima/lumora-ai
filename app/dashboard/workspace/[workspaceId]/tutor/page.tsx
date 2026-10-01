@@ -24,6 +24,7 @@ import {
   Info,
 } from 'lucide-react'
 import { workspaceService } from '@/lib/services/workspace-service'
+import { MarkdownText } from '@/components/workspace/markdown-text'
 import {
   Workspace,
   WorkspaceDocument,
@@ -241,7 +242,11 @@ export default function AiTutorPage() {
                       : 'rounded-bl-sm border border-border bg-card text-foreground'
                   )}
                 >
-                  <div className="whitespace-pre-wrap">{m.content}</div>
+                  {isUser ? (
+                    <div className="whitespace-pre-wrap">{m.content}</div>
+                  ) : (
+                    <MarkdownText content={m.content} />
+                  )}
                 </div>
 
                 {/* Sources & Citations Box (For Assistant messages) */}

@@ -137,6 +137,14 @@ QUESTION_TYPES = [
 ]
 
 
+_AGGREGATE_OPTION_RE = re.compile(
+    r"^(all|none|both|neither|either)\s+(of\s+)?(the\s+)?(above|these|them|options|answers)\b"
+    r"|^(both|either|neither)\s+[a-d]\s+(and|or|nor)\s+[a-d]\b"
+    r"|^[a-d]\s+and\s+[a-d]( only)?$"
+)
+_VALID_DIFFICULTIES = {1, 2, 3, "easy", "medium", "hard"}
+
+
 class QuestionQualityValidator:
     """
     Validates question stems and options against answer leakage, citation contamination,
@@ -581,6 +589,7 @@ class QuestionQualityValidator:
         document_name: Optional[str] = None,
         page_number: Optional[int] = None,
         question_type: Optional[str] = "conceptual",
+        difficulty: Optional[Any] = None,
     ) -> ValidationResult:
         """
         Runs comprehensive validation across all quality criteria.
@@ -607,6 +616,22 @@ class QuestionQualityValidator:
 
         if not correct_text:
             rejections.append(f"Correct option '{correct_option}' is missing or empty.")
+
+        # C1: no true/false items and no "all/none of the above" style options
+        for opt in options:
+            opt_text = (opt.get("text", "") if isinstance(opt, dict) else "").strip().lower().rstrip(".")
+            if opt_text in {"true", "false", "yes", "no"}:
+                rejections.append("True/false style options are not allowed.")
+                break
+            if _AGGREGATE_OPTION_RE.match(opt_text):
+                rejections.append(f"Aggregate option not allowed: '{opt_text}'.")
+                break
+
+        # C5: label consistency (difficulty must be a known level; a concept tag is required)
+        if difficulty is not None and difficulty not in _VALID_DIFFICULTIES:
+            rejections.append(f"Unknown difficulty label: {difficulty!r}.")
+        if concept is not None and not str(concept).strip():
+            rejections.append("Concept tag is empty.")
 
         # 1b. Concept validity check
         if concept:

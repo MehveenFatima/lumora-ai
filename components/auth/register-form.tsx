@@ -5,39 +5,51 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { User, Mail, Lock, ArrowRight, Loader2 } from 'lucide-react'
 import { TextField } from './text-field'
-import { GoogleButton } from './google-button'
 import { AuthAlert } from './auth-alert'
 import { PasswordStrength, getPasswordStrength } from './password-strength'
+import { authClient } from '@/lib/api/auth-client'
+import { safeNextPath } from './login-form'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+/** Mirrors the server rule: at least 8 characters with a letter and a number. */
+function meetsServerPasswordRule(pw: string): boolean {
+  return pw.length >= 8 && /[A-Za-z]/.test(pw) && /\d/.test(pw)
+}
 
 export function RegisterForm() {
   const router = useRouter()
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [agree, setAgree] = useState(false)
   const [touched, setTouched] = useState<Record<string, boolean>>({})
   const [status, setStatus] = useState<'idle' | 'loading' | 'success'>('idle')
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   const nameError = touched.name && name.trim().length < 2 ? 'Enter your full name' : undefined
   const emailError =
     touched.email && !EMAIL_RE.test(email) ? 'Enter a valid email address' : undefined
-  const strong = getPasswordStrength(password).score >= 3
+  const strong = meetsServerPasswordRule(password) && getPasswordStrength(password).score >= 3
   const passwordError =
-    touched.password && !strong ? 'Choose a stronger password' : undefined
+    touched.password && !strong
+      ? 'Use at least 8 characters with a letter, a number and an uppercase letter or symbol'
+      : undefined
 
-  function onSubmit(e: React.FormEvent) {
+  async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
     setTouched({ name: true, email: true, password: true })
-    if (name.trim().length < 2 || !EMAIL_RE.test(email) || !strong || !agree) return
+    if (name.trim().length < 2 || !EMAIL_RE.test(email) || !strong) return
     setStatus('loading')
-    setTimeout(() => {
+    setErrorMessage(null)
+    try {
+      await authClient.register(name.trim(), email.trim(), password)
       setStatus('success')
-      setTimeout(() => {
-        router.push('/dashboard')
-      }, 500)
-    }, 1000)
+      router.replace(safeNextPath())
+      router.refresh()
+    } catch (err: any) {
+      setStatus('idle')
+      setErrorMessage(err?.message || 'Could not create your account. Please try again.')
+    }
   }
 
   return (
@@ -47,23 +59,14 @@ export function RegisterForm() {
           Create your account
         </h1>
         <p className="text-sm text-muted-foreground">
-          Start learning smarter with LumoraAI — it&apos;s free.
+          Upload your study material and start learning with grounded answers.
         </p>
       </div>
 
+      {errorMessage ? <AuthAlert variant="error">{errorMessage}</AuthAlert> : null}
       {status === 'success' ? (
-        <AuthAlert variant="success">
-          Account created! Check your inbox to verify your email.
-        </AuthAlert>
+        <AuthAlert variant="success">Account created. Taking you to your dashboard…</AuthAlert>
       ) : null}
-
-      <GoogleButton label="Sign up with Google" />
-
-      <div className="flex items-center gap-3">
-        <span className="h-px flex-1 bg-border" />
-        <span className="text-xs font-medium text-muted-foreground">or sign up with email</span>
-        <span className="h-px flex-1 bg-border" />
-      </div>
 
       <form onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
         <TextField
@@ -105,25 +108,9 @@ export function RegisterForm() {
           <PasswordStrength password={password} />
         </div>
 
-        <label className="flex cursor-pointer items-start gap-2.5 text-sm text-muted-foreground select-none">
-          <input
-            type="checkbox"
-            checked={agree}
-            onChange={(e) => setAgree(e.target.checked)}
-            className="mt-0.5 size-4 rounded-[6px] border-border bg-card accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-          />
-          <span>
-            I agree to the{' '}
-            <span className="font-medium text-foreground">Terms</span>{' '}
-            and{' '}
-            <span className="font-medium text-foreground">Privacy Policy</span>
-            .
-          </span>
-        </label>
-
         <button
           type="submit"
-          disabled={status === 'loading' || !agree}
+          disabled={status !== 'idle'}
           className="mt-1 inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-primary text-sm font-semibold text-primary-foreground shadow-[var(--shadow-glow)] transition-all hover:opacity-90 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40 disabled:opacity-60"
         >
           {status === 'loading' ? (

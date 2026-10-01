@@ -533,26 +533,36 @@ export const workspaceService = {
     try {
       const res = await tutorApiClient.getFlashcards(workspaceId)
       if (res && res.flashcards && res.flashcards.length > 0) {
-        const cards = res.flashcards.map((c: any) => ({
-          id: c.id,
-          deckId: `deck_${workspaceId}`,
-          question: c.front,
-          answer: c.back,
-          sourceCitation: c.source_document ? `${c.source_document} (p. ${c.source_page || 1})` : undefined,
-          difficulty: 'medium' as const,
-          intervalDays: c.interval_days || 1,
-          repetitions: 1,
-          dueDate: 'Today',
-        }))
+        const today = new Date().toISOString().split('T')[0]
+        const isDue = (c: any) => !c.due_date || String(c.due_date) <= today
+        const cards = res.flashcards
+          .map((c: any) => ({
+            id: c.id,
+            deckId: `deck_${workspaceId}`,
+            question: c.front,
+            answer: c.back,
+            sourceCitation: c.source_document ? `${c.source_document} (p. ${c.source_page || 1})` : undefined,
+            difficulty: 'medium' as const,
+            intervalDays: c.interval_days || 0,
+            repetitions: c.repetitions || 0,
+            lastReviewed: c.last_reviewed || undefined,
+            dueDate: isDue(c) ? 'Today' : String(c.due_date),
+            isDue: isDue(c),
+          }))
+          // Due cards first, then the ones scheduled soonest
+          .sort((a: any, b: any) => Number(b.isDue) - Number(a.isDue) || String(a.dueDate).localeCompare(String(b.dueDate)))
+          .map(({ isDue: _isDue, ...card }: any) => card)
 
+        const learned = res.flashcards.filter((c: any) => (c.repetitions || 0) >= 2).length
         const deck: FlashcardDeck = {
           id: `deck_${workspaceId}`,
           workspaceId,
           title: 'Core Concepts & Definitions',
-          topicName: 'Curriculum Review',
+          topicName: 'From your sources',
           totalCards: cards.length,
-          dueTodayCount: cards.length,
-          masteryPercentage: 65,
+          dueTodayCount: res.flashcards.filter(isDue).length,
+          // Share of cards recalled successfully on at least two consecutive reviews
+          masteryPercentage: cards.length ? Math.round((learned / cards.length) * 100) : 0,
           cards: cards,
         }
         flashcardDecksCache[workspaceId] = [deck]
@@ -567,23 +577,12 @@ export const workspaceService = {
 
   async reviewFlashcard(
     workspaceId: string,
-    deckId: string,
+    _deckId: string,
     cardId: string,
     rating: 'again' | 'hard' | 'good' | 'easy'
   ): Promise<void> {
-    const decks = flashcardDecksCache[workspaceId] || []
-    const deck = decks.find((d) => d.id === deckId)
-    if (!deck) return
-
-    const card = deck.cards.find((c) => c.id === cardId)
-    if (!card) return
-
-    card.lastReviewed = new Date().toISOString().split('T')[0]
-    if (rating === 'easy' || rating === 'good') {
-      card.intervalDays = (card.intervalDays || 1) * 2
-    } else {
-      card.intervalDays = 1
-    }
+    // Persist the rating; the backend schedules the next review with SM-2
+    await tutorApiClient.reviewFlashcard(workspaceId, cardId, rating)
   },
 
   // 5. STUDY PLAN & ACTIVITY METHODS

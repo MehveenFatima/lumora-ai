@@ -71,12 +71,17 @@ async function handleProxy(req: NextRequest, { params }: { params: Promise<{ pat
     const resHeaders = new Headers()
     backendRes.headers.forEach((val, key) => {
       // Avoid content-encoding mismatch issues if Next.js compresses
-      if (!['content-encoding', 'content-length'].includes(key.toLowerCase())) {
+      if (!['content-encoding', 'content-length', 'set-cookie'].includes(key.toLowerCase())) {
         resHeaders.set(key, val)
       }
     })
+    // Forward session cookies individually (Headers.set would merge or drop them)
+    for (const cookie of backendRes.headers.getSetCookie()) {
+      resHeaders.append('set-cookie', cookie)
+    }
 
-    const data = await backendRes.arrayBuffer()
+    // 204/205/304 responses must not carry a body
+    const data = [204, 205, 304].includes(backendRes.status) ? null : await backendRes.arrayBuffer()
     return new NextResponse(data, {
       status: backendRes.status,
       statusText: backendRes.statusText,
@@ -107,3 +112,6 @@ export const PUT = handleProxy
 export const DELETE = handleProxy
 export const PATCH = handleProxy
 export const OPTIONS = handleProxy
+
+// Uploads parse and embed documents inside the request; allow up to 60 s on serverless hosts
+export const maxDuration = 60

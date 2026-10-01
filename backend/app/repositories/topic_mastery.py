@@ -266,4 +266,27 @@ class TopicMasteryRepository:
         return sorted(items, key=lambda x: x["created_at"], reverse=True)[:limit]
 
 
+    async def list_snapshots_since(
+        self, workspace_id: str, since, entity_type: str = "topic", user_id: str = "default_user"
+    ) -> List[Dict[str, Any]]:
+        """All snapshots of one entity type recorded since `since`, oldest first."""
+        pool = await get_db_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT entity_id, mastery_probability, created_at FROM learner_mastery_snapshots
+                    WHERE workspace_id = $1 AND user_id = $2 AND entity_type = $3 AND created_at >= $4
+                    ORDER BY created_at ASC
+                    """,
+                    workspace_id, user_id, entity_type, since,
+                )
+                return [dict(r) for r in rows]
+        prefix = f"{workspace_id}:{user_id}:{entity_type}:"
+        items = [
+            s for key, snaps in _memory_mastery_snapshots.items() if key.startswith(prefix) for s in snaps
+        ]
+        return sorted((s for s in items if s["created_at"] >= since), key=lambda x: x["created_at"])
+
+
 topic_mastery_repo = TopicMasteryRepository()

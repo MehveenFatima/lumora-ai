@@ -1,6 +1,9 @@
+import asyncio
 import os
+import re
 from typing import List
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, status
+from backend.app.api.deps import CurrentUser, get_current_user, ensure_document_access, require_workspace
 from fastapi.responses import Response
 from backend.app.schemas.documents import (
     DocumentResponse,
@@ -13,7 +16,7 @@ from backend.app.repositories.chunks import chunk_repo
 from backend.app.repositories.secondary import activity_repo
 from backend.app.services.document_parser import document_parser
 from backend.app.services.chunker import chunker_service
-from backend.app.services.embeddings import embedding_service
+from backend.app.services.embeddings import EmbeddingUnavailableError, embedding_service
 from backend.app.services.storage import storage_service
 from backend.app.core.config import settings
 from backend.app.core.logging import get_logger
@@ -25,6 +28,16 @@ router = APIRouter(tags=["Documents"])
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".txt"}
 
 
+class DocumentContentError(Exception):
+    """The file is valid but contains nothing that can be indexed."""
+
+
+def _safe_filename(name: str) -> str:
+    """Strips characters that could break or inject into the Content-Disposition header."""
+    cleaned = "".join(ch for ch in (name or "document") if ch.isprintable() and ch not in '"\\\r\n;')
+    return cleaned.strip() or "document"
+
+
 @router.post(
     "/workspaces/{workspace_id}/documents",
     response_model=DocumentResponse,
@@ -34,6 +47,7 @@ async def upload_document(
     workspace_id: str,
     file: UploadFile = File(...),
     title: str = Form(None),
+    workspace: dict = Depends(require_workspace),
 ) -> DocumentResponse:
     # 1. Validate workspace
     workspace = await workspace_repo.get_by_id(workspace_id)
@@ -96,22 +110,19 @@ async def upload_document(
         await document_repo.update_status(doc_id, status="processing")
 
         # Step B: Parse text and page numbers
-        parsed_pages = document_parser.parse(file_bytes, file_type)
+        parsed_pages = await asyncio.to_thread(document_parser.parse, file_bytes, file_type)
         page_count = len(parsed_pages)
+        readable = [
+            p for p in parsed_pages
+            if (p.text or "").strip() and not re.fullmatch(r"\[[^\]]*\]", (p.text or "").strip())
+        ]
+        if not readable:
+            raise DocumentContentError(
+                "No readable text was found in this document. Scanned or image-only files are not supported yet."
+            )
 
-        # Step C: Upload original file to Supabase storage
-        storage_path = await storage_service.upload_file(
-            workspace_id=workspace_id,
-            document_id=doc_id,
-            filename=file.filename,
-            file_bytes=file_bytes,
-            content_type=file.content_type or "application/octet-stream",
-        )
-
-        # Step D: Update status to extracting with storage path
-        await document_repo.update_status(
-            doc_id, status="extracting", page_count=page_count, storage_path=storage_path
-        )
+        # Step D: Update status to extracting
+        await document_repo.update_status(doc_id, status="extracting", page_count=page_count)
 
         # Step E: Chunk pages into semantic chunks
         chunks = chunker_service.chunk_pages(
@@ -125,17 +136,29 @@ async def upload_document(
         # Step F: Update status to indexing
         await document_repo.update_status(doc_id, status="indexing")
 
-        # Step G: Generate embeddings for chunks
+        if not chunks:
+            raise DocumentContentError("No readable text was found in this document.")
+
+        # Step G: Generate embeddings for chunks in batches, tagged with the model used
+        vectors, model_tag = await embedding_service.embed_documents([c.text for c in chunks])
         chunk_dicts = []
-        for c in chunks:
-            embedding = await embedding_service.get_embedding(c.text)
+        for c, embedding in zip(chunks, vectors):
             c_dict = c.to_dict()
             c_dict["embedding"] = embedding
+            c_dict["metadata"] = {**(c_dict.get("metadata") or {}), "embedding_model": model_tag}
             c_dict["document_name"] = file.filename
             c_dict["document_title"] = doc_title
             chunk_dicts.append(c_dict)
 
-        # Step H: Store chunks in database
+        # Step H: Store the original file (only once indexing has succeeded) and the chunks
+        storage_path = await storage_service.upload_file(
+            workspace_id=workspace_id,
+            document_id=doc_id,
+            filename=file.filename,
+            file_bytes=file_bytes,
+            content_type=file.content_type or "application/octet-stream",
+        )
+        await document_repo.update_status(doc_id, status="indexing", storage_path=storage_path)
         await chunk_repo.insert_chunks(chunk_dicts)
 
         # Step I: Set status = ready
@@ -165,14 +188,24 @@ async def upload_document(
 
         return DocumentResponse(**updated_doc)
 
-    except Exception as e:
-        logger.error(f"Document ingestion failed for doc {doc_id}: {e}")
-        failed_doc = await document_repo.update_status(
-            doc_id, status="failed", error_message=str(e)
+    except (DocumentContentError, EmbeddingUnavailableError) as e:
+        # Expected, user-actionable failures: remove the partial record so it doesn't linger
+        logger.warning(f"Document ingestion rejected for doc {doc_id}: {e}")
+        await chunk_repo.delete_by_document(doc_id)
+        await document_repo.delete(doc_id)
+        code = (
+            status.HTTP_503_SERVICE_UNAVAILABLE
+            if isinstance(e, EmbeddingUnavailableError)
+            else status.HTTP_422_UNPROCESSABLE_ENTITY
         )
+        raise HTTPException(status_code=code, detail=str(e))
+    except Exception as e:
+        logger.error(f"Document ingestion failed for doc {doc_id}: {e}", exc_info=True)
+        await chunk_repo.delete_by_document(doc_id)
+        await document_repo.delete(doc_id)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Document indexing pipeline failed: {str(e)}",
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="This file could not be processed. Check that it is a valid, text-based document and try again.",
         )
 
 
@@ -180,7 +213,9 @@ async def upload_document(
     "/workspaces/{workspace_id}/documents",
     response_model=DocumentListResponse,
 )
-async def list_workspace_documents(workspace_id: str) -> DocumentListResponse:
+async def list_workspace_documents(
+    workspace_id: str, workspace: dict = Depends(require_workspace)
+) -> DocumentListResponse:
     workspace = await workspace_repo.get_by_id(workspace_id)
     if not workspace:
         raise HTTPException(
@@ -197,8 +232,8 @@ async def list_workspace_documents(workspace_id: str) -> DocumentListResponse:
 
 
 @router.get("/documents/{document_id}", response_model=DocumentResponse)
-async def get_document(document_id: str) -> DocumentResponse:
-    doc = await document_repo.get_by_id(document_id)
+async def get_document(document_id: str, user: CurrentUser = Depends(get_current_user)) -> DocumentResponse:
+    doc = await ensure_document_access(await document_repo.get_by_id(document_id), user)
     if not doc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -208,8 +243,8 @@ async def get_document(document_id: str) -> DocumentResponse:
 
 
 @router.get("/documents/{document_id}/download")
-async def download_document(document_id: str):
-    doc = await document_repo.get_by_id(document_id)
+async def download_document(document_id: str, user: CurrentUser = Depends(get_current_user)):
+    doc = await ensure_document_access(await document_repo.get_by_id(document_id), user)
     if not doc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -227,7 +262,7 @@ async def download_document(document_id: str):
             status_code=status.HTTP_404_NOT_FOUND,
             detail="File content could not be retrieved.",
         )
-    filename = doc.get("filename", "document.pdf")
+    filename = _safe_filename(doc.get("filename", "document.pdf"))
     media_type = "application/pdf" if filename.lower().endswith(".pdf") else "application/octet-stream"
     return Response(
         content=file_bytes,
@@ -237,8 +272,8 @@ async def download_document(document_id: str):
 
 
 @router.get("/documents/{document_id}/view")
-async def view_document(document_id: str):
-    doc = await document_repo.get_by_id(document_id)
+async def view_document(document_id: str, user: CurrentUser = Depends(get_current_user)):
+    doc = await ensure_document_access(await document_repo.get_by_id(document_id), user)
     if not doc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -256,7 +291,7 @@ async def view_document(document_id: str):
             status_code=status.HTTP_404_NOT_FOUND,
             detail="File content could not be retrieved.",
         )
-    filename = doc.get("filename", "document.pdf")
+    filename = _safe_filename(doc.get("filename", "document.pdf"))
     media_type = "application/pdf" if filename.lower().endswith(".pdf") else "application/octet-stream"
     return Response(
         content=file_bytes,
@@ -266,8 +301,8 @@ async def view_document(document_id: str):
 
 
 @router.delete("/documents/{document_id}", status_code=status.HTTP_200_OK)
-async def delete_document(document_id: str):
-    doc = await document_repo.get_by_id(document_id)
+async def delete_document(document_id: str, user: CurrentUser = Depends(get_current_user)):
+    doc = await ensure_document_access(await document_repo.get_by_id(document_id), user)
     if not doc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

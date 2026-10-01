@@ -60,6 +60,11 @@ export default function FlashcardsPage() {
   const currentCard = currentCards[cardIndex]
 
   const handleRate = (rating: 'again' | 'hard' | 'good' | 'easy') => {
+    if (currentCard && currentDeck) {
+      workspaceService
+        .reviewFlashcard(workspaceId, currentDeck.id, currentCard.id, rating)
+        .catch((err) => console.warn('Could not save flashcard review:', err))
+    }
     setIsRevealed(false)
     setReviewedCount((prev) => prev + 1)
 
@@ -109,7 +114,7 @@ export default function FlashcardsPage() {
         <div>
           <div className="flex items-center gap-2">
             <span className="text-xs font-semibold uppercase tracking-wider text-primary">
-              Active Recall
+              Spaced Repetition
             </span>
             <span className="text-muted-foreground">•</span>
             <span className="text-xs text-muted-foreground">{workspace?.name}</span>
