@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import re
 from typing import List, Optional
@@ -197,7 +198,8 @@ class EmbeddingService:
         if self._init_gemini():
             try:
                 import google.generativeai as genai
-                result = genai.embed_content(
+                result = await asyncio.to_thread(
+                    genai.embed_content,
                     model=self.model_name,
                     content=clean_text,
                     task_type="retrieval_document",
@@ -228,7 +230,8 @@ class EmbeddingService:
         if self._init_gemini():
             try:
                 import google.generativeai as genai
-                result = genai.embed_content(
+                result = await asyncio.to_thread(
+                    genai.embed_content,
                     model=self.model_name,
                     content=clean_query,
                     task_type="retrieval_query",

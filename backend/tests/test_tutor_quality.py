@@ -80,11 +80,17 @@ def test_pedagogical_mode_classification():
 import pytest_asyncio
 
 _shared_ssl_ws_id = None
+_shared_ssl_doc_id = None
 
 @pytest_asyncio.fixture
 async def ssl_workspace():
-    global _shared_ssl_ws_id
-    if _shared_ssl_ws_id is None:
+    global _shared_ssl_ws_id, _shared_ssl_doc_id
+    # Reuse the seeded workspace only while its chunks still exist. In memory-backed mode the
+    # autouse conftest fixture clears the store between tests, so the data is re-seeded.
+    needs_seed = _shared_ssl_ws_id is None or not await chunk_repo.get_chunks_by_document(
+        _shared_ssl_ws_id, _shared_ssl_doc_id
+    )
+    if needs_seed:
         ws_id = f"ws_tutor_quality_{uuid.uuid4().hex[:8]}"
         await workspace_repo.create(
             workspace_id=ws_id,
@@ -168,6 +174,7 @@ async def ssl_workspace():
         await chunk_repo.insert_chunks(chunks_data)
         await document_repo.update_status(doc_id, "ready", page_count=45, chunk_count=len(chunks_data))
         _shared_ssl_ws_id = ws_id
+        _shared_ssl_doc_id = doc_id
 
     yield _shared_ssl_ws_id
 

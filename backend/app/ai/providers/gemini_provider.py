@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 import time
@@ -148,7 +149,8 @@ class GeminiProvider(BaseAIProvider):
             else:
                 contents = request.prompt
 
-            response = model.generate_content(contents)
+            # Run the blocking SDK call off the event loop so other requests keep being served
+            response = await asyncio.to_thread(model.generate_content, contents)
 
             if not response or not hasattr(response, "text") or not response.text:
                 raise ProviderUnavailableError("Gemini returned empty text response.", provider=self.provider_name)
@@ -201,7 +203,8 @@ class GeminiProvider(BaseAIProvider):
             else:
                 contents = prompt
 
-            response = model.generate_content(contents)
+            # Run the blocking SDK call off the event loop so other requests keep being served
+            response = await asyncio.to_thread(model.generate_content, contents)
 
             if not response or not hasattr(response, "text") or not response.text:
                 raise ProviderUnavailableError("Gemini returned empty structured response.", provider=self.provider_name)

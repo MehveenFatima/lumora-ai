@@ -65,6 +65,18 @@ async def upload_document(
             detail=f"File exceeds maximum allowed size of {settings.max_file_size_bytes / (1024 * 1024):.0f} MB.",
         )
 
+    # 3b. Validate the file signature so a renamed or corrupt file is rejected as a client error
+    if ext == ".pdf" and not file_bytes.lstrip()[:5] == b"%PDF-":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The uploaded file is not a valid PDF document.",
+        )
+    if ext in (".docx", ".pptx") and not file_bytes.startswith(b"PK\x03\x04"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"The uploaded file is not a valid {ext.lstrip('.').upper()} document.",
+        )
+
     doc_title = title.strip() if title else os.path.splitext(file.filename)[0].replace("_", " ")
     file_type = ext.lstrip(".")
 

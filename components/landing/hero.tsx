@@ -50,22 +50,22 @@ export function Hero() {
 
           <div className="mt-8 flex flex-col items-center gap-3 sm:flex-row">
             <Link
-              href="/dashboard/workspace/dsa"
+              href="/dashboard"
               className="inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-3.5 text-xs font-semibold text-primary-foreground shadow-glow transition-opacity hover:opacity-90"
             >
-              Start Learning Free
+              Start Learning
               <ArrowRight className="size-4" />
             </Link>
             <Link
-              href="/dashboard"
+              href="#learning-loop"
               className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-6 py-3.5 text-xs font-semibold text-foreground shadow-soft transition-colors hover:bg-accent/50"
             >
-              Explore LumoraAI
+              How It Works
             </Link>
           </div>
 
           <p className="mt-4 text-[11px] text-muted-foreground">
-            No fake promises · Grounded citations in your sources · Adaptive mastery modeling
+            Page-level citations from your sources · Adaptive quizzes · Concept-level mastery tracking
           </p>
         </div>
 
@@ -79,7 +79,7 @@ export function Hero() {
                 <span className="size-2.5 rounded-full bg-warning/60" />
                 <span className="size-2.5 rounded-full bg-success/60" />
                 <span className="ml-2 font-mono text-[11px] text-muted-foreground">
-                  lumora.ai/workspace/data-structures-and-algorithms
+                  Example workspace · Data Structures &amp; Algorithms
                 </span>
               </div>
               <Badge variant="success" size="sm" className="text-[10px]">

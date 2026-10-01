@@ -5,6 +5,23 @@ from backend.app.ai.gateway import ai_gateway
 from backend.app.ai.types import ProviderStatus
 
 
+@pytest.fixture(autouse=True)
+def configured_providers():
+    """
+    The cooldown scenarios below need providers that count as configured. Give any provider
+    without a key a placeholder for the duration of the test (no network call is made), so
+    these tests do not depend on real API keys being present in the environment.
+    """
+    saved = {}
+    for name, provider in ai_gateway.providers.items():
+        if hasattr(provider, "_api_key") and not provider.is_configured():
+            saved[name] = provider._api_key
+            provider._api_key = "test-placeholder-key"
+    yield
+    for name, key in saved.items():
+        ai_gateway.providers[name]._api_key = key
+
+
 @pytest.mark.asyncio
 async def test_health_check_structure(async_client: AsyncClient):
     """Verifies complete health check structure separating backend and AI provider health."""

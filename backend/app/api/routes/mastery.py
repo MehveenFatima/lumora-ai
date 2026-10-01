@@ -4,6 +4,7 @@ Authoritative endpoints for workspace-scoped topic mastery, concept hierarchies,
 and the Learner Knowledge Profile.
 """
 from typing import Optional, List, Dict, Any
+from backend.app.core.config import settings
 from fastapi import APIRouter, HTTPException, status, Query
 from pydantic import BaseModel
 
@@ -281,6 +282,12 @@ async def seed_workspace_mastery(
     workspace_id: str,
     request: MasterySeedRequest,
 ):
+    # Development/test utility: writing mastery directly bypasses BKT, so it is disabled in production.
+    if settings.environment.lower() == "production":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Mastery seeding is only available outside production.",
+        )
     ws = await workspace_repo.get_by_id(workspace_id)
     if not ws:
         raise HTTPException(

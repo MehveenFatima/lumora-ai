@@ -15,38 +15,38 @@ const features = [
   {
     icon: FolderKanban,
     title: 'Isolated Learning Workspaces',
-    desc: 'Each subject (DSA, OS, ML, Cloud) maintains its own memory, source citations, and mastery model without topic bleeding.',
+    desc: 'Each subject keeps its own documents, vector index, quiz history and mastery model, so retrieval never mixes subjects.',
     tag: 'Core Architecture',
   },
   {
     icon: MessagesSquare,
     title: 'Grounded AI Tutor',
-    desc: 'Ask complex questions and receive educational explanations citing exact pages, slides, and passages from your uploaded notes.',
+    desc: 'Answers are generated only from passages retrieved from your uploads and cite the document and page. Off-topic questions are declined.',
     tag: 'RAG Grounding',
   },
   {
     icon: Zap,
     title: 'Adaptive Diagnostic Quizzes',
-    desc: 'Full-screen immersive quizzes that dynamically adjust question difficulty based on your real-time response accuracy.',
+    desc: 'Questions arrive in batches. Your batch score raises, holds or lowers the difficulty of the next batch and decides which concepts it targets.',
     tag: 'Adaptive Testing',
   },
   {
     icon: Target,
     title: 'Knowledge Gap Prediction',
-    desc: 'Identifies why you failed specific concepts (e.g. recursion stack confusion) and delivers transparent remediation recommendations.',
+    desc: 'Bayesian Knowledge Tracing updates a mastery probability for every concept after each answer and flags gaps with a severity and next action.',
     tag: 'Diagnostics',
   },
   {
     icon: Map,
     title: 'Self-Adapting Roadmaps',
-    desc: 'Roadmaps automatically insert prerequisite remediation milestones when weak concepts are detected.',
+    desc: 'A roadmap built from your topic mastery that highlights weak concepts to revisit before moving on.',
     tag: 'Dynamic Planning',
   },
   {
     icon: Layers,
-    title: 'Spaced Repetition Flashcards',
-    desc: 'Auto-extracted concept cards scheduled by retention half-life with standard Again/Hard/Good/Easy interval tuning.',
-    tag: 'Memory Retention',
+    title: 'Flashcards From Your Sources',
+    desc: 'Concept cards generated from your documents, with Again / Hard / Good / Easy self-rating while you review.',
+    tag: 'Active Recall',
   },
 ]
 

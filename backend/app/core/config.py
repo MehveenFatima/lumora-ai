@@ -75,6 +75,8 @@ class Settings(BaseSettings):
 
     # RAG Retrieval Quality & Thresholds
     rag_top_k: int = Field(default=5, validation_alias="RAG_TOP_K")
+    # Note: the grounding threshold actually applied (tau = 0.50) is set in RetrievalService
+    # (services/retrieval.py); this setting is kept for compatibility but is not read there.
     rag_similarity_threshold: float = Field(default=0.65, validation_alias="RAG_SIMILARITY_THRESHOLD")
     max_context_tokens: int = Field(default=3500, validation_alias="MAX_CONTEXT_TOKENS")
     conversation_history_limit: int = Field(
@@ -133,11 +135,16 @@ class Settings(BaseSettings):
         return v
 
     @field_validator("allowed_origins", mode="before")
-    def assemble_cors_origins(cls, v, values):
+    @classmethod
+    def assemble_cors_origins(cls, v, info):
         origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+        # Honour FRONTEND_ORIGIN so a deployed frontend can call the API directly
+        frontend_origin = (info.data or {}).get("frontend_origin")
+        if frontend_origin:
+            origins.append(frontend_origin.rstrip("/"))
         if isinstance(v, list):
-            return list(set(v + origins))
-        return origins
+            origins.extend(v)
+        return sorted(set(origins))
 
 
 settings = Settings()

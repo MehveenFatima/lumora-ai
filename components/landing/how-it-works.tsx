@@ -16,7 +16,7 @@ const loopSteps = [
   {
     step: '01',
     title: 'YOUR MATERIAL',
-    desc: 'Upload PDFs, textbooks, lecture slides, or question banks into an isolated workspace.',
+    desc: 'Upload PDFs, Word documents, slides or text notes into an isolated subject workspace.',
     icon: Upload,
   },
   {
@@ -28,19 +28,19 @@ const loopSteps = [
   {
     step: '03',
     title: 'ASSESSMENT',
-    desc: 'Take adaptive diagnostic quizzes where difficulty shifts dynamically based on real-time accuracy.',
+    desc: 'Take adaptive quizzes where each batch’s score sets the difficulty of the next batch.',
     icon: Zap,
   },
   {
     step: '04',
     title: 'KNOWLEDGE ANALYSIS',
-    desc: 'The engine models your mastery level per concept without relying on superficial vanity metrics.',
+    desc: 'Bayesian Knowledge Tracing updates your mastery probability for each concept after every answer.',
     icon: BarChart3,
   },
   {
     step: '05',
     title: 'KNOWLEDGE GAPS',
-    desc: 'Weak spots and underlying cognitive misconceptions are precisely diagnosed and highlighted.',
+    desc: 'Concepts with low mastery or repeated mistakes are flagged as gaps, ranked by severity.',
     icon: AlertTriangle,
   },
   {
@@ -52,13 +52,13 @@ const loopSteps = [
   {
     step: '07',
     title: 'ADAPTIVE ROADMAP',
-    desc: 'Your learning roadmap automatically splices remediation nodes before unlocking advanced topics.',
+    desc: 'Your roadmap reflects topic mastery and points to weak concepts before advanced topics.',
     icon: Map,
   },
   {
     step: '08',
     title: 'REVISION & MASTERY',
-    desc: 'Review spaced-repetition flashcards and reassess until every critical gap achieves 80%+ mastery.',
+    desc: 'Review flashcards and retake quizzes until your critical gaps are closed.',
     icon: Target,
   },
 ]

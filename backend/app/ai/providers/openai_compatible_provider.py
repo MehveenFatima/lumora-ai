@@ -63,7 +63,7 @@ class OpenAICompatibleProvider(BaseAIProvider):
         return {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://lumora.ai",
+            "HTTP-Referer": "https://github.com/MehveenFatima/lumora-ai",
             "X-Title": "LumoraAI",
         }
 

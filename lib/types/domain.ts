@@ -266,7 +266,10 @@ export interface LearningActivity {
   title: string
   description: string
   scoreBadge?: string
+  /** Display label for the event time (e.g. "10:14 AM") */
   timestamp: string
+  /** Raw ISO-8601 time the event occurred, as returned by the backend */
+  occurredAt?: string
   metadata?: Record<string, string | number>
 }
 

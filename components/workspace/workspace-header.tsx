@@ -148,8 +148,13 @@ export function WorkspaceHeader({
           <span className="text-xs font-semibold tabular-nums text-foreground">
             {currentWorkspace.overallMastery}%
           </span>
-          <Badge variant="success" size="sm" className="ml-0.5 text-[10px]">
-            +{currentWorkspace.masteryDelta}%
+          <Badge
+            variant={(currentWorkspace.masteryDelta || 0) < 0 ? 'warning' : 'success'}
+            size="sm"
+            className="ml-0.5 text-[10px]"
+          >
+            {(currentWorkspace.masteryDelta || 0) >= 0 ? '+' : ''}
+            {currentWorkspace.masteryDelta || 0}%
           </Badge>
         </div>
       </div>
@@ -228,7 +233,7 @@ export function WorkspaceHeader({
           </span>
           <span className="hidden text-left leading-none md:block">
             <span className="block text-xs font-medium text-foreground">Mehveen</span>
-            <span className="mt-0.5 block text-[10px] text-muted-foreground">Pro Learner</span>
+            <span className="mt-0.5 block text-[10px] text-muted-foreground">Learner</span>
           </span>
         </Link>
       </div>

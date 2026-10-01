@@ -17,28 +17,28 @@ export function CTA() {
         <div className="relative z-10 mx-auto max-w-2xl">
           <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background/60 px-3 py-1 text-[12px] font-medium text-muted-foreground backdrop-blur">
             <Sparkles className="size-3.5 text-primary" />
-            Start in under 2 minutes
+            Built on your own study material
           </span>
           <h2 className="mt-6 text-balance font-display text-3xl font-semibold tracking-tight text-foreground md:text-5xl">
             Your smartest study session starts now
           </h2>
           <p className="mt-4 text-pretty text-base leading-relaxed text-muted-foreground md:text-lg">
-            Join 250,000+ learners using LumoraAI to understand more, remember longer, and
-            reach their goals faster.
+            Create a workspace, upload your notes, and let LumoraAI explain them with citations,
+            quiz you adaptively, and track your mastery concept by concept.
           </p>
           <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
             <Link
               href="/dashboard"
               className="inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground shadow-[var(--shadow-glow)] transition-opacity hover:opacity-90"
             >
-              Get started free
+              Open the dashboard
               <ArrowRight className="size-4" />
             </Link>
             <Link
-              href="/dashboard"
+              href="#learning-loop"
               className="inline-flex items-center gap-2 rounded-xl border border-border bg-background/50 px-6 py-3 text-sm font-semibold text-foreground backdrop-blur transition-colors hover:bg-accent/50"
             >
-              Explore the dashboard
+              See how it works
             </Link>
           </div>
         </div>

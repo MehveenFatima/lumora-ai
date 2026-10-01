@@ -31,7 +31,8 @@ FASTAPI_URL = "http://127.0.0.1:8000"
 PROXY_URL = "http://localhost:3000"
 
 DEMO_CONTENT_DIR = PROJECT_ROOT / "lumora_demo_content_pack"
-FALLBACK_ZIP_PATH = Path(r"C:\Users\ABDUL RAHMAN\Downloads\LumoraAI_Presentation_Demo_Content.zip")
+# Optional: path to a zipped copy of the demo content pack, used if the folder above is missing
+FALLBACK_ZIP_PATH = Path(os.environ.get("LUMORA_DEMO_ZIP", str(PROJECT_ROOT / "LumoraAI_Presentation_Demo_Content.zip")))
 
 # Authoritative Subject Configurations mapping to original PDF files
 PRESENTATION_SUBJECTS = [

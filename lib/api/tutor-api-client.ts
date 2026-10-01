@@ -113,7 +113,7 @@ async function apiFetch(path: string, options: RequestInit = {}): Promise<Respon
     console.error(`[API Client] apiFetch failed for endpoint ${cleanPath}:`, err)
     const isTimeout = err?.name === 'TimeoutError' || err?.message?.includes('timeout') || err?.message?.includes('aborted')
     if (isTimeout) {
-      const timeoutErr: any = new Error(`Request to '${cleanPath}' timed out after 30 seconds.`)
+      const timeoutErr: any = new Error(`Request to '${cleanPath}' timed out.`)
       timeoutErr.code = 'TIMEOUT'
       throw timeoutErr
     }
@@ -352,9 +352,11 @@ export const tutorApiClient = {
       formData.append('title', title)
     }
 
+    // Ingestion (parse, chunk, embed) runs inside this request, so allow up to 5 minutes.
     const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/documents`, {
       method: 'POST',
       body: formData,
+      signal: AbortSignal.timeout(300000),
     })
 
     if (!response.ok) {

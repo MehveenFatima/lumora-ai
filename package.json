@@ -1,5 +1,5 @@
 {
-  "name": "my-project",
+  "name": "lumora-ai",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -9,7 +9,8 @@
     "seed:presentation": "python scripts/seed_presentation_data.py",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint ."
+    "typecheck": "tsc --noEmit",
+    "test:backend": "python -m pytest backend/tests -q"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",

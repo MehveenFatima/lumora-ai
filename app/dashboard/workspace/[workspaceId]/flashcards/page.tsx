@@ -109,7 +109,7 @@ export default function FlashcardsPage() {
         <div>
           <div className="flex items-center gap-2">
             <span className="text-xs font-semibold uppercase tracking-wider text-primary">
-              Spaced Repetition
+              Active Recall
             </span>
             <span className="text-muted-foreground">•</span>
             <span className="text-xs text-muted-foreground">{workspace?.name}</span>

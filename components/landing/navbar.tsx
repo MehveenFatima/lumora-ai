@@ -67,7 +67,7 @@ export function Navbar() {
             Dashboard
           </Link>
           <Link
-            href="/dashboard/workspace/dsa"
+            href="/dashboard"
             className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow-glow transition-opacity hover:opacity-90"
           >
             Start Learning
@@ -109,7 +109,7 @@ export function Navbar() {
                 Enter Dashboard
               </Link>
               <Link
-                href="/dashboard/workspace/dsa"
+                href="/dashboard"
                 className="flex items-center justify-center gap-1.5 rounded-xl bg-primary py-2.5 text-xs font-semibold text-primary-foreground"
               >
                 Start Learning Free

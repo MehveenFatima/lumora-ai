@@ -66,7 +66,13 @@ export function AuthShell({ children }: { children: React.ReactNode }) {
           </Link>
         </div>
         <div className="flex flex-1 items-center justify-center px-5 pb-12 lg:p-8">
-          <div className="w-full max-w-[400px]">{children}</div>
+          <div className="w-full max-w-[400px]">
+            {children}
+            <p className="mt-6 rounded-xl border border-border bg-card/60 px-3 py-2 text-center text-[11px] leading-relaxed text-muted-foreground">
+              Preview: accounts are not connected yet. LumoraAI currently runs as a single local
+              learner, and these forms only validate input.
+            </p>
+          </div>
         </div>
       </main>
     </div>

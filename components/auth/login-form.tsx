@@ -107,12 +107,6 @@ export function LoginForm() {
             />
             Remember me
           </label>
-          <Link
-            href="/forgot-password"
-            className="text-sm font-medium text-primary transition-opacity hover:opacity-80"
-          >
-            Forgot password?
-          </Link>
         </div>
 
         <button

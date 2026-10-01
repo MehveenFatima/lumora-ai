@@ -1,16 +1,3 @@
-import {
-  demoNotifications,
-  demoUser,
-  dsaTopics,
-  dsaKnowledgeGaps,
-  dsaLearningReadiness,
-  dsaRecommendation,
-  dsaRoadmap,
-  dsaQuizQuestions,
-  dsaFlashcardDecks,
-  dsaStudyPlan,
-  dsaLearningActivities,
-} from './demo-data'
 
 import {
   Workspace,
@@ -32,42 +19,23 @@ import {
   ActivityType,
   TutorMessage,
   NotificationItem,
-  User,
   MasteryStatus,
 } from '@/lib/types/domain'
 import { tutorApiClient } from '@/lib/api/tutor-api-client'
 
-// In-memory workspace-scoped state tables with presentation seed strictly for 'dsa'
+// In-memory, workspace-scoped caches of data returned by the FastAPI backend (the source of truth)
 let workspacesCache: Workspace[] = []
 const documentsCache: Record<string, WorkspaceDocument[]> = {}
 const tutorMessagesCache: Record<string, TutorMessage[]> = {}
-const studyPlansCache: Record<string, StudyPlan> = {
-  dsa: { ...dsaStudyPlan },
-}
-const activitiesCache: Record<string, LearningActivity[]> = {
-  dsa: [...dsaLearningActivities],
-}
-const topicsCache: Record<string, Topic[]> = {
-  dsa: [...dsaTopics],
-}
-const knowledgeGapsCache: Record<string, KnowledgeGap[]> = {
-  dsa: [...dsaKnowledgeGaps],
-}
-const readinessCache: Record<string, LearningReadiness[]> = {
-  dsa: [...dsaLearningReadiness],
-}
-const recommendationsCache: Record<string, AIRecommendation> = {
-  dsa: { ...dsaRecommendation },
-}
-const roadmapsCache: Record<string, Roadmap> = {
-  dsa: { ...dsaRoadmap },
-}
-const quizzesCache: Record<string, QuizQuestion[]> = {
-  dsa: [...dsaQuizQuestions],
-}
-const flashcardDecksCache: Record<string, FlashcardDeck[]> = {
-  dsa: [...dsaFlashcardDecks],
-}
+const studyPlansCache: Record<string, StudyPlan> = {}
+const activitiesCache: Record<string, LearningActivity[]> = {}
+const topicsCache: Record<string, Topic[]> = {}
+const knowledgeGapsCache: Record<string, KnowledgeGap[]> = {}
+const readinessCache: Record<string, LearningReadiness[]> = {}
+const recommendationsCache: Record<string, AIRecommendation> = {}
+const roadmapsCache: Record<string, Roadmap> = {}
+const quizzesCache: Record<string, QuizQuestion[]> = {}
+const flashcardDecksCache: Record<string, FlashcardDeck[]> = {}
 
 function formatActivityTimestamp(rawTs: any): string {
   if (!rawTs) return 'Just now'
@@ -89,10 +57,6 @@ function formatActivityTimestamp(rawTs: any): string {
 }
 
 export const workspaceService = {
-  async getUser(): Promise<User> {
-    return { ...demoUser }
-  },
-
   // 1. WORKSPACE METHODS (Authoritative Source: FastAPI + PostgreSQL)
   async getWorkspaces(): Promise<Workspace[]> {
     try {
@@ -323,11 +287,6 @@ export const workspaceService = {
       console.warn(`Failed to fetch live topics for workspace '${workspaceId}':`, err)
     }
 
-    // Presentation demo fallback strictly for dsa
-    if (workspaceId === 'dsa' && (!topicsCache['dsa'] || topicsCache['dsa'].length === 0)) {
-      return [...dsaTopics]
-    }
-
     return topicsCache[workspaceId] ? [...topicsCache[workspaceId]] : []
   },
 
@@ -363,11 +322,6 @@ export const workspaceService = {
       }
     } catch (err) {
       console.warn(`Failed to fetch learner profile gaps for '${workspaceId}':`, err)
-    }
-
-    // Presentation demo fallback strictly for dsa
-    if (workspaceId === 'dsa' && (!knowledgeGapsCache['dsa'] || knowledgeGapsCache['dsa'].length === 0)) {
-      return [...dsaKnowledgeGaps]
     }
 
     return knowledgeGapsCache[workspaceId] ? [...knowledgeGapsCache[workspaceId]] : []
@@ -412,9 +366,6 @@ export const workspaceService = {
       console.warn(`Failed to fetch recommendation for '${workspaceId}':`, err)
     }
 
-    if (workspaceId === 'dsa' && !recommendationsCache['dsa']) {
-      return dsaRecommendation ? { ...dsaRecommendation } : null
-    }
 
     return recommendationsCache[workspaceId] || null
   },
@@ -523,9 +474,6 @@ export const workspaceService = {
       console.warn('Failed to fetch dynamic roadmap:', e)
     }
 
-    if (workspaceId === 'dsa' && !roadmapsCache['dsa']) {
-      return dsaRoadmap ? { ...dsaRoadmap } : null
-    }
 
     return roadmapsCache[workspaceId] || null
   },
@@ -718,6 +666,7 @@ export const workspaceService = {
           title: a.title,
           description: a.description,
           timestamp: formatActivityTimestamp(a.timestamp || a.created_at),
+          occurredAt: a.timestamp || a.created_at,
         }))
         if (workspaceId) {
           activitiesCache[workspaceId] = mapped
@@ -813,6 +762,7 @@ export const workspaceService = {
   },
 
   async getNotifications(): Promise<NotificationItem[]> {
-    return [...demoNotifications]
+    // Notifications are not backed by an API yet; recent events are shown on the Activity page.
+    return []
   },
 }

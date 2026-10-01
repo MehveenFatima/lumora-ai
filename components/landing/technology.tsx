@@ -5,32 +5,32 @@ const tech = [
   {
     icon: BrainCircuit,
     title: 'Large Language Models',
-    desc: 'Frontier reasoning models generate explanations, quizzes, and summaries tuned to your level.',
+    desc: 'Gemini 3.8 Flash writes explanations and questions, with automatic failover to Qwen via OpenRouter.',
   },
   {
     icon: Database,
     title: 'Vector embeddings',
-    desc: 'Your documents are embedded into a semantic index for fast, meaning-aware retrieval.',
+    desc: 'Chunks are embedded with Gemini Embedding 001 (768 dimensions) and searched with pgvector.',
   },
   {
     icon: Network,
     title: 'Retrieval-augmented generation',
-    desc: 'Answers are grounded in your sources with citations — reducing hallucination.',
+    desc: 'Hybrid keyword and vector retrieval with a relevance threshold, so answers come with page citations or not at all.',
   },
   {
     icon: ScanText,
     title: 'Document understanding',
-    desc: 'OCR and layout parsing extract structure from PDFs, slides, and handwritten notes.',
+    desc: 'PDF, DOCX, PPTX and TXT parsing that keeps page, slide, heading and table metadata on every chunk.',
   },
   {
     icon: Waypoints,
     title: 'Adaptive algorithms',
-    desc: 'Spaced repetition and item-response theory decide what to show you, and when.',
+    desc: 'Score bands (80% and 60%) pick the next batch’s difficulty and concepts from a validated question bank.',
   },
   {
     icon: Gauge,
     title: 'Mastery modeling',
-    desc: 'A live knowledge model estimates retention per concept to guide every session.',
+    desc: 'Bayesian Knowledge Tracing keeps an interpretable mastery estimate per concept, rolled up to topics.',
   },
 ]
 

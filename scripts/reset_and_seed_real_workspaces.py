@@ -211,9 +211,10 @@ async def reset_database(pool):
             "workspaces",
         ]
         for t in tables_to_clear:
-            await conn.execute(f"DELETE FROM {t};")
-        mig_count = await conn.fetchval("SELECT count(*) FROM schema_migrations;")
-        print(f"Cleared all workspace tables. schema_migrations preserved: {mig_count} entries.")
+            # Skip tables that are not part of this database's schema (e.g. legacy tables)
+            if await conn.fetchval("SELECT to_regclass($1) IS NOT NULL;", f"public.{t}"):
+                await conn.execute(f"DELETE FROM {t};")
+        print("Cleared all workspace tables.")
 
 
 async def seed_workspaces():

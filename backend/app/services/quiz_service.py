@@ -470,6 +470,13 @@ class QuizService:
         except Exception as e:
             logger.warning(f"Error updating topic mastery in submit_attempt: {e}")
 
+        # 6c. Keep the workspace-level mastery summary in sync with BKT after every attempt
+        try:
+            from backend.app.services.learner_profile_service import learner_profile_service
+            await learner_profile_service.get_learner_profile(workspace_id, user_id)
+        except Exception as e:
+            logger.warning(f"Error syncing workspace mastery in submit_attempt: {e}")
+
         # 7. Update Session State
         adaptation_round = session.get("adaptation_round", 1)
         initial_diag_done = session.get("initial_diagnostic_completed", False)
@@ -750,21 +757,31 @@ class QuizService:
                 session_id=session_id,
                 workspace_id=workspace_id,
                 adaptation_round=next_round,
-                current_adaptation_stage="targeted_reinforcement",
+                current_adaptation_stage=adaptation_stage,
                 target_concepts=target_concept_names,
                 new_questions_count=len(new_q_records),
                 first_question=first_q,
             )
 
-        # 5. Generate new candidate pool strictly avoiding duplicates
+        # 5. Generate new candidate pool strictly avoiding duplicates.
+        # The same score band used for the question bank drives generation:
+        # missed concepts are targeted first below 60%, unseen concepts first at 80%+.
         target_concept_dicts = [{"concept": t.target_concept, "topic": t.target_topic} for t in targets]
+        if batch_score_pct < 60.0:
+            target_concept_dicts.sort(
+                key=lambda t: (t.get("concept") or "").lower().strip() not in wrong_concepts
+            )
+        elif batch_score_pct >= 80.0:
+            target_concept_dicts.sort(
+                key=lambda t: (t.get("concept") or "").lower().strip() in prev_concepts
+            )
         candidates = await question_generator_service.generate_candidate_pool(
             workspace_id=workspace_id,
             target_count=batch_size,
             target_concepts=target_concept_dicts,
             excluded_fingerprints=prev_fps,
             excluded_texts=prev_texts,
-            preferred_difficulty=targets[0].difficulty if targets else 2,
+            preferred_difficulty=target_difficulty,
         )
 
         if not candidates:
@@ -791,7 +808,7 @@ class QuizService:
                 page_number=gen_q.page_number,
                 source_excerpt=gen_q.source_excerpt,
                 citation_metadata={"document_name": gen_q.document_name, "page_number": gen_q.page_number},
-                generation_metadata={"stage": "targeted_reinforcement", "fingerprint": gen_q.fingerprint},
+                generation_metadata={"stage": adaptation_stage, "reason": adapt_reason, "fingerprint": gen_q.fingerprint, "source": "generated"},
                 fingerprint=gen_q.fingerprint,
                 question_type=getattr(gen_q, "question_type", "conceptual"),
                 quality_score=getattr(gen_q, "quality_score", 1.0),
@@ -809,18 +826,18 @@ class QuizService:
             target_question_count=new_target_count,
             adaptation_round=next_round,
             initial_diagnostic_completed=True,
-            current_adaptation_stage="targeted_reinforcement",
+            current_adaptation_stage=adaptation_stage,
             completed_at=None,
         )
 
         first_q = self._to_public_question(new_q_records[0])
-        target_concept_names = [t.target_concept for t in targets]
+        target_concept_names = [q.get("concept", "Concept") for q in new_q_records]
 
         return QuizNextBatchResponse(
             session_id=session_id,
             workspace_id=workspace_id,
             adaptation_round=next_round,
-            current_adaptation_stage="targeted_reinforcement",
+            current_adaptation_stage=adaptation_stage,
             target_concepts=target_concept_names,
             new_questions_count=len(new_batch_questions),
             first_question=first_q,

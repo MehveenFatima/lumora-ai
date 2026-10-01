@@ -114,13 +114,9 @@ export function RegisterForm() {
           />
           <span>
             I agree to the{' '}
-            <a href="#" className="font-medium text-primary hover:opacity-80">
-              Terms
-            </a>{' '}
+            <span className="font-medium text-foreground">Terms</span>{' '}
             and{' '}
-            <a href="#" className="font-medium text-primary hover:opacity-80">
-              Privacy Policy
-            </a>
+            <span className="font-medium text-foreground">Privacy Policy</span>
             .
           </span>
         </label>

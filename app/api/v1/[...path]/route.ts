@@ -36,12 +36,14 @@ async function handleProxy(req: NextRequest, { params }: { params: Promise<{ pat
 
   try {
     const headers = sanitizeHeaders(req.headers)
+    // Document uploads are parsed, chunked and embedded inside the request, so they need longer than API calls.
+    const isUpload = (req.headers.get('content-type') || '').includes('multipart/form-data')
 
     const fetchOptions: RequestInit = {
       method,
       headers,
       redirect: 'manual',
-      signal: AbortSignal.timeout(60000),
+      signal: AbortSignal.timeout(isUpload ? 300000 : 60000),
     }
 
     // Attach body for modifying methods

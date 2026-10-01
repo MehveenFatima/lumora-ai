@@ -25,22 +25,22 @@ import {
 } from 'lucide-react'
 import { workspaceService } from '@/lib/services/workspace-service'
 import { tutorApiClient } from '@/lib/api/tutor-api-client'
-import { Workspace, LearningActivity, NotificationItem } from '@/lib/types/domain'
+import { Workspace, LearningActivity, NotificationItem, AIRecommendation } from '@/lib/types/domain'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { ThemeToggle } from '@/components/ui/theme-toggle'
 import { CreateWorkspaceModal } from '@/components/workspace/create-workspace-modal'
 import { DeleteWorkspaceModal } from '@/components/workspace/delete-workspace-modal'
-import { BaselineAssessmentModal } from '@/components/workspace/baseline-assessment-modal'
 import { cn } from '@/lib/utils'
+import { computeStudyStreak } from '@/lib/learning-stats'
 
 export default function GlobalDashboardPage() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [activities, setActivities] = useState<LearningActivity[]>([])
   const [notifications, setNotifications] = useState<NotificationItem[]>([])
+  const [topRecommendation, setTopRecommendation] = useState<AIRecommendation | null>(null)
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)
-  const [baselineModalOpen, setBaselineModalOpen] = useState(false)
   const [toastMessage, setToastMessage] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [backendError, setBackendError] = useState<string | null>(null)
@@ -64,6 +64,10 @@ export default function GlobalDashboardPage() {
       setWorkspaces(ws)
       setActivities(acts)
       setNotifications(notifs)
+      // Next-step banner: the BKT-based recommendation for the most recent workspace, if any
+      setTopRecommendation(
+        ws.length > 0 ? await workspaceService.getRecommendation(ws[0].id).catch(() => null) : null
+      )
     } catch (err: any) {
       console.error(err)
       setBackendError(err.message || 'Failed to connect to backend service')
@@ -104,48 +108,8 @@ export default function GlobalDashboardPage() {
       ? Math.round(workspaces.reduce((acc, w) => acc + (w.masteryDelta || 0), 0) / workspaces.length)
       : 0
 
-  // Calculate dynamic learning streak from real persisted activities
-  const streakDays = useMemo(() => {
-    if (!activities || activities.length === 0) return 0
-    const validDates = new Set<string>()
-    for (const act of activities) {
-      if (act.timestamp) {
-        const d = new Date(act.timestamp)
-        if (!isNaN(d.getTime())) {
-          const year = d.getFullYear()
-          const month = String(d.getMonth() + 1).padStart(2, '0')
-          const day = String(d.getDate()).padStart(2, '0')
-          validDates.add(`${year}-${month}-${day}`)
-        }
-      }
-    }
-    if (validDates.size === 0) return 0
-
-    const today = new Date()
-    const formatDate = (date: Date) => {
-      const y = date.getFullYear()
-      const m = String(date.getMonth() + 1).padStart(2, '0')
-      const d = String(date.getDate()).padStart(2, '0')
-      return `${y}-${m}-${d}`
-    }
-
-    let checkDate = new Date(today)
-    let todayStr = formatDate(checkDate)
-
-    if (!validDates.has(todayStr)) {
-      checkDate.setDate(checkDate.getDate() - 1)
-      if (!validDates.has(formatDate(checkDate))) {
-        return 0
-      }
-    }
-
-    let streak = 0
-    while (validDates.has(formatDate(checkDate))) {
-      streak++
-      checkDate.setDate(checkDate.getDate() - 1)
-    }
-    return streak
-  }, [activities])
+  // Learning streak computed from real persisted activity events
+  const streakDays = useMemo(() => computeStudyStreak(activities || []), [activities])
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -174,13 +138,15 @@ export default function GlobalDashboardPage() {
         </div>
 
         <div className="flex items-center gap-2 md:gap-2.5">
-          <button
-            onClick={() => setBaselineModalOpen(true)}
-            className="hidden sm:inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-accent/40"
-          >
-            <Zap className="size-3.5 text-warning" />
-            <span>Diagnostic Baseline</span>
-          </button>
+          {workspaces.length > 0 && (
+            <Link
+              href={`/dashboard/workspace/${workspaces[0].id}/quiz`}
+              className="hidden sm:inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-accent/40"
+            >
+              <Zap className="size-3.5 text-warning" />
+              <span>Diagnostic Quiz</span>
+            </Link>
+          )}
 
           <button
             onClick={() => setCreateModalOpen(true)}
@@ -210,7 +176,7 @@ export default function GlobalDashboardPage() {
             </span>
             <span className="hidden text-left leading-none md:block">
               <span className="block text-xs font-medium text-foreground">Mehveen</span>
-              <span className="mt-0.5 block text-[10px] text-muted-foreground">Pro Learner</span>
+              <span className="mt-0.5 block text-[10px] text-muted-foreground">Learner</span>
             </span>
           </Link>
         </div>
@@ -339,10 +305,13 @@ export default function GlobalDashboardPage() {
                   </span>
                 </div>
                 <h2 className="font-display text-lg font-semibold text-foreground">
-                  {workspaces[0]?.name}: Graph Traversal & Disconnected Component Practice
+                  {workspaces[0]?.name}
+                  {topRecommendation ? `: ${topRecommendation.title}` : ''}
                 </h2>
                 <p className="text-xs text-muted-foreground max-w-2xl">
-                  Your last quiz showed a 46% accuracy drop on disconnected DFS graphs. Spend 25 minutes reviewing with your tutor to raise your mastery.
+                  {topRecommendation
+                    ? topRecommendation.rationale
+                    : 'Ask the AI tutor about your sources or take an adaptive quiz to start building your mastery profile.'}
                 </p>
               </div>
 
@@ -481,11 +450,6 @@ export default function GlobalDashboardPage() {
         workspaces={workspaces}
         onClose={() => setDeleteModalOpen(false)}
         onDeleteWorkspace={handleDeleteWorkspace}
-      />
-
-      <BaselineAssessmentModal
-        isOpen={baselineModalOpen}
-        onClose={() => setBaselineModalOpen(false)}
       />
     </div>
   )
