@@ -55,3 +55,8 @@ async def ensure_document_access(document: Optional[Dict[str, Any]], user: Curre
         if workspace and workspace.get("owner_id") == user["id"]:
             return document
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+
+
+def internal_error_detail(message: str, exc: Exception) -> str:
+    """Client-facing text for an unexpected 500: includes the exception only outside production."""
+    return message if settings.is_production else f"{message}: {exc}"

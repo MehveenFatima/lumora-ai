@@ -5,6 +5,23 @@ from backend.app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+_LOCAL_ROOT_PARTS = ("backend", "data", "documents")
+
+
+def _safe_storage_name(filename: str) -> str:
+    """
+    Reduces a client-supplied filename to a single safe path component, so an upload can never
+    be written (or later read) outside its own document folder (e.g. names containing "../").
+    """
+    name = (filename or "").replace("\\", "/").split("/")[-1]
+    name = "".join(ch for ch in name if ch.isprintable()).strip().lstrip(".")
+    return name or "document"
+
+
+def _within(base_dir: str, path: str) -> bool:
+    base = os.path.realpath(base_dir)
+    return os.path.realpath(path).startswith(base + os.sep)
+
 
 class StorageService:
     def __init__(
@@ -39,13 +56,17 @@ class StorageService:
         Stores file under workspace-scoped path:
         workspace/{workspace_id}/documents/{document_id}/{filename}
         """
+        filename = _safe_storage_name(filename)
         path = f"workspace/{workspace_id}/documents/{document_id}/{filename}"
 
         # 1. Always ensure local persistent disk backup exists
         try:
-            local_dir = os.path.join(os.getcwd(), "backend", "data", "documents", workspace_id, document_id)
-            os.makedirs(local_dir, exist_ok=True)
+            root_dir = os.path.join(os.getcwd(), *_LOCAL_ROOT_PARTS)
+            local_dir = os.path.join(root_dir, workspace_id, document_id)
             local_file = os.path.join(local_dir, filename)
+            if not _within(root_dir, local_file):
+                raise ValueError("Refusing to write outside the document storage directory.")
+            os.makedirs(local_dir, exist_ok=True)
             with open(local_file, "wb") as f:
                 f.write(file_bytes)
         except Exception as err:
@@ -73,8 +94,9 @@ class StorageService:
                 ws_id = parts[1]
                 doc_id = parts[3]
                 fname = "/".join(parts[4:])
-                local_file = os.path.join(os.getcwd(), "backend", "data", "documents", ws_id, doc_id, fname)
-                if os.path.exists(local_file):
+                root_dir = os.path.join(os.getcwd(), *_LOCAL_ROOT_PARTS)
+                local_file = os.path.join(root_dir, ws_id, doc_id, fname)
+                if _within(root_dir, local_file) and os.path.exists(local_file):
                     with open(local_file, "rb") as f:
                         return f.read()
         except Exception as err:

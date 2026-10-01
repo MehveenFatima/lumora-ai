@@ -1,6 +1,6 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from backend.app.api.deps import require_workspace
+from backend.app.api.deps import internal_error_detail, require_workspace
 from backend.app.schemas.quizzes import (
     QuizSessionCreateRequest,
     QuizSessionResponse,
@@ -57,7 +57,7 @@ async def create_quiz_session(
         logger.error(f"Failed to create quiz session for workspace {workspace_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to initialize adaptive quiz: {str(e)}",
+            detail=internal_error_detail("Failed to initialize adaptive quiz", e),
         )
 
 
@@ -146,7 +146,7 @@ async def submit_quiz_attempt(
         logger.error(f"Failed to submit attempt for question {question_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to process quiz attempt: {str(e)}",
+            detail=internal_error_detail("Failed to process quiz attempt", e),
         )
 
 
@@ -170,7 +170,7 @@ async def complete_quiz_session(
         logger.error(f"Failed to complete quiz {quiz_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to finalize quiz summary: {str(e)}",
+            detail=internal_error_detail("Failed to finalize quiz summary", e),
         )
 
 
@@ -205,6 +205,6 @@ async def start_next_quiz_batch(
         logger.error(f"Failed to start next batch for quiz {quiz_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate next adaptive batch: {str(e)}",
+            detail=internal_error_detail("Failed to generate next adaptive batch", e),
         )
 

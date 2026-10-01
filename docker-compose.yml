@@ -27,7 +27,9 @@ services:
     environment:
       DATABASE_URL: postgresql://lumora:lumora@db:5432/lumora
       ENVIRONMENT: ${ENVIRONMENT:-development}
-      JWT_SECRET: ${JWT_SECRET:-change-me-local-development-secret-0123456789}
+      # No built-in fallback: without JWT_SECRET the API uses a random per-start secret in
+      # development and refuses to start with ENVIRONMENT=production.
+      JWT_SECRET: ${JWT_SECRET:-}
       COOKIE_SECURE: "false"
     volumes:
       - uploads:/app/backend/data/documents

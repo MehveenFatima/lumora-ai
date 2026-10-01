@@ -1,6 +1,6 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
-from backend.app.api.deps import require_workspace
+from backend.app.api.deps import internal_error_detail, require_workspace
 from backend.app.schemas.tutor import (
     TutorRequest,
     TutorResponse,
@@ -55,7 +55,7 @@ async def ask_tutor(
         logger.error(f"Tutor generation failed for workspace {workspace_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Tutor service encountered an internal error: {str(e)}",
+            detail=internal_error_detail("Tutor service encountered an internal error", e),
         )
 
 
