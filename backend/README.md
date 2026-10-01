@@ -12,8 +12,11 @@ Imports use the `backend.app` package, so run commands from the **repository roo
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r backend/requirements.txt
 cp .env.example .env                                  # then fill in your keys
+python -m backend.app.cli migrate                     # when DATABASE_URL is set
 python -m uvicorn backend.app.main:app --reload --port 8000
 ```
+
+Or build the container image from the repository root: `docker build -f backend/Dockerfile -t lumora-api .` (it applies migrations on start-up).
 
 - Interactive API docs: <http://localhost:8000/docs>
 - Health check: <http://localhost:8000/api/v1/health>
@@ -30,24 +33,26 @@ backend/app/
 ├── repositories/        PostgreSQL (asyncpg + pgvector) access with an in-memory fallback
 ├── ai/                  Gemini + OpenAI-compatible providers behind a failover gateway
 ├── schemas/             Pydantic request/response models
-├── core/                Settings and logging
-└── db/migrations/       SQL migrations (apply in order)
+├── core/                Settings, logging, password hashing and session tokens
+├── cli.py               migrate · create-user · claim-workspaces
+└── db/migrations/       SQL migrations (applied in order by `cli migrate`)
 ```
 
 ## Endpoints
 
 | Area | Method & path |
 | :--- | :--- |
-| Health | `GET /health` |
+| Health | `GET /health` (public) |
+| Auth | `POST /auth/register` · `POST /auth/login` · `POST /auth/logout` · `GET /auth/me` |
 | Workspaces | `POST /workspaces` · `GET /workspaces` · `GET /workspaces/{id}` · `DELETE /workspaces/{id}` |
 | Documents | `POST /workspaces/{id}/documents` · `GET /workspaces/{id}/documents` · `GET /documents/{doc_id}` · `GET /documents/{doc_id}/view` · `GET /documents/{doc_id}/download` · `DELETE /documents/{doc_id}` |
 | Tutor | `POST /workspaces/{id}/tutor` · `GET /workspaces/{id}/tutor/history` |
 | Quizzes | `POST /workspaces/{id}/quizzes` · `GET …/quizzes/active` · `GET …/quizzes/history` · `GET …/quizzes/{quiz_id}` · `GET …/questions/{question_id}` · `POST …/questions/{question_id}/attempt` · `POST …/quizzes/{quiz_id}/next-batch` · `POST …/quizzes/{quiz_id}/complete` |
-| Mastery | `GET /workspaces/{id}/learner-profile` · `GET …/mastery` · `GET …/mastery/topics` · `GET …/mastery/topics/{topic}` · `POST …/mastery/seed` (development and tests only, disabled when `ENVIRONMENT=production`) |
-| Study tools | `GET`/`POST …/flashcards[/generate]` · `GET`/`POST …/study-plan[/generate]` · `POST …/study-plan/tasks/{task_id}/toggle` |
+| Mastery | `GET /workspaces/{id}/learner-profile` · `GET …/mastery` · `GET …/mastery/history` · `GET …/mastery/topics` · `GET …/mastery/topics/{topic}` · `POST …/mastery/seed` (development and tests only, disabled when `ENVIRONMENT=production`) |
+| Study tools | `GET`/`POST …/flashcards[/generate]` · `POST …/flashcards/{card_id}/review` · `GET`/`POST …/study-plan[/generate]` · `POST …/study-plan/tasks/{task_id}/toggle` |
 | Activity | `GET`/`POST /workspaces/{id}/activity` · `GET /activities` |
 
-All paths are relative to `/api/v1`.
+All paths are relative to `/api/v1`. Every route except health and auth requires a session (cookie or `Authorization: Bearer`), and workspace-scoped routes return 404 unless the caller owns the workspace.
 
 ## Tests
 
@@ -55,4 +60,4 @@ All paths are relative to `/api/v1`.
 python -m pytest backend/tests -q
 ```
 
-The suite (108 tests) runs against the in-memory store and needs no external services. If a `.env` with real API keys is present, some tests will call the AI providers, so leave the keys unset for a fully offline run. To run against PostgreSQL instead, point `DATABASE_URL` at a **disposable** database with the migrations applied. The tests create and delete workspaces, so never point them at a database you care about.
+The suite (133 tests) runs against the in-memory store and needs no external services. If a `.env` with real API keys is present, some tests will call the AI providers, so leave the keys unset for a fully offline run. To run against PostgreSQL instead, point `DATABASE_URL` at a **disposable** database migrated with `python -m backend.app.cli migrate`. The tests create and delete workspaces, so never point them at a database you care about.

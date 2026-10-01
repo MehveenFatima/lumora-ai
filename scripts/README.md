@@ -4,6 +4,11 @@ Developer utilities for seeding, verifying and inspecting a local LumoraAI envir
 Run them from the **repository root**. Most of them call the running API (`:8000` direct or
 `:3000` through the Next.js proxy) or connect to the database in `DATABASE_URL`.
 
+Scripts that call the API sign in first through `_api_auth.py`, using `LUMORA_EMAIL`
+(default `demo@lumora.local`) and `LUMORA_PASSWORD`, and `LUMORA_API_URL` (default
+`http://127.0.0.1:8000`). Scripts that target the DSA workspace read its id from
+`LUMORA_DSA_WORKSPACE_ID`.
+
 ## Run the app
 
 | Script | Purpose |
@@ -15,7 +20,7 @@ Run them from the **repository root**. Most of them call the running API (`:8000
 | Script | Purpose |
 | :--- | :--- |
 | `download_seed_pdfs.py` | Downloads the public evaluation corpus (MIT xv6 book, CMU 15-445 notes, Stanford CS229 notes, IETF RFC 9293) into `backend/data/seed_pdfs/`. |
-| `reset_and_seed_real_workspaces.py` | **Resets the database** and seeds four workspaces from those PDFs: chunks, a template-generated question bank, curated flashcards, topics and study-plan milestones. It also writes demo starting mastery values (0.75 for the first two topics, 0.35 for the rest), so these are seeded, not earned. Uses deterministic offline embeddings, so no API quota is spent; if you run the app with a Gemini key, re-upload the PDFs through the UI to get Gemini embeddings that match Gemini-embedded queries. |
+| `reset_and_seed_real_workspaces.py` | `--email`, `--password`, `--name`. Creates that account if needed and (re)seeds four workspaces it owns from those PDFs, replacing only previous copies of those four: chunks, a question bank (LLM-written when an AI key is configured, otherwise template-generated), curated flashcards, topics and study-plan milestones. It also writes demo starting mastery values (0.75 for the first two topics, 0.35 for the rest), so these are seeded, not earned. Chunks use deterministic offline embeddings, so no embedding quota is spent; they are tagged, and retrieval embeds questions the same way for them even when a Gemini key is set. |
 | `seed_presentation_data.py` | Ingests the 12 PDFs in `lumora_demo_content_pack/` through the real upload pipeline (`npm run seed:presentation`). Requires the API to be running. |
 | `seed_dsa_presentation_data.py` | Generates and ingests a small Data Structures & Algorithms workspace (`dsa`). |
 | `cleanup_dsa_seed.py` | Removes the documents seeded by `seed_dsa_presentation_data.py`. |
