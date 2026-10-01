@@ -1,0 +1,53 @@
+# One-command local stack: PostgreSQL + pgvector, the FastAPI API and the Next.js app.
+#   cp .env.example .env   # add GEMINI_API_KEY (optional) and a JWT_SECRET
+#   docker compose up --build
+# Then open http://localhost:3000
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: lumora
+      POSTGRES_PASSWORD: lumora
+      POSTGRES_DB: lumora
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lumora -d lumora"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://lumora:lumora@db:5432/lumora
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      JWT_SECRET: ${JWT_SECRET:-change-me-local-development-secret-0123456789}
+      COOKIE_SECURE: "false"
+    volumes:
+      - uploads:/app/backend/data/documents
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      BACKEND_API_URL: http://api:8000
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
+
+volumes:
+  pgdata:
+  uploads:

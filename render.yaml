@@ -1,0 +1,30 @@
+# Render Blueprint for the LumoraAI API (https://render.com/docs/blueprint-spec).
+# The Next.js app deploys to Vercel; point its BACKEND_API_URL at this service's URL.
+# Use a PostgreSQL database with pgvector (for example Supabase) for DATABASE_URL.
+services:
+  - type: web
+    name: lumora-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_STORAGE_BUCKET
+        value: workspace-documents
+      - key: FRONTEND_ORIGIN
+        sync: false
