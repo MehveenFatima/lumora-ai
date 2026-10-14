@@ -73,49 +73,45 @@ class SecondaryService:
 
         return []
 
-    async def get_or_generate_study_plan(
-        self,
-        workspace_id: str,
-        user_id: str = "presentation-demo-user",
-    ) -> Dict[str, Any]:
-        existing = await study_plan_repo.get_by_workspace(workspace_id)
-        if existing and existing.get("tasks"):
-            return existing
+    @staticmethod
+    def _task_id(workspace_id: str, kind: str, concept: str) -> str:
+        slug = re.sub(r"[^a-z0-9]+", "-", (concept or "concept").lower()).strip("-")[:60] or "concept"
+        return f"task_{workspace_id}_{kind}_{slug}"
 
-        ws = await workspace_repo.get_by_id(workspace_id)
-        ws_name = ws.get("name", "Workspace") if ws else "Workspace"
-
-        # Query learner knowledge gaps and BKT mastery to tailor tasks
+    async def _build_tasks(self, workspace_id: str, ws_name: str, user_id: str) -> List[Dict[str, Any]]:
+        """Builds the current task list from the learner's BKT knowledge gaps and concept mastery."""
         gaps = await bkt_repo.list_knowledge_gaps(workspace_id, user_id=user_id)
         all_mastery = await bkt_repo.list_concept_mastery(workspace_id, user_id=user_id)
 
-        tasks = []
-        task_idx = 1
+        tasks: List[Dict[str, Any]] = []
+        covered = set()
 
-        # Priority 1: High severity knowledge gaps (Scheduled for Today)
+        # Priority 1: active knowledge gaps (critical first), the top two scheduled for today
         for g in gaps:
+            if g.get("gap_status") in ("strong", "resolved"):
+                continue
             c_name = g.get("concept", "Concept")
             t_name = g.get("topic", "Topic")
-            gap_p = float(g.get("gap_priority", 0.5))
+            gap_p = float(g.get("gap_priority", 0.5) or 0.5)
             tasks.append({
-                "id": f"task_{workspace_id}_{task_idx}",
+                "id": self._task_id(workspace_id, "review", c_name),
                 "title": f"Review & Remediate: {c_name}",
-                "description": f"Targeted review to address active knowledge gap in {t_name}. Priority: {round(gap_p * 100)}%.",
+                "description": f"Targeted review to address an active knowledge gap in {t_name}. Priority: {round(gap_p * 100)}%.",
                 "estimatedMinutes": 25,
                 "scheduledFor": "today" if len(tasks) < 2 else "this_week",
                 "completed": False,
                 "tag": c_name,
                 "priority": "high" if gap_p >= 0.6 else "medium",
             })
-            task_idx += 1
+            covered.add(c_name.lower())
 
-        # Priority 2: Developing concepts from mastery
-        for m in all_mastery:
+        # Priority 2: developing concepts (50-80% mastery) that are not already a gap task
+        for m in sorted(all_mastery, key=lambda x: x.get("p_mastery", 0.5)):
             c_name = m.get("concept", "Concept")
-            p_m = m.get("p_mastery", 0.5)
-            if 0.5 <= p_m < 0.8 and not any(t["tag"] == c_name for t in tasks):
+            p_m = float(m.get("p_mastery", 0.5) or 0.5)
+            if 0.5 <= p_m < 0.8 and c_name.lower() not in covered:
                 tasks.append({
-                    "id": f"task_{workspace_id}_{task_idx}",
+                    "id": self._task_id(workspace_id, "practice", c_name),
                     "title": f"Practice Problems: {c_name}",
                     "description": f"Strengthen concept retention through practice. Current mastery: {round(p_m * 100)}%.",
                     "estimatedMinutes": 30,
@@ -124,13 +120,13 @@ class SecondaryService:
                     "tag": c_name,
                     "priority": "medium",
                 })
-                task_idx += 1
+                covered.add(c_name.lower())
 
-        # Fallback default tasks if empty
+        # Starter tasks until the learner has quiz evidence
         if not tasks:
             tasks = [
                 {
-                    "id": f"task_{workspace_id}_1",
+                    "id": self._task_id(workspace_id, "starter", "diagnostic"),
                     "title": f"Initial Syllabus Diagnostic in {ws_name}",
                     "description": "Complete diagnostic assessment to establish baseline concept mastery.",
                     "estimatedMinutes": 20,
@@ -140,7 +136,7 @@ class SecondaryService:
                     "priority": "high",
                 },
                 {
-                    "id": f"task_{workspace_id}_2",
+                    "id": self._task_id(workspace_id, "starter", "core-concepts"),
                     "title": f"Read Core Concepts in {ws_name}",
                     "description": "Review indexed source documents and discuss key definitions with AI Tutor.",
                     "estimatedMinutes": 35,
@@ -150,24 +146,51 @@ class SecondaryService:
                     "priority": "medium",
                 },
             ]
+        return tasks
+
+    async def get_or_generate_study_plan(
+        self,
+        workspace_id: str,
+        user_id: str = "default_user",
+    ) -> Dict[str, Any]:
+        """
+        Returns the workspace's adaptive study plan. Tasks are rebuilt from the latest knowledge gaps
+        and mastery on every call, so the plan follows quiz results. Tasks the learner already ticked
+        off are kept (and stay completed); open tasks that no longer apply are dropped.
+        """
+        ws = await workspace_repo.get_by_id(workspace_id)
+        ws_name = ws.get("name", "Workspace") if ws else "Workspace"
+        daily = (ws.get("daily_target_minutes") or 45) if ws else 45
+
+        existing = await study_plan_repo.get_by_workspace(workspace_id)
+        old_tasks = (existing or {}).get("tasks") or []
+        fresh = await self._build_tasks(workspace_id, ws_name, user_id)
+
+        completed_ids = {t["id"] for t in old_tasks if t.get("completed")}
+        fresh_ids = {t["id"] for t in fresh}
+        tasks = [t for t in old_tasks if t.get("completed") and t["id"] not in fresh_ids]
+        for t in fresh:
+            t["completed"] = t["id"] in completed_ids
+            tasks.append(t)
+
+        if existing and [(t["id"], t.get("completed")) for t in old_tasks] == [(t["id"], t["completed"]) for t in tasks]:
+            return existing
 
         plan_data = {
             "workspace_id": workspace_id,
-            "daily_target_minutes": ws.get("daily_target_minutes", 45) if ws else 45,
-            "today_completed_minutes": 0,
-            "weekly_target_minutes": (ws.get("daily_target_minutes", 45) if ws else 45) * 5,
-            "week_completed_minutes": 0,
+            "daily_target_minutes": daily,
+            "today_completed_minutes": (existing or {}).get("today_completed_minutes", 0),
+            "weekly_target_minutes": daily * 5,
+            "week_completed_minutes": (existing or {}).get("week_completed_minutes", 0),
             "tasks": tasks,
         }
-
         saved_plan = await study_plan_repo.save_plan(plan_data)
         await activity_repo.add_activity(
             workspace_id=workspace_id,
             event_type="study_plan_generated",
-            title="Personalized Study Plan Generated",
-            description=f"Constructed {len(tasks)} personalized learning milestones tailored to current mastery gaps.",
+            title="Study Plan Updated" if existing else "Personalized Study Plan Generated",
+            description=f"{len([t for t in tasks if not t['completed']])} open tasks tailored to current mastery gaps.",
         )
         return saved_plan
-
 
 secondary_service = SecondaryService()

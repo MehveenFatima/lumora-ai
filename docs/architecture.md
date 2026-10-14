@@ -159,7 +159,7 @@ Candidate MCQs are generated from retrieved chunks by the AI gateway (the quiz t
 ## Flashcards, study plan and activity
 
 - **Flashcards** (`services/secondary_service.py`, `services/spaced_repetition.py`): if a workspace has fewer than six cards, cards are built from the first chunks of its documents (heading → question, opening sentences → answer). Each Again / Hard / Good / Easy rating is saved through `POST /flashcards/{card_id}/review` and scheduled with SM-2: "again" makes the card due today and lowers its ease by 0.2; successful reviews are due after 1 day, then 6 days, then the previous interval × ease (× 1.2 for "hard", with a further × 1.3 for "easy"). The ease never drops below 1.3. Due cards are shown first.
-- **Study plan:** tasks are generated from the learner's knowledge gaps and concept mastery, highest-priority gaps first, and can be toggled complete.
+- **Study plan:** rebuilt from the latest knowledge gaps and concept mastery each time it is opened or regenerated, so it follows quiz results. Active gaps become "Review & Remediate" tasks (the top two scheduled for today) and concepts at 50–80% mastery become practice tasks; with no quiz evidence yet it shows two starter tasks. Completed tasks and the minutes logged against the daily target are kept across rebuilds.
 - **Activity:** document ingestion, quiz start and completion, and flashcard and study-plan generation are written to `activity_events` with UTC timestamps. The dashboard streak is computed from them.
 
 ## AI provider gateway
