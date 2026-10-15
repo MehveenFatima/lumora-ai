@@ -18,6 +18,7 @@ from backend.app.core.config import settings
 from backend.app.core.logging import get_logger
 from backend.app.repositories.documents import document_repo
 from backend.app.repositories.chunks import chunk_repo
+from backend.app.services.text_cleanup import clean_label
 from backend.app.services.question_quality_validator import (
     question_quality_validator,
     ValidationResult,
@@ -290,10 +291,12 @@ class QuestionGeneratorService:
             text = c.get("text", "")
 
             concept_candidate = None
-            if heading and heading.strip() and heading.lower() not in {"general", "introduction", "unit - 1", "chapter 1"}:
-                concept_candidate = heading.strip()
+            # Strip PDF layout noise such as "Card 1 front" or "Q1 Q2 Q5" from headings
+            heading = clean_label(heading)
+            if heading and heading.lower() not in {"general", "introduction", "unit - 1", "chapter 1"}:
+                concept_candidate = heading
             else:
-                first_line = text.split("\n")[0].strip() if text else ""
+                first_line = clean_label(text.split("\n")[0].strip() if text else "") or ""
                 clean_first_line = re.sub(r"^(?:Page|Unit|Chapter|Section)\s*\d*\s*[:\-–]\s*", "", first_line, flags=re.IGNORECASE).strip()
                 if clean_first_line and 3 <= len(clean_first_line) <= 50 and not clean_first_line.lower().startswith("the "):
                     concept_candidate = clean_first_line

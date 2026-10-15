@@ -1,3 +1,4 @@
+import asyncio
 import re
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
@@ -8,17 +9,29 @@ from backend.app.repositories.secondary import flashcard_repo, study_plan_repo, 
 from backend.app.repositories.bkt import bkt_repo
 from backend.app.services.knowledge_gap_engine import knowledge_gap_engine
 from backend.app.core.logging import get_logger
+from backend.app.services.text_cleanup import clean_label, clean_study_text, split_sentences, truncate_at_sentence
 
 logger = get_logger(__name__)
+
+FLASHCARD_TARGET = 10
+FLASHCARD_SOURCE_LIMIT = 12
+FLASHCARD_AI_BUDGET_SECONDS = 20
+# Front text used by the earlier generator, which copied raw PDF text onto the back of cards
+_LEGACY_FRONT_PREFIX = "What is the key mechanism of "
+# "<Subject> is/are/refers to ..." definitional sentences
+_DEFINITION = re.compile(r"^([A-Z][\w\-/()]*(?:\s+[\w\-/()]+){0,6}?)\s+(is|are|refers to|means)\s+", re.UNICODE)
 
 
 class SecondaryService:
     async def get_or_generate_flashcards(self, workspace_id: str) -> List[Dict[str, Any]]:
         existing = await flashcard_repo.list_by_workspace(workspace_id)
+        if existing and any(str(c.get("front", "")).startswith(_LEGACY_FRONT_PREFIX) for c in existing):
+            # Decks from the earlier generator copied raw PDF text onto the cards; rebuild them
+            await flashcard_repo.delete_by_workspace(workspace_id)
+            existing = []
         if existing and len(existing) >= 6:
             return existing
 
-        # Generate fresh flashcards from workspace chunks and documents
         docs = await document_repo.list_by_workspace(workspace_id)
         if not docs:
             return []
@@ -27,51 +40,142 @@ class SecondaryService:
         for d in docs:
             chunks = await chunk_repo.get_chunks_by_document(workspace_id, str(d["id"]))
             all_chunks.extend(chunks)
-
         if not all_chunks:
             return []
 
-        generated_cards = []
-        for c in all_chunks[:15]:
-            text = c.get("text", "")
-            heading = c.get("heading") or "Core Principle"
-            doc_name = c.get("document_name") or "Workspace Notes"
-            page = c.get("page_number", 1)
+        sources = self._flashcard_sources(all_chunks)
+        if not sources:
+            return []
 
-            # Heuristically extract question/answer definitions from sentences
-            sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if len(s.strip()) > 30]
-            if not sentences:
+        generated_cards = await self._ai_flashcards(sources)
+        if len(generated_cards) < 6:
+            seen = {c["front"].lower() for c in generated_cards}
+            for card in self._extractive_flashcards(sources):
+                if card["front"].lower() not in seen:
+                    generated_cards.append(card)
+                    seen.add(card["front"].lower())
+                if len(generated_cards) >= FLASHCARD_TARGET:
+                    break
+
+        generated_cards = generated_cards[:FLASHCARD_TARGET]
+        if not generated_cards:
+            return []
+
+        saved = await flashcard_repo.save_flashcards(workspace_id, generated_cards)
+        await activity_repo.add_activity(
+            workspace_id=workspace_id,
+            event_type="flashcards_generated",
+            title="Flashcards Generated",
+            description=f"Generated {len(saved)} spaced-repetition flashcards from workspace resources.",
+        )
+        return saved
+
+    @staticmethod
+    def _flashcard_sources(chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Cleaned, evenly spread source passages with their concept and citation."""
+        usable = []
+        for c in chunks:
+            heading = c.get("heading")
+            text = clean_study_text(c.get("text") or c.get("content") or "", heading)
+            if len(text) < 60:
                 continue
+            usable.append({
+                "text": text,
+                "concept": clean_label(heading) or "Core Concepts",
+                "document": c.get("document_name") or "Workspace Notes",
+                "page": c.get("page_number") or 1,
+            })
+        if len(usable) > FLASHCARD_SOURCE_LIMIT:
+            step = len(usable) / FLASHCARD_SOURCE_LIMIT
+            usable = [usable[int(i * step)] for i in range(FLASHCARD_SOURCE_LIMIT)]
+        return usable
 
-            # First sentence as basis for front / back
-            front_text = f"What is the key mechanism of {heading}?"
-            back_text = sentences[0]
-            if len(sentences) > 1:
-                back_text += " " + sentences[1]
+    async def _ai_flashcards(self, sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Asks the AI provider for question/answer cards grounded in the source passages."""
+        try:
+            from backend.app.ai.gateway import ai_gateway
+            from backend.app.ai.types import AIRequest, TaskType
 
-            generated_cards.append({
-                "front": front_text,
-                "back": back_text[:280],
-                "concept": heading,
-                "source_document": doc_name,
-                "source_page": page,
+            passages = "\n\n".join(
+                f"[{i}] (concept: {s['concept']})\n{truncate_at_sentence(s['text'], 900)}" for i, s in enumerate(sources)
+            )
+            request = AIRequest(
+                prompt=(
+                    f"Create {FLASHCARD_TARGET} study flashcards from the numbered passages below.\n"
+                    "Rules:\n"
+                    "- front: one clear question a student should be able to answer, ending with '?'.\n"
+                    "- back: the answer in 1-2 complete sentences, at most 220 characters.\n"
+                    "- concept: a short topic name (2-5 words).\n"
+                    "- source: the number of the passage the card is based on.\n"
+                    "- Use only facts stated in the passages. Never mention question numbers, card numbers, "
+                    "file names, page numbers or the passages themselves.\n"
+                    "- Cover different ideas; no two cards may ask the same thing.\n\n"
+                    f"PASSAGES:\n{passages}\n\n"
+                    'Return JSON: {"cards": [{"front": "...", "back": "...", "concept": "...", "source": 0}]}'
+                ),
+                system_prompt="You write concise, accurate study flashcards. Respond only with valid JSON.",
+                task_type=TaskType.FLASHCARDS,
+                temperature=0.2,
+            )
+            response = await asyncio.wait_for(ai_gateway.generate_structured(request), timeout=FLASHCARD_AI_BUDGET_SECONDS)
+        except Exception as e:
+            logger.info(f"AI flashcard generation unavailable, using extractive cards: {e}")
+            return []
+
+        data = getattr(response, "structured_data", None) if response else None
+        items = data.get("cards", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+        cards: List[Dict[str, Any]] = []
+        seen = set()
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            front = clean_study_text(str(item.get("front", "")))
+            back = truncate_at_sentence(clean_study_text(str(item.get("back", ""))), 260)
+            if len(front) < 10 or len(back) < 15 or not front.endswith("?") or front.lower() in seen:
+                continue
+            try:
+                src = sources[int(item.get("source", 0))]
+            except (ValueError, TypeError, IndexError):
+                src = sources[0]
+            seen.add(front.lower())
+            cards.append({
+                "front": front,
+                "back": back,
+                "concept": clean_label(str(item.get("concept") or "")) or src["concept"],
+                "source_document": src["document"],
+                "source_page": src["page"],
                 "interval_days": 1,
             })
+        return cards
 
-            if len(generated_cards) >= 10:
-                break
-
-        if generated_cards:
-            saved = await flashcard_repo.save_flashcards(workspace_id, generated_cards)
-            await activity_repo.add_activity(
-                workspace_id=workspace_id,
-                event_type="flashcards_generated",
-                title="Flashcards Generated",
-                description=f"Generated {len(saved)} spaced-repetition flashcards from workspace resources.",
-            )
-            return saved
-
-        return []
+    @staticmethod
+    def _extractive_flashcards(sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Offline fallback: turns definitional sentences into question/answer cards."""
+        cards: List[Dict[str, Any]] = []
+        for s in sources:
+            sentences = [x for x in split_sentences(s["text"]) if 40 <= len(x) <= 400]
+            if not sentences:
+                continue
+            front, back = None, None
+            for sentence in sentences:
+                m = _DEFINITION.match(sentence)
+                if m and len(m.group(1).split()) <= 5:
+                    subject, verb = m.group(1).strip(), m.group(2).lower()
+                    front = f"What {'are' if verb == 'are' else 'is'} {subject}?"
+                    back = sentence
+                    break
+            if not front:
+                front = f"What is the key idea behind {s['concept']}?"
+                back = " ".join(sentences[:2])
+            cards.append({
+                "front": front,
+                "back": truncate_at_sentence(back, 260),
+                "concept": s["concept"],
+                "source_document": s["document"],
+                "source_page": s["page"],
+                "interval_days": 1,
+            })
+        return cards
 
     @staticmethod
     def _task_id(workspace_id: str, kind: str, concept: str) -> str:

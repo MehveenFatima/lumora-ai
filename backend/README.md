@@ -60,4 +60,4 @@ All paths are relative to `/api/v1`. Every route except health and auth requires
 python -m pytest backend/tests -q
 ```
 
-The suite (145 tests) runs against the in-memory store and needs no external services. If a `.env` with real API keys is present, some tests will call the AI providers, so leave the keys unset for a fully offline run. To run against PostgreSQL instead, point `DATABASE_URL` at a **disposable** database migrated with `python -m backend.app.cli migrate`. The tests create and delete workspaces, so never point them at a database you care about.
+The suite (151 tests) runs against the in-memory store and needs no external services. If a `.env` with real API keys is present, some tests will call the AI providers, so leave the keys unset for a fully offline run. To run against PostgreSQL instead, point `DATABASE_URL` at a **disposable** database migrated with `python -m backend.app.cli migrate`. The tests create and delete workspaces, so never point them at a database you care about.

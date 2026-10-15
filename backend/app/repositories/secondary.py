@@ -92,6 +92,15 @@ class FlashcardRepository:
 
     save_deck = save_flashcards
 
+    async def delete_by_workspace(self, workspace_id: str) -> None:
+        """Removes every flashcard in a workspace (used when a deck is rebuilt)."""
+        pool = await get_db_pool()
+        check_presentation_mode_database_availability(pool)
+        if pool:
+            async with pool.acquire() as conn:
+                await conn.execute("DELETE FROM flashcards WHERE workspace_id = $1", workspace_id)
+        _memory_flashcards.pop(workspace_id, None)
+
     async def record_review(
         self,
         workspace_id: str,
