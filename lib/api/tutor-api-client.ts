@@ -74,6 +74,8 @@ export interface HealthData {
 }
 
 const DEFAULT_SERVER_BACKEND_URL = 'http://127.0.0.1:8000'
+// Quiz creation and next-batch generate questions with the AI provider; match the 60 s proxy limit
+const QUIZ_GENERATION_TIMEOUT_MS = 60000
 
 function getBaseUrl(): string {
   if (typeof window !== 'undefined') {
@@ -439,6 +441,8 @@ export const tutorApiClient = {
     const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/quizzes`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      // Question generation calls the AI provider, so allow as long as the API proxy does
+      signal: AbortSignal.timeout(QUIZ_GENERATION_TIMEOUT_MS),
       body: JSON.stringify({
         target_question_count: data.targetQuestionCount || 5,
         topic: data.topic,
@@ -475,6 +479,7 @@ export const tutorApiClient = {
     const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/quizzes/${quizId}/next-batch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(QUIZ_GENERATION_TIMEOUT_MS),
       body: JSON.stringify({
         batch_size: data.batchSize || 5,
       }),

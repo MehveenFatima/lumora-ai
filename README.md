@@ -77,7 +77,7 @@ The browser only talks to the Next.js app, which proxies `/api/v1/*` to FastAPI 
 | AI | Google Gemini 3.8 Flash and Gemini Embedding 001; Qwen3.8-27B via OpenRouter as fallback |
 | Documents | PyMuPDF, python-docx, python-pptx |
 | Delivery | Docker and Docker Compose, Render blueprint, Vercel, GitHub Actions CI |
-| Testing | pytest (143 tests), TypeScript type check, production build in CI |
+| Testing | pytest (145 tests), TypeScript type check, production build in CI |
 
 ## Project structure
 
@@ -209,7 +209,7 @@ Everything except `/health` and the auth endpoints requires a session, and works
 ## Testing
 
 ```bash
-npm run test:backend     # 143 backend tests; no database or API keys needed
+npm run test:backend     # 145 backend tests; no database or API keys needed
 npm run typecheck        # TypeScript type check
 npm run build            # production build
 ```

@@ -10,6 +10,7 @@ RAG retrieval -> source context -> concept extraction -> assessment target selec
 -> deduplication -> final question
 """
 from typing import List, Dict, Any, Optional, Tuple, Set
+import asyncio
 import re
 import json
 import hashlib
@@ -24,6 +25,9 @@ from backend.app.services.question_quality_validator import (
 )
 
 logger = get_logger(__name__)
+
+# Upper bound on the wall time spent waiting for AI-generated quiz candidates per request
+AI_CANDIDATE_BUDGET_SECONDS = 25
 
 
 class NoIndexedDocumentsError(Exception):
@@ -367,7 +371,7 @@ class QuestionGeneratorService:
             from backend.app.ai.gateway import ai_gateway
             from backend.app.ai.types import AIRequest, TaskType
 
-            for target in targets_to_query[:6]:
+            async def _request_candidates(target: Dict[str, Any]):
                 c_name = target.get("concept", "Concept")
                 t_name = target.get("topic", "Topic")
                 chunk = target.get("primary_chunk") or all_chunks[0]
@@ -389,8 +393,26 @@ class QuestionGeneratorService:
                     task_type=TaskType.QUIZ,
                     temperature=0.3,
                 )
+                try:
+                    return c_name, t_name, chunk, await ai_gateway.generate_structured(ai_req)
+                except Exception as gen_err:
+                    logger.warning(f"AI candidate request for concept '{c_name}' failed: {gen_err}")
+                    return c_name, t_name, chunk, None
 
-                ai_res = await ai_gateway.generate_structured(ai_req)
+            # The concept prompts are independent, so they run concurrently instead of one after another.
+            # A time budget keeps the request well inside the API timeout; anything still pending is
+            # dropped and the pool is completed by deterministic synthesis below.
+            jobs = [asyncio.create_task(_request_candidates(t)) for t in targets_to_query[:6]]
+            done, pending = await asyncio.wait(jobs, timeout=AI_CANDIDATE_BUDGET_SECONDS)
+            for job in pending:
+                job.cancel()
+            if pending:
+                logger.info(f"{len(pending)} AI candidate request(s) exceeded the {AI_CANDIDATE_BUDGET_SECONDS}s budget; using deterministic synthesis for the rest.")
+
+            for job in jobs:  # keep the original concept priority order
+                if job not in done:
+                    continue
+                c_name, t_name, chunk, ai_res = job.result()
                 if ai_res and ai_res.structured_data:
                     data = ai_res.structured_data
                     if isinstance(data, dict):
@@ -431,9 +453,6 @@ class QuestionGeneratorService:
                                 candidates.append(q_data)
 
                 if len(candidates) >= target_pool_size:
-                    break
-                if not ai_res or not ai_res.structured_data:
-                    logger.info("AI Gateway did not return candidates (provider unavailable or cooldown). Breaking early to deterministic synthesis.")
                     break
         except Exception as e:
             logger.warning(f"AI Gateway candidate pool generation notice: {e}. Supplementing with deterministic synthesis.")
