@@ -24,7 +24,16 @@ async def _connect():
         sys.exit("DATABASE_URL is not set.")
     import asyncpg
 
-    return await asyncpg.connect(settings.database_url)
+    # The database may still be starting (e.g. in Docker Compose or right after a deploy)
+    for attempt in range(1, 7):
+        try:
+            return await asyncpg.connect(settings.database_url, timeout=30)
+        except (OSError, asyncpg.PostgresError, asyncio.TimeoutError) as e:
+            if attempt == 6:
+                sys.exit(f"Could not connect to the database: {type(e).__name__}")
+            delay = 2 ** (attempt - 1)
+            print(f"Database not reachable yet ({type(e).__name__}); retrying in {delay}s ...")
+            await asyncio.sleep(delay)
 
 
 async def migrate() -> None:

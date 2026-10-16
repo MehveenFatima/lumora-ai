@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from backend.app.core.config import settings
 from backend.app.core.logging import setup_logging, get_logger
-from backend.app.db.connection import get_db_pool, close_db_pool
+from backend.app.db.connection import close_db_pool, connect_with_retry
 from backend.app.api.v1.router import api_router
 
 logger = get_logger(__name__)
@@ -36,7 +36,15 @@ async def lifespan(app: FastAPI):
         if not settings.database_url:
             logger.warning("ENVIRONMENT=production without DATABASE_URL: data will not survive a restart.")
 
-    await get_db_pool()
+    if await connect_with_retry():
+        from backend.app.api.routes.documents import mark_interrupted_documents
+
+        try:
+            interrupted = await mark_interrupted_documents()
+            if interrupted:
+                logger.warning(f"Marked {interrupted} interrupted document upload(s) as failed.")
+        except Exception as e:
+            logger.warning(f"Could not check for interrupted uploads: {e}")
     yield
     # Shutdown
     logger.info(f"Shutting down {settings.app_name}...")
