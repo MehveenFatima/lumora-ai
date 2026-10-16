@@ -42,7 +42,13 @@ export function RegisterForm() {
     setStatus('loading')
     setErrorMessage(null)
     try {
-      await authClient.register(name.trim(), email.trim(), password)
+      const result = await authClient.register(name.trim(), email.trim(), password)
+      if (result.verificationRequired) {
+        const q = new URLSearchParams({ email: result.email })
+        if (!result.emailSent) q.set('sent', '0')
+        router.replace(`/verify-email?${q.toString()}`)
+        return
+      }
       setStatus('success')
       router.replace(safeNextPath())
       router.refresh()

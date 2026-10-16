@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 
 const SESSION_COOKIE = process.env.SESSION_COOKIE_NAME || 'lumora_session'
+const AUTH_PAGES = new Set(['/login', '/register', '/verify-email', '/forgot-password'])
 
 /**
  * Optimistic route protection: send visitors without a session cookie to the sign-in page,
@@ -19,7 +20,7 @@ export function proxy(request: NextRequest) {
     return NextResponse.redirect(url)
   }
 
-  if ((pathname === '/login' || pathname === '/register') && hasSession) {
+  if (AUTH_PAGES.has(pathname) && hasSession) {
     const url = request.nextUrl.clone()
     url.pathname = '/dashboard'
     url.search = ''
@@ -30,5 +31,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/dashboard/:path*', '/login', '/register'],
+  matcher: ['/dashboard/:path*', '/login', '/register', '/verify-email', '/forgot-password'],
 }

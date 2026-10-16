@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation'
 import { Mail, Lock, ArrowRight, Loader2 } from 'lucide-react'
 import { TextField } from './text-field'
 import { AuthAlert } from './auth-alert'
-import { authClient } from '@/lib/api/auth-client'
+import { AuthError, authClient } from '@/lib/api/auth-client'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -42,6 +42,10 @@ export function LoginForm() {
       router.replace(safeNextPath())
       router.refresh()
     } catch (err: any) {
+      if (err instanceof AuthError && err.code === 'EMAIL_NOT_VERIFIED') {
+        router.replace(`/verify-email?${new URLSearchParams({ email: err.email || email.trim() }).toString()}`)
+        return
+      }
       setStatus('idle')
       setErrorMessage(err?.message || 'Could not sign in. Please try again.')
     }
@@ -88,6 +92,11 @@ export function LoginForm() {
           onBlur={() => setTouched((t) => ({ ...t, password: true }))}
           error={passwordError}
         />
+        <div className="-mt-2 flex justify-end">
+          <Link href="/forgot-password" className="text-xs font-medium text-primary transition-opacity hover:opacity-80">
+            Forgot password?
+          </Link>
+        </div>
 
         <button
           type="submit"

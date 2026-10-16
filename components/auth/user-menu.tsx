@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { LayoutGrid, LogOut, Loader2 } from 'lucide-react'
+import { LayoutGrid, LogOut, Loader2, Settings } from 'lucide-react'
 import { authClient, initialsOf, useCurrentUser } from '@/lib/api/auth-client'
 
 export function UserMenu() {
@@ -69,6 +69,15 @@ export function UserMenu() {
             >
               <LayoutGrid className="size-4 text-muted-foreground" />
               All workspaces
+            </Link>
+            <Link
+              href="/dashboard/account"
+              role="menuitem"
+              onClick={() => setOpen(false)}
+              className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm text-foreground hover:bg-accent/50"
+            >
+              <Settings className="size-4 text-muted-foreground" />
+              Account settings
             </Link>
             <button
               type="button"

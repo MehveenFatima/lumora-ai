@@ -92,6 +92,43 @@ class Settings(BaseSettings):
     cookie_secure: Optional[bool] = Field(default=None, validation_alias="COOKIE_SECURE")
     allow_registration: bool = Field(default=True, validation_alias="ALLOW_REGISTRATION")
 
+    # Transactional email (verification and password-reset codes).
+    # Brevo's HTTPS API works on hosts that block SMTP ports (e.g. Render's free tier); SMTP
+    # (e.g. Gmail with an app password) works for local development and paid hosts.
+    brevo_api_key: Optional[str] = Field(default=None, validation_alias="BREVO_API_KEY")
+    smtp_host: Optional[str] = Field(default=None, validation_alias="SMTP_HOST")
+    smtp_port: int = Field(default=587, validation_alias="SMTP_PORT")
+    smtp_username: Optional[str] = Field(default=None, validation_alias="SMTP_USERNAME")
+    smtp_password: Optional[str] = Field(default=None, validation_alias="SMTP_PASSWORD")
+    email_from_address: Optional[str] = Field(default=None, validation_alias="EMAIL_FROM_ADDRESS")
+    email_from_name: str = Field(default="LumoraAI", validation_alias="EMAIL_FROM_NAME")
+    # auto = required whenever an email provider is configured; true/false force it
+    email_verification: str = Field(default="auto", validation_alias="EMAIL_VERIFICATION")
+    email_code_ttl_minutes: int = Field(default=10, validation_alias="EMAIL_CODE_TTL_MINUTES")
+    # Public URL of the web app, used for links inside emails
+    app_base_url: Optional[str] = Field(default=None, validation_alias="APP_BASE_URL")
+
+    @property
+    def email_provider(self) -> Optional[str]:
+        if self.brevo_api_key and self.email_from_address:
+            return "brevo"
+        if self.smtp_host and self.email_from_address:
+            return "smtp"
+        return None
+
+    @property
+    def email_enabled(self) -> bool:
+        return self.email_provider is not None
+
+    @property
+    def email_verification_required(self) -> bool:
+        mode = (self.email_verification or "auto").strip().lower()
+        if mode in {"false", "off", "0", "no"}:
+            return False
+        if mode in {"true", "on", "1", "yes"}:
+            return self.email_enabled
+        return self.email_enabled
+
     @property
     def is_production(self) -> bool:
         return self.environment.strip().lower() == "production"

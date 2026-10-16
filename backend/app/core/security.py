@@ -68,27 +68,38 @@ def get_jwt_secret() -> str:
     return _ephemeral_secret
 
 
-def create_session_token(user_id: str) -> str:
+def password_version(changed_at: Optional[datetime]) -> int:
+    """Changes whenever the password changes; sessions carry it so a reset ends older sessions."""
+    return int(changed_at.timestamp() * 1_000_000) if changed_at else 0
+
+
+def create_session_token(user_id: str, pv: int = 0) -> str:
     now = datetime.now(timezone.utc)
     payload = {
         "sub": user_id,
         "iat": now,
         "exp": now + timedelta(hours=settings.session_ttl_hours),
         "iss": _JWT_ISSUER,
+        "pv": pv,
     }
     return jwt.encode(payload, get_jwt_secret(), algorithm=_JWT_ALGORITHM)
 
 
 def decode_session_token(token: str) -> Optional[str]:
     """Returns the user id for a valid, unexpired token, otherwise None."""
+    claims = decode_session_claims(token)
+    return str(claims["sub"]) if claims else None
+
+
+def decode_session_claims(token: str) -> Optional[dict]:
+    """Returns the verified claims (sub, iat, exp) of a valid, unexpired token, otherwise None."""
     try:
-        payload = jwt.decode(
+        return jwt.decode(
             token,
             get_jwt_secret(),
             algorithms=[_JWT_ALGORITHM],
             issuer=_JWT_ISSUER,
             options={"require": ["sub", "exp", "iat"]},
         )
-        return str(payload["sub"])
     except jwt.PyJWTError:
         return None
