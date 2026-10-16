@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "dev:all": "node scripts/start_dev_all.mjs",
+    "dev:restart": "node scripts/start_dev_all.mjs --restart",
+    "stop": "node scripts/stop_dev.mjs",
     "backend": "python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --reload",
     "seed:presentation": "python scripts/seed_presentation_data.py",
     "build": "next build",

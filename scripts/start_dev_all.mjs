@@ -1,91 +1,134 @@
+// Starts FastAPI (:8000) and Next.js (:3000) together for local development: `npm run dev:all`.
+// Ctrl+C stops both, including every process they started. If an older copy is still running
+// (for example after a closed terminal), this script says so instead of starting a second one;
+// `npm run stop` clears it.
 import { spawn } from 'child_process'
-
-console.log('====================================================')
-console.log('   Starting LumoraAI Full-Stack Development Mode     ')
-console.log('   FastAPI (:8000) + Next.js (:3000)                ')
-console.log('====================================================\n')
+import net from 'net'
+import { stopDevServers } from './stop_dev.mjs'
 
 const isWindows = process.platform === 'win32'
-const npmCmd = isWindows ? 'npm.cmd' : 'npm'
 const pythonCmd = isWindows ? 'python' : 'python3'
+const nextBin = isWindows ? 'node_modules\\.bin\\next.cmd' : 'node_modules/.bin/next'
 
-const backendProc = spawn(pythonCmd, ['-m', 'uvicorn', 'backend.app.main:app', '--host', '127.0.0.1', '--port', '8000', '--reload'], {
-  stdio: ['inherit', 'pipe', 'pipe'],
-  shell: isWindows,
-})
+const color = (code, label) => `\x1b[${code}m${label}\x1b[0m`
+const children = []
+let stopping = false
 
-backendProc.stdout?.on('data', (data) => {
-  const lines = data.toString().trim().split('\n')
-  for (const line of lines) {
-    if (line.trim()) console.log(`\x1b[34m[FastAPI]\x1b[0m ${line.trim()}`)
-  }
-})
+function portInUse(port) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ port, host: '127.0.0.1' })
+    socket.once('connect', () => {
+      socket.destroy()
+      resolve(true)
+    })
+    socket.once('error', () => resolve(false))
+    socket.setTimeout(1000, () => {
+      socket.destroy()
+      resolve(false)
+    })
+  })
+}
 
-backendProc.stderr?.on('data', (data) => {
-  const lines = data.toString().trim().split('\n')
-  for (const line of lines) {
-    if (line.trim()) console.log(`\x1b[33m[FastAPI]\x1b[0m ${line.trim()}`)
-  }
-})
-
-let frontendProc = null
-
-async function waitForBackend(healthUrl, maxRetries = 40, intervalMs = 500) {
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      const res = await fetch(healthUrl)
-      if (res.ok) {
-        console.log(`\x1b[36m[Startup]\x1b[0m FastAPI backend is healthy and accepting requests on :8000!`)
-        return true
-      }
-    } catch {
-      // Backend still booting
+function run(label, labelColor, command, args) {
+  // detached: each server gets its own process group, so the whole group can be stopped at once
+  const child = spawn(command, args, {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    shell: isWindows,
+    detached: !isWindows,
+    env: process.env,
+  })
+  const print = (data, errColor) => {
+    for (const line of data.toString().split('\n')) {
+      if (line.trim()) console.log(`${color(errColor || labelColor, `[${label}]`)} ${line.trimEnd()}`)
     }
-    await new Promise((resolve) => setTimeout(resolve, intervalMs))
   }
-  console.warn(`\x1b[33m[Startup WARNING]\x1b[0m FastAPI backend did not report healthy within expected window. Starting Next.js anyway...`)
+  child.stdout?.on('data', (d) => print(d))
+  child.stderr?.on('data', (d) => print(d, label === 'Next.js' ? 31 : 33))
+  child.on('exit', (code, signal) => {
+    if (!stopping) {
+      console.log(color(31, `\n[${label}] stopped unexpectedly (${signal || `exit code ${code}`}). Shutting down.`))
+      shutdown(1)
+    }
+  })
+  children.push(child)
+  return child
+}
+
+function killTree(child, signal) {
+  if (!child?.pid || child.exitCode !== null) return
+  try {
+    if (isWindows) spawn('taskkill', ['/pid', String(child.pid), '/f', '/t'], { stdio: 'ignore' })
+    else process.kill(-child.pid, signal)
+  } catch {
+    // already gone
+  }
+}
+
+function shutdown(code = 0) {
+  if (stopping) return
+  stopping = true
+  console.log('\nStopping LumoraAI servers...')
+  children.forEach((c) => killTree(c, 'SIGTERM'))
+  // Anything that ignores SIGTERM is force-stopped after 3 seconds
+  setTimeout(() => {
+    children.forEach((c) => killTree(c, 'SIGKILL'))
+    console.log('Stopped.')
+    process.exit(code)
+  }, 3000).unref()
+  Promise.all(children.map((c) => (c.exitCode !== null ? null : new Promise((r) => c.once('exit', r))))).then(() => {
+    console.log('Stopped.')
+    process.exit(code)
+  })
+}
+
+async function waitForBackend(url, attempts = 60) {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      if ((await fetch(url)).ok) return true
+    } catch {
+      // still starting
+    }
+    await new Promise((r) => setTimeout(r, 500))
+  }
   return false
 }
 
-async function start() {
-  console.log('\x1b[36m[Startup]\x1b[0m Waiting for FastAPI to initialize before launching Next.js...')
-  await waitForBackend('http://127.0.0.1:8000/api/v1/health')
-
-  console.log('\x1b[36m[Startup]\x1b[0m Launching Next.js frontend dev server...')
-  frontendProc = spawn(npmCmd, ['run', 'dev'], {
-    stdio: ['inherit', 'pipe', 'pipe'],
-    shell: isWindows,
-  })
-
-  frontendProc.stdout?.on('data', (data) => {
-    const lines = data.toString().trim().split('\n')
-    for (const line of lines) {
-      if (line.trim()) console.log(`\x1b[32m[Next.js]\x1b[0m ${line.trim()}`)
+async function main() {
+  const busy = [(await portInUse(8000)) && 8000, (await portInUse(3000)) && 3000].filter(Boolean)
+  if (busy.length) {
+    if (process.argv.includes('--restart')) {
+      await stopDevServers()
+    } else {
+      const which = busy.length > 1 ? `Ports ${busy.join(' and ')} are` : `Port ${busy[0]} is`
+      console.log(color(33, `${which} already in use: an earlier LumoraAI server is still running.`))
+      console.log(`Stop it with ${color(36, 'npm run stop')} and then run ${color(36, 'npm run dev:all')} again`)
+      console.log(`(or use ${color(36, 'npm run dev:restart')} to do both).`)
+      process.exit(1)
     }
-  })
-
-  frontendProc.stderr?.on('data', (data) => {
-    const lines = data.toString().trim().split('\n')
-    for (const line of lines) {
-      if (line.trim()) console.log(`\x1b[31m[Next.js]\x1b[0m ${line.trim()}`)
-    }
-  })
-}
-
-start()
-
-function cleanup() {
-  console.log('\nStopping LumoraAI servers...')
-  if (isWindows) {
-    if (backendProc?.pid) spawn('taskkill', ['/pid', backendProc.pid.toString(), '/f', '/t'], { stdio: 'ignore' })
-    if (frontendProc?.pid) spawn('taskkill', ['/pid', frontendProc.pid.toString(), '/f', '/t'], { stdio: 'ignore' })
-  } else {
-    backendProc?.kill('SIGTERM')
-    frontendProc?.kill('SIGTERM')
   }
-  process.exit(0)
+
+  console.log('====================================================')
+  console.log('   Starting LumoraAI: FastAPI (:8000) + Next.js (:3000)')
+  console.log('   Press Ctrl+C to stop both.')
+  console.log('====================================================\n')
+
+  // Reload only on backend code changes (not node_modules, .next or uploaded files)
+  run('FastAPI', 34, pythonCmd, [
+    '-m', 'uvicorn', 'backend.app.main:app', '--host', '127.0.0.1', '--port', '8000',
+    '--reload', '--reload-dir', 'backend/app',
+  ])
+
+  console.log(color(36, '[Startup]') + ' Waiting for FastAPI...')
+  const healthy = await waitForBackend('http://127.0.0.1:8000/api/v1/health')
+  console.log(
+    color(36, '[Startup]') + (healthy ? ' FastAPI is ready on :8000.' : ' FastAPI is still starting; launching Next.js anyway.'),
+  )
+  if (stopping) return
+  run('Next.js', 32, nextBin, ['dev', '-p', '3000'])
 }
 
-process.on('SIGINT', cleanup)
-process.on('SIGTERM', cleanup)
-process.on('exit', cleanup)
+process.on('SIGINT', () => shutdown(0))
+process.on('SIGTERM', () => shutdown(0))
+process.on('SIGHUP', () => shutdown(0))
+
+main()

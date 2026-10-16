@@ -144,6 +144,7 @@ pip install -r backend/requirements.txt
 cp .env.example .env                 # fill in GEMINI_API_KEY and DATABASE_URL
 python -m backend.app.cli migrate    # create or upgrade the schema
 npm run dev:all                      # FastAPI on :8000 and Next.js on :3000
+npm run stop                         # stops any dev servers still running (e.g. after closing a terminal)
 ```
 
 Open <http://localhost:3000>, create an account, add a workspace and upload a document.
