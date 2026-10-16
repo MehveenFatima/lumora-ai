@@ -79,7 +79,7 @@ The browser only talks to the Next.js app, which proxies `/api/v1/*` to FastAPI 
 | Documents | PyMuPDF, python-docx, python-pptx |
 | Delivery | Docker and Docker Compose, Render blueprint, Vercel, GitHub Actions CI |
 | Email | Brevo transactional API or any SMTP server (verification and reset codes) |
-| Testing | pytest (170 tests), TypeScript type check, production build in CI |
+| Testing | pytest (178 tests), TypeScript type check, production build in CI |
 
 ## Project structure
 
@@ -209,7 +209,7 @@ The root [`Dockerfile`](Dockerfile) builds the web app as a standalone Node serv
 
 ## API
 
-The FastAPI backend exposes 52 endpoints under `/api/v1`:
+The FastAPI backend exposes 53 endpoints under `/api/v1`:
 
 - auth (register, verify email, resend code, login, logout, forgot and reset password, profile, change password, delete account)
 - notifications (list, mark read, mark all read)
@@ -228,7 +228,7 @@ Everything except `/health` and the auth endpoints requires a session, and works
 ## Testing
 
 ```bash
-npm run test:backend     # 170 backend tests; no database or API keys needed
+npm run test:backend     # 178 backend tests; no database or API keys needed
 npm run typecheck        # TypeScript type check
 npm run build            # production build
 ```

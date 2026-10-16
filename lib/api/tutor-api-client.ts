@@ -1,4 +1,5 @@
 import type { TutorMessage, TutorCitation, WorkspaceDocument, Workspace } from '../types/domain'
+import { localToday } from '../dates'
 
 export interface BackendTutorResponse {
   conversation_id: string
@@ -120,8 +121,14 @@ async function apiFetch(path: string, options: RequestInit = {}): Promise<Respon
   // Browser requests MUST ALWAYS be relative to use the Next.js /api/v1 proxy
   const url = isBrowser ? cleanPath : `${getBaseUrl()}${cleanPath}`
 
+  const headers = new Headers(options.headers || {})
+  if (isBrowser) {
+    // The learner's local date, so date rules (e.g. target completion dates) follow their calendar
+    headers.set('X-Client-Date', localToday())
+  }
   const fetchOptions: RequestInit = {
     ...options,
+    headers,
     signal: options.signal || AbortSignal.timeout(30000),
   }
 
@@ -658,6 +665,35 @@ export const tutorApiClient = {
     const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/study-plan`)
     if (!response.ok) return null
     return response.json()
+  },
+
+  /** Updates a workspace's target completion date and/or daily target. Throws with the API's message. */
+  async updateWorkspace(
+    workspaceId: string,
+    data: { targetDate?: string; dailyTargetMinutes?: number; name?: string; goal?: string },
+  ): Promise<any> {
+    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        target_date: data.targetDate,
+        daily_target_minutes: data.dailyTargetMinutes,
+        name: data.name,
+        goal: data.goal,
+      }),
+    })
+    const body = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      const detail = body?.detail
+      const message =
+        typeof detail === 'string'
+          ? detail
+          : Array.isArray(detail) && detail[0]?.msg
+            ? String(detail[0].msg).replace(/^Value error, /, '')
+            : `Could not update the workspace (HTTP ${response.status})`
+      throw new Error(message)
+    }
+    return body
   },
 
   async toggleStudyTask(workspaceId: string, taskId: string): Promise<any> {

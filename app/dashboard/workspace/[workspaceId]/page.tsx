@@ -37,6 +37,7 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { cn } from '@/lib/utils'
+import { formatLongDate } from '@/lib/dates'
 
 export default function WorkspaceLandingPage() {
   const params = useParams()
@@ -585,6 +586,9 @@ export default function WorkspaceLandingPage() {
                   <h3 className="font-display text-base font-semibold text-foreground">Today&apos;s Plan</h3>
                   <p className="text-xs text-muted-foreground">
                     Target: {studyPlan.dailyTargetMinutes} mins
+                    {!studyPlan.targetPassed && studyPlan.daysRemaining != null
+                      ? ` · ${studyPlan.daysRemaining === 0 ? 'due today' : `${studyPlan.daysRemaining} days left`}`
+                      : ''}
                   </p>
                 </div>
                 <Badge variant="default" size="sm">
@@ -600,7 +604,20 @@ export default function WorkspaceLandingPage() {
               </div>
 
               <div className="mt-4 flex flex-col gap-2.5">
-                {(studyPlan.tasks || []).length === 0 ? (
+                {studyPlan.targetPassed ? (
+                  <div className="rounded-2xl border border-warning/40 bg-warning/5 p-3 text-xs">
+                    <p className="font-semibold text-foreground">Target date passed</p>
+                    <p className="mt-1 text-muted-foreground">
+                      {formatLongDate(studyPlan.targetDate)} has passed, so no plan is created.
+                    </p>
+                    <Link
+                      href={`/dashboard/workspace/${workspaceId}/study-plan`}
+                      className="mt-2 inline-flex font-semibold text-primary hover:opacity-80"
+                    >
+                      Set a new target date →
+                    </Link>
+                  </div>
+                ) : (studyPlan.tasks || []).length === 0 ? (
                   <p className="py-4 text-center text-xs text-muted-foreground italic">
                     No scheduled tasks yet for today.
                   </p>

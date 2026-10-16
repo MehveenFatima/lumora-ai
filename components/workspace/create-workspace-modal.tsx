@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { addDays, localToday } from '@/lib/dates'
 import {
   X,
   Plus,
@@ -34,7 +35,14 @@ export function CreateWorkspaceModal({ isOpen, onClose }: CreateWorkspaceModalPr
   const [name, setName] = useState('')
   const [goal, setGoal] = useState('')
   const [level, setLevel] = useState<'beginner' | 'intermediate' | 'advanced'>('intermediate')
-  const [targetDate, setTargetDate] = useState('2026-07-31')
+  // Default: 30 days from the learner's local today; past dates are not allowed
+  const [targetDate, setTargetDate] = useState(() => addDays(localToday(), 30))
+  const today = localToday()
+  const targetDateError = !targetDate
+    ? 'Choose a target completion date.'
+    : targetDate < today
+      ? 'Target date must be today or later.'
+      : null
   const [dailyMinutes, setDailyMinutes] = useState(45)
   const [description, setDescription] = useState('')
   const [uploadedFiles, setUploadedFiles] = useState<Array<{ name: string; size: string; file: File }>>([])
@@ -57,7 +65,7 @@ export function CreateWorkspaceModal({ isOpen, onClose }: CreateWorkspaceModalPr
   }
 
   const handleCreate = async () => {
-    if (!name.trim()) return
+    if (!name.trim() || targetDateError) return
     setIsSubmitting(true)
     setErrorMessage(null)
 
@@ -202,17 +210,26 @@ export function CreateWorkspaceModal({ isOpen, onClose }: CreateWorkspaceModalPr
                 <div className="relative mt-1.5">
                   <input
                     type="date"
+                    min={today}
                     value={targetDate}
                     onChange={(e) => setTargetDate(e.target.value)}
-                    className="h-10 w-full rounded-xl border border-input bg-background px-3 text-xs text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20"
+                    aria-invalid={Boolean(targetDateError)}
+                    className={`h-10 w-full rounded-xl border bg-background px-3 text-xs text-foreground outline-none focus:ring-2 ${
+                      targetDateError
+                        ? 'border-destructive focus:border-destructive focus:ring-destructive/20'
+                        : 'border-input focus:border-ring focus:ring-ring/20'
+                    }`}
                   />
                 </div>
+                {targetDateError ? (
+                  <p className="mt-1 text-[11px] font-medium text-destructive">{targetDateError}</p>
+                ) : null}
               </div>
             </div>
 
             <button
               type="button"
-              disabled={!name.trim()}
+              disabled={!name.trim() || Boolean(targetDateError)}
               onClick={() => setStep(2)}
               className="mt-3 flex h-11 items-center justify-center gap-2 rounded-xl bg-primary text-xs font-semibold text-primary-foreground shadow-glow transition-opacity hover:opacity-90 disabled:opacity-50"
             >

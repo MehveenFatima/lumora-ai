@@ -81,15 +81,11 @@ class WorkspaceRepository:
         owner_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         now = datetime.now(timezone.utc)
-        # Ensure a clean YYYY-MM-DD string for PostgreSQL DATE casting
-        clean_target_date = "2026-12-31"
-        if target_date:
-            try:
-                candidate = str(target_date).strip()[:10]
-                datetime.strptime(candidate, "%Y-%m-%d")
-                clean_target_date = candidate
-            except Exception:
-                clean_target_date = "2026-12-31"
+        # Ensure a clean YYYY-MM-DD string for PostgreSQL DATE casting (default: 30 days from now)
+        from backend.app.core.dates import default_target, parse_date
+
+        parsed_target = parse_date(target_date)
+        clean_target_date = (parsed_target or default_target(now.date())).isoformat()
 
         ws_data = {
             "id": workspace_id,
@@ -272,6 +268,28 @@ class WorkspaceRepository:
             del _memory_workspaces[workspace_id]
             return True
         return False
+
+    async def update_settings(self, workspace_id: str, fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Updates name, goal, target_date and/or daily_target_minutes (column names are fixed here)."""
+        allowed = {"name", "goal", "target_date", "daily_target_minutes"}
+        fields = {k: v for k, v in fields.items() if k in allowed and v is not None}
+        if not fields:
+            return await self.get_by_id(workspace_id)
+        now = datetime.now(timezone.utc)
+        pool = await get_db_pool()
+        check_presentation_mode_database_availability(pool)
+        if pool:
+            values = [dt_date.fromisoformat(v) if k == "target_date" else v for k, v in fields.items()]
+            assignments = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(fields))
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    f"UPDATE workspaces SET {assignments}, updated_at = ${len(fields) + 2} WHERE id = $1",
+                    workspace_id, *values, now,
+                )
+        if workspace_id in _memory_workspaces:
+            _memory_workspaces[workspace_id].update(fields)
+            _memory_workspaces[workspace_id]["updated_at"] = now
+        return await self.get_by_id(workspace_id)
 
     async def increment_doc_count(self, workspace_id: str, delta: int = 1) -> None:
         pool = await get_db_pool()

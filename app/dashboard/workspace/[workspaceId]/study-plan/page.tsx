@@ -15,6 +15,8 @@ import {
   Sparkles,
   Target,
   Plus,
+  CalendarX2,
+  Flag,
 } from 'lucide-react'
 import { workspaceService } from '@/lib/services/workspace-service'
 import {
@@ -25,6 +27,8 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { cn } from '@/lib/utils'
+import { TargetDateEditor } from '@/components/workspace/target-date-editor'
+import { formatLongDate } from '@/lib/dates'
 
 export default function StudyPlanPage() {
   const params = useParams()
@@ -34,19 +38,27 @@ export default function StudyPlanPage() {
   const [studyPlan, setStudyPlan] = useState<StudyPlan | null>(null)
   const [activeTab, setActiveTab] = useState<'today' | 'this_week' | 'upcoming'>('today')
 
+  const [editingDate, setEditingDate] = useState(false)
+
+  async function loadPlan() {
+    const [ws, sp] = await Promise.all([
+      workspaceService.getWorkspaceById(workspaceId),
+      workspaceService.getStudyPlan(workspaceId),
+    ])
+    setWorkspace(ws)
+    setStudyPlan(sp)
+  }
+
   useEffect(() => {
     if (!workspaceId) return
-
-    async function loadPlan() {
-      const [ws, sp] = await Promise.all([
-        workspaceService.getWorkspaceById(workspaceId),
-        workspaceService.getStudyPlan(workspaceId),
-      ])
-      setWorkspace(ws)
-      setStudyPlan(sp)
-    }
     loadPlan()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId])
+
+  const onTargetSaved = async () => {
+    setEditingDate(false)
+    await loadPlan()
+  }
 
   if (!studyPlan) {
     return (
@@ -84,8 +96,8 @@ export default function StudyPlanPage() {
           </p>
         </div>
 
-        {/* Schedule Tabs */}
-        <div className="flex rounded-2xl border border-border bg-card p-1">
+        {/* Schedule Tabs (hidden when there is no plan because the target date has passed) */}
+        <div className={cn('flex rounded-2xl border border-border bg-card p-1', studyPlan.targetPassed && 'hidden')}>
           {(['today', 'this_week', 'upcoming'] as const).map((tab) => (
             <button
               key={tab}
@@ -103,6 +115,29 @@ export default function StudyPlanPage() {
         </div>
       </div>
 
+      {studyPlan.targetPassed ? (
+        <div className="rounded-3xl border border-warning/40 bg-warning/5 p-6 shadow-soft">
+          <div className="flex items-start gap-3">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-warning/15 text-warning">
+              <CalendarX2 className="size-5" />
+            </span>
+            <div className="flex-1 space-y-3">
+              <div>
+                <h3 className="font-display text-base font-semibold text-foreground">Your target date has passed</h3>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  The target completion date for this workspace was{' '}
+                  <span className="font-semibold text-foreground">{formatLongDate(studyPlan.targetDate)}</span>, so no
+                  study plan is created. Choose a new target date to get a fresh plan built from your weak topics.
+                </p>
+              </div>
+              <div className="max-w-md">
+                <TargetDateEditor workspaceId={workspaceId} currentDate={studyPlan.targetDate} onSaved={onTargetSaved} />
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+      <>
       {/* Target Tracker Cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <div className="rounded-3xl border border-border bg-card p-5 shadow-soft">
@@ -142,10 +177,35 @@ export default function StudyPlanPage() {
         </div>
 
         <div className="rounded-3xl border border-border bg-card p-5 shadow-soft sm:col-span-2 lg:col-span-1">
-          <span className="text-xs font-semibold text-muted-foreground">AI Cadence Recommendation</span>
-          <p className="mt-1 text-xs leading-relaxed text-foreground font-medium">
-            Morning spaced review (15 min) + afternoon problem solving yields 34% higher retention.
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+              <Flag className="size-3.5 text-primary" />
+              Target Completion
+            </span>
+            {studyPlan.daysRemaining != null ? (
+              <Badge variant={studyPlan.daysRemaining <= 7 ? 'warning' : 'success'} size="sm">
+                {studyPlan.daysRemaining === 0
+                  ? 'Due today'
+                  : `${studyPlan.daysRemaining} day${studyPlan.daysRemaining === 1 ? '' : 's'} left`}
+              </Badge>
+            ) : null}
+          </div>
+          <p className="mt-2 font-display text-lg font-semibold text-foreground">
+            {studyPlan.targetDate ? formatLongDate(studyPlan.targetDate) : 'No target date set'}
           </p>
+          {editingDate ? (
+            <div className="mt-3">
+              <TargetDateEditor workspaceId={workspaceId} currentDate={studyPlan.targetDate} onSaved={onTargetSaved} />
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setEditingDate(true)}
+              className="mt-2 text-[11px] font-semibold text-primary hover:opacity-80"
+            >
+              Change target date
+            </button>
+          )}
         </div>
       </div>
 
@@ -225,6 +285,8 @@ export default function StudyPlanPage() {
           )}
         </div>
       </div>
+      </>
+      )}
     </div>
   )
 }
