@@ -110,7 +110,8 @@ export function NotificationBell() {
       )
     }
     setOpen(false)
-    if (n.link && n.link.startsWith('/')) router.push(n.link)
+    // Only follow in-app paths (never protocol-relative or absolute URLs)
+    if (n.link && n.link.startsWith('/') && !n.link.startsWith('//')) router.push(n.link)
   }
 
   async function markAll() {

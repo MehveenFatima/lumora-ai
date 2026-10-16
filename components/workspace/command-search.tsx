@@ -112,7 +112,7 @@ export function CommandSearch({ workspaceId }: { workspaceId: string }) {
   const flat = grouped.flatMap((g) => g.items)
 
   function go(r: SearchResult | undefined) {
-    if (!r || !r.link.startsWith('/')) return
+    if (!r || !r.link.startsWith('/') || r.link.startsWith('//')) return
     setOpen(false)
     setQuery('')
     inputRef.current?.blur()
