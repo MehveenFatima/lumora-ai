@@ -74,6 +74,23 @@ export interface HealthData {
 }
 
 const DEFAULT_SERVER_BACKEND_URL = 'http://127.0.0.1:8000'
+function mapDocument(doc: any): WorkspaceDocument {
+  return {
+    id: doc.id,
+    workspaceId: doc.workspace_id || doc.workspaceId,
+    title: doc.title,
+    filename: doc.filename,
+    type: doc.file_type || doc.type,
+    sizeBytes: doc.file_size || doc.sizeBytes,
+    pagesCount: doc.page_count || doc.pagesCount,
+    status: doc.status,
+    chunksCount: doc.chunk_count || doc.chunksCount,
+    uploadedAt: doc.created_at ? doc.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
+    summary: doc.summary,
+    errorMessage: doc.error_message || undefined,
+  }
+}
+
 // Quiz creation and next-batch generate questions with the AI provider; match the 60 s proxy limit
 const QUIZ_GENERATION_TIMEOUT_MS = 60000
 
@@ -361,7 +378,8 @@ export const tutorApiClient = {
       formData.append('title', title)
     }
 
-    // Ingestion (parse, chunk, embed) runs inside this request, so allow up to 5 minutes.
+    // Small files are processed within the request; larger ones return 202 and finish in the
+    // background (follow them with getDocument). Allow time for the file itself to upload.
     const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/documents`, {
       method: 'POST',
       body: formData,
@@ -373,19 +391,17 @@ export const tutorApiClient = {
       throw new Error(errorData.detail || `Failed to upload document (HTTP ${response.status})`)
     }
 
-    const doc = await response.json()
-    return {
-      id: doc.id,
-      workspaceId: doc.workspace_id || doc.workspaceId,
-      title: doc.title,
-      filename: doc.filename,
-      type: doc.file_type || doc.type,
-      sizeBytes: doc.file_size || doc.sizeBytes,
-      pagesCount: doc.page_count || doc.pagesCount,
-      status: doc.status,
-      chunksCount: doc.chunk_count || doc.chunksCount,
-      uploadedAt: doc.created_at ? doc.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
-      summary: doc.summary,
+    return mapDocument(await response.json())
+  },
+
+  /** One document's current state; used to follow uploads that finish in the background. */
+  async getDocument(documentId: string): Promise<WorkspaceDocument | null> {
+    try {
+      const response = await apiFetch(`/api/v1/documents/${documentId}`)
+      if (!response.ok) return null
+      return mapDocument(await response.json())
+    } catch {
+      return null
     }
   },
 
@@ -394,19 +410,7 @@ export const tutorApiClient = {
       const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/documents`)
       if (!response.ok) return []
       const data = await response.json()
-      return (data.documents || []).map((doc: any) => ({
-        id: doc.id,
-        workspaceId: doc.workspace_id || doc.workspaceId,
-        title: doc.title,
-        filename: doc.filename,
-        type: doc.file_type || doc.type,
-        sizeBytes: doc.file_size || doc.sizeBytes,
-        pagesCount: doc.page_count || doc.pagesCount,
-        status: doc.status,
-        chunksCount: doc.chunk_count || doc.chunksCount,
-        uploadedAt: doc.created_at ? doc.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
-        summary: doc.summary,
-      }))
+      return (data.documents || []).map(mapDocument)
     } catch {
       return []
     }

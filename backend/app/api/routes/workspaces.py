@@ -1,5 +1,6 @@
 import uuid
 from typing import List
+from backend.app.services.storage import storage_service
 from fastapi import APIRouter, Depends, HTTPException, status
 from backend.app.api.deps import CurrentUser, get_current_user, require_workspace
 from backend.app.schemas.workspaces import (
@@ -143,6 +144,7 @@ async def delete_workspace(workspace_id: str, ws: dict = Depends(require_workspa
     for doc in docs:
         await chunk_repo.delete_by_document(doc["id"])
         await document_repo.delete(doc["id"])
+        await storage_service.delete_file(doc.get("storage_path"))
 
     await workspace_repo.delete(workspace_id)
     return {"success": True, "message": f"Workspace '{workspace_id}' and all associated documents deleted."}

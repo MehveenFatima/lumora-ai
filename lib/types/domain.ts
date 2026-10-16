@@ -53,6 +53,7 @@ export interface WorkspaceDocument {
   chunksCount: number
   uploadedAt: string
   summary?: string
+  errorMessage?: string
   chunks?: DocumentChunk[]
 }
 

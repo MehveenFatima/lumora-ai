@@ -26,6 +26,7 @@ logger = get_logger(__name__)
 router = APIRouter(tags=["Documents"])
 
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".txt"}
+LEGACY_OFFICE_EXTENSIONS = {".doc": ".docx", ".ppt": ".pptx"}
 
 
 class DocumentContentError(Exception):
@@ -45,6 +46,7 @@ def _safe_filename(name: str) -> str:
 )
 async def upload_document(
     workspace_id: str,
+    response: Response,
     file: UploadFile = File(...),
     title: str = Form(None),
     workspace: dict = Depends(require_workspace),
@@ -59,6 +61,13 @@ async def upload_document(
 
     # 2. Validate file extension
     ext = os.path.splitext(file.filename)[1].lower()
+    if ext in LEGACY_OFFICE_EXTENSIONS:
+        modern = LEGACY_OFFICE_EXTENSIONS[ext]
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"'{ext}' is an older Office format. Open the file and use Save As to save it as "
+            f"{modern}, or export it as PDF, then upload it again.",
+        )
     if ext not in SUPPORTED_EXTENSIONS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -94,77 +103,137 @@ async def upload_document(
     doc_title = title.strip() if title else os.path.splitext(file.filename)[0].replace("_", " ")
     file_type = ext.lstrip(".")
 
-    # 4. Create document record (Status: uploading)
+    # 4. Create the document record, then process it. Small files finish within the wait window
+    # and return 201 with status "ready"; larger ones return 202 and keep processing in the
+    # background while the UI polls GET /documents/{id}.
     doc_record = await document_repo.create(
         workspace_id=workspace_id,
         title=doc_title,
         filename=file.filename,
         file_type=file_type,
         file_size=file_size,
-        status="uploading",
+        status="processing",
     )
     doc_id = doc_record["id"]
+    mode = {"background": False}
+    task = asyncio.create_task(
+        _ingest_document(
+            mode, workspace_id, doc_id, doc_title, file.filename, file_type, file_bytes,
+            file.content_type or "application/octet-stream",
+        )
+    )
+    _INGEST_TASKS.add(task)
+    task.add_done_callback(_INGEST_TASKS.discard)
+
+    done, _ = await asyncio.wait({task}, timeout=INGEST_WAIT_SECONDS)
+    if task not in done:
+        mode["background"] = True  # set before the next await, so failures are recorded, not raised
+        response.status_code = status.HTTP_202_ACCEPTED
+        current = await document_repo.get_by_id(doc_id) or doc_record
+        return DocumentResponse(**current)
+
+    exc = task.exception()
+    if exc is None:
+        return DocumentResponse(**task.result())
+    if isinstance(exc, (DocumentContentError, EmbeddingUnavailableError)):
+        code = (
+            status.HTTP_503_SERVICE_UNAVAILABLE
+            if isinstance(exc, EmbeddingUnavailableError)
+            else status.HTTP_422_UNPROCESSABLE_ENTITY
+        )
+        raise HTTPException(status_code=code, detail=str(exc))
+    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=_GENERIC_INGEST_ERROR)
+
+
+INGEST_WAIT_SECONDS = 20
+_INGEST_TASKS: set = set()
+_GENERIC_INGEST_ERROR = "This file could not be processed. Check that it is a valid, text-based document and try again."
+_IN_PROGRESS = ("uploading", "processing", "extracting", "indexing")
+
+
+async def _ingest_document(
+    mode: dict,
+    workspace_id: str,
+    doc_id: str,
+    doc_title: str,
+    filename: str,
+    file_type: str,
+    file_bytes: bytes,
+    content_type: str,
+) -> dict:
+    """Parses, (OCRs), chunks, embeds and stores one document. Returns the updated record."""
+    from backend.app.services.notification_service import notification_service
+    from backend.app.services.ocr import ocr_available, ocr_pages, pages_needing_ocr, pdf_page_count
 
     try:
-        # Step A: Update status to processing
-        await document_repo.update_status(doc_id, status="processing")
-
-        # Step B: Parse text and page numbers
+        # Step A: parse text, headings and page numbers
         parsed_pages = await asyncio.to_thread(document_parser.parse, file_bytes, file_type)
         page_count = len(parsed_pages)
+
+        # Step B: scanned or image-only PDF pages are read with OCR
+        ocr_used = 0
+        if file_type == "pdf":
+            total = await asyncio.to_thread(pdf_page_count, file_bytes)
+            page_count = max(page_count, total)
+            missing = pages_needing_ocr(parsed_pages, total)
+            if missing and ocr_available():
+                await document_repo.update_status(doc_id, status="extracting", page_count=page_count)
+                ocr_results = await ocr_pages(file_bytes, missing)
+                if ocr_results:
+                    ocr_used = len(ocr_results)
+                    by_page = {p.page_number: p for p in parsed_pages}
+                    by_page.update({p.page_number: p for p in ocr_results})
+                    parsed_pages = [by_page[n] for n in sorted(by_page)]
+
         readable = [
             p for p in parsed_pages
             if (p.text or "").strip() and not re.fullmatch(r"\[[^\]]*\]", (p.text or "").strip())
         ]
         if not readable:
             raise DocumentContentError(
-                "No readable text was found in this document. Scanned or image-only files are not supported yet."
+                "No readable text was found in this document. If it is a scan, make sure the pages are clear; "
+                "scanned pages are read with AI only when an AI key is configured."
             )
 
-        # Step D: Update status to extracting
         await document_repo.update_status(doc_id, status="extracting", page_count=page_count)
 
-        # Step E: Chunk pages into semantic chunks
+        # Step C: chunk pages into overlapping, heading-aware chunks
         chunks = chunker_service.chunk_pages(
             workspace_id=workspace_id,
             document_id=doc_id,
             pages=parsed_pages,
             document_title=doc_title,
-            source_filename=file.filename,
+            source_filename=filename,
         )
-
-        # Step F: Update status to indexing
-        await document_repo.update_status(doc_id, status="indexing")
-
         if not chunks:
             raise DocumentContentError("No readable text was found in this document.")
 
-        # Step G: Generate embeddings for chunks in batches, tagged with the model used
+        # Step D: embeddings in batches, tagged with the model used
+        await document_repo.update_status(doc_id, status="indexing")
         vectors, model_tag = await embedding_service.embed_documents([c.text for c in chunks])
         chunk_dicts = []
         for c, embedding in zip(chunks, vectors):
             c_dict = c.to_dict()
             c_dict["embedding"] = embedding
             c_dict["metadata"] = {**(c_dict.get("metadata") or {}), "embedding_model": model_tag}
-            c_dict["document_name"] = file.filename
+            c_dict["document_name"] = filename
             c_dict["document_title"] = doc_title
             chunk_dicts.append(c_dict)
 
-        # Step H: Store the original file (only once indexing has succeeded) and the chunks
+        # Step E: store the original file and the chunks
         storage_path = await storage_service.upload_file(
             workspace_id=workspace_id,
             document_id=doc_id,
-            filename=file.filename,
+            filename=filename,
             file_bytes=file_bytes,
-            content_type=file.content_type or "application/octet-stream",
+            content_type=content_type,
         )
         await document_repo.update_status(doc_id, status="indexing", storage_path=storage_path)
         await chunk_repo.insert_chunks(chunk_dicts)
 
-        # Step I: Set status = ready
-        summary_text = (
-            f"Indexed {len(chunks)} semantic chunks across {page_count} pages for grounded AI retrieval."
-        )
+        summary_text = f"Indexed {len(chunks)} semantic chunks across {page_count} pages for grounded AI retrieval."
+        if ocr_used:
+            summary_text += f" {ocr_used} scanned page{'s were' if ocr_used != 1 else ' was'} read with OCR."
         updated_doc = await document_repo.update_status(
             doc_id,
             status="ready",
@@ -172,41 +241,52 @@ async def upload_document(
             chunk_count=len(chunks),
             summary=summary_text,
         )
-
-        # Increment workspace document count
         await workspace_repo.increment_doc_count(workspace_id, delta=1)
-
         try:
             await activity_repo.add_activity(
                 workspace_id=workspace_id,
                 event_type="source_added",
-                title=f"Source Added: {file.filename}",
+                title=f"Source Added: {filename}",
                 description=f"Indexed {page_count} pages ({len(chunks)} vectors) for grounded RAG.",
             )
         except Exception:
             pass
+        await notification_service.document_ready(workspace_id, updated_doc)
+        return updated_doc
 
-        return DocumentResponse(**updated_doc)
-
-    except (DocumentContentError, EmbeddingUnavailableError) as e:
-        # Expected, user-actionable failures: remove the partial record so it doesn't linger
-        logger.warning(f"Document ingestion rejected for doc {doc_id}: {e}")
-        await chunk_repo.delete_by_document(doc_id)
-        await document_repo.delete(doc_id)
-        code = (
-            status.HTTP_503_SERVICE_UNAVAILABLE
-            if isinstance(e, EmbeddingUnavailableError)
-            else status.HTTP_422_UNPROCESSABLE_ENTITY
-        )
-        raise HTTPException(status_code=code, detail=str(e))
     except Exception as e:
-        logger.error(f"Document ingestion failed for doc {doc_id}: {e}", exc_info=True)
+        expected = isinstance(e, (DocumentContentError, EmbeddingUnavailableError))
+        if expected:
+            logger.warning(f"Document ingestion rejected for doc {doc_id}: {e}")
+        else:
+            logger.error(f"Document ingestion failed for doc {doc_id}: {e}", exc_info=True)
         await chunk_repo.delete_by_document(doc_id)
-        await document_repo.delete(doc_id)
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="This file could not be processed. Check that it is a valid, text-based document and try again.",
+        if not mode["background"]:
+            # The uploader is still waiting: remove the record and report the error directly
+            await document_repo.delete(doc_id)
+            raise
+        # Processing continued in the background: keep the record so the failure is visible
+        reason = str(e) if expected else _GENERIC_INGEST_ERROR
+        failed = await document_repo.update_status(doc_id, status="failed", error_message=reason)
+        await notification_service.document_failed(workspace_id, failed or {"id": doc_id, "title": doc_title}, reason)
+        return failed or {}
+
+
+async def mark_interrupted_documents() -> int:
+    """Documents left mid-processing by a restart are marked failed so they don't spin forever."""
+    from backend.app.db.connection import get_db_pool
+
+    pool = await get_db_pool()
+    if not pool:
+        return 0
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE documents SET status = 'failed', error_message = $1, updated_at = NOW() "
+            "WHERE status = ANY($2::text[]) AND updated_at < NOW() - INTERVAL '10 minutes'",
+            "Processing was interrupted. Please delete this file and upload it again.",
+            list(_IN_PROGRESS),
         )
+    return int(result.split()[-1]) if result else 0
 
 
 @router.get(
@@ -312,6 +392,7 @@ async def delete_document(document_id: str, user: CurrentUser = Depends(get_curr
     workspace_id = doc["workspace_id"]
     await chunk_repo.delete_by_document(document_id)
     await document_repo.delete(document_id)
+    await storage_service.delete_file(doc.get("storage_path"))
     await workspace_repo.increment_doc_count(workspace_id, delta=-1)
 
     return {"success": True, "message": f"Document '{document_id}' deleted successfully."}

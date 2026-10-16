@@ -22,6 +22,7 @@ import {
   Download,
 } from 'lucide-react'
 import { workspaceService } from '@/lib/services/workspace-service'
+import { tutorApiClient } from '@/lib/api/tutor-api-client'
 import {
   Workspace,
   WorkspaceDocument,
@@ -29,6 +30,14 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { AddSourceModal } from '@/components/workspace/add-source-modal'
 import { cn } from '@/lib/utils'
+
+const IN_PROGRESS = new Set(['uploading', 'processing', 'extracting', 'indexing'])
+
+function statusBadge(status: string) {
+  if (status === 'ready') return { variant: 'success' as const, label: 'Ready' }
+  if (status === 'failed') return { variant: 'destructive' as const, label: 'Failed' }
+  return { variant: 'warning' as const, label: 'Processing' }
+}
 
 export default function SourcesPage() {
   const params = useParams()
@@ -55,6 +64,20 @@ export default function SourcesPage() {
     loadDocs()
   }, [workspaceId])
 
+  // While any document is still being processed, refresh the list every few seconds
+  const hasProcessing = documents.some((d) => IN_PROGRESS.has(d.status))
+  useEffect(() => {
+    if (!workspaceId || !hasProcessing) return
+    const t = setInterval(async () => {
+      const latest = await tutorApiClient.getWorkspaceDocuments(workspaceId)
+      if (latest) {
+        setDocuments(latest)
+        setSelectedDoc((sel) => (sel ? latest.find((d) => d.id === sel.id) || sel : sel))
+      }
+    }, 3000)
+    return () => clearInterval(t)
+  }, [workspaceId, hasProcessing])
+
   const showToast = (msg: string) => {
     setToastMessage(msg)
     setTimeout(() => {
@@ -67,7 +90,7 @@ export default function SourcesPage() {
     if (workspace) {
       setWorkspace({ ...workspace, documentCount: workspace.documentCount + 1 })
     }
-    showToast('Source added successfully.')
+    showToast(newDoc.status === 'ready' ? 'Source added successfully.' : 'Upload received — processing in the background.')
   }
 
   const handleRemoveDoc = async (docId: string) => {
@@ -175,11 +198,12 @@ export default function SourcesPage() {
                           <FileText className="size-5" />
                         </span>
                         <Badge
-                          variant={doc.status === 'ready' ? 'success' : 'warning'}
+                          variant={statusBadge(doc.status).variant}
                           size="sm"
-                          className="capitalize text-[10px]"
+                          className="gap-1 text-[10px]"
                         >
-                          {doc.status}
+                          {IN_PROGRESS.has(doc.status) ? <Loader2 className="size-3 animate-spin" /> : null}
+                          {statusBadge(doc.status).label}
                         </Badge>
                       </div>
 
@@ -187,7 +211,18 @@ export default function SourcesPage() {
                         {doc.title}
                       </h3>
                       <p className="mt-0.5 text-[11px] text-muted-foreground truncate">{doc.filename}</p>
-                      <p className="mt-2 text-xs text-muted-foreground line-clamp-2">{doc.summary}</p>
+                      <p
+                        className={cn(
+                          'mt-2 text-xs line-clamp-2',
+                          doc.status === 'failed' ? 'text-destructive' : 'text-muted-foreground',
+                        )}
+                      >
+                        {doc.status === 'failed'
+                          ? doc.errorMessage || 'This file could not be processed.'
+                          : IN_PROGRESS.has(doc.status)
+                            ? 'Reading, chunking and indexing this file…'
+                            : doc.summary}
+                      </p>
                     </div>
 
                     <div className="mt-4 border-t border-border/70 pt-3 flex items-center justify-between text-[11px] text-muted-foreground">
@@ -224,8 +259,24 @@ export default function SourcesPage() {
             <div className="grid grid-cols-2 gap-3 text-xs">
               <div className="rounded-xl border border-border bg-background p-3">
                 <span className="text-[10px] text-muted-foreground">Index Status</span>
-                <p className="mt-1 font-semibold capitalize text-success flex items-center gap-1">
-                  <CheckCircle2 className="size-3" /> {selectedDoc.status}
+                <p
+                  className={cn(
+                    'mt-1 flex items-center gap-1 font-semibold',
+                    selectedDoc.status === 'ready'
+                      ? 'text-success'
+                      : selectedDoc.status === 'failed'
+                        ? 'text-destructive'
+                        : 'text-warning',
+                  )}
+                >
+                  {selectedDoc.status === 'ready' ? (
+                    <CheckCircle2 className="size-3" />
+                  ) : selectedDoc.status === 'failed' ? (
+                    <AlertCircle className="size-3" />
+                  ) : (
+                    <Loader2 className="size-3 animate-spin" />
+                  )}
+                  {statusBadge(selectedDoc.status).label}
                 </p>
               </div>
 
