@@ -43,7 +43,9 @@ backend/app/
 | Area | Method & path |
 | :--- | :--- |
 | Health | `GET /health` (public) |
-| Auth | `POST /auth/register` · `POST /auth/login` · `POST /auth/logout` · `GET /auth/me` |
+| Auth | `GET /auth/config` · `POST /auth/register` · `POST /auth/verify-email` · `POST /auth/resend-verification` · `POST /auth/login` · `POST /auth/logout` · `POST /auth/forgot-password` · `POST /auth/reset-password` · `GET`/`PATCH`/`DELETE /auth/me` · `POST /auth/change-password` |
+| Notifications | `GET /notifications` · `POST /notifications/{id}/read` · `POST /notifications/read-all` |
+| Search | `GET /workspaces/{id}/search?q=` |
 | Workspaces | `POST /workspaces` · `GET /workspaces` · `GET /workspaces/{id}` · `DELETE /workspaces/{id}` |
 | Documents | `POST /workspaces/{id}/documents` · `GET /workspaces/{id}/documents` · `GET /documents/{doc_id}` · `GET /documents/{doc_id}/view` · `GET /documents/{doc_id}/download` · `DELETE /documents/{doc_id}` |
 | Tutor | `POST /workspaces/{id}/tutor` · `GET /workspaces/{id}/tutor/history` |
@@ -60,4 +62,4 @@ All paths are relative to `/api/v1`. Every route except health and auth requires
 python -m pytest backend/tests -q
 ```
 
-The suite (151 tests) runs against the in-memory store and needs no external services. If a `.env` with real API keys is present, some tests will call the AI providers, so leave the keys unset for a fully offline run. To run against PostgreSQL instead, point `DATABASE_URL` at a **disposable** database migrated with `python -m backend.app.cli migrate`. The tests create and delete workspaces, so never point them at a database you care about.
+The suite (170 tests) runs against the in-memory store and needs no external services. If a `.env` with real API keys is present, some tests will call the AI providers, so leave the keys unset for a fully offline run. To run against PostgreSQL instead, point `DATABASE_URL` at a **disposable** database migrated with `python -m backend.app.cli migrate`. The tests create and delete workspaces, so never point them at a database you care about.
