@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { useParams } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import {
   Sparkles,
@@ -70,6 +70,12 @@ export default function AiTutorPage() {
     }
     loadTutorData()
   }, [workspaceId])
+
+  // Opened from search: put the searched words in the question box, ready to send
+  const askParam = useSearchParams().get('ask')
+  useEffect(() => {
+    if (askParam) setInput(askParam.slice(0, 300))
+  }, [askParam])
 
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' })
