@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Mail, Lock, ArrowRight, Loader2 } from 'lucide-react'
@@ -24,6 +24,11 @@ export function LoginForm() {
   const [touched, setTouched] = useState<{ email?: boolean; password?: boolean }>({})
   const [status, setStatus] = useState<'idle' | 'loading' | 'success'>('idle')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [resetAvailable, setResetAvailable] = useState(false)
+
+  useEffect(() => {
+    authClient.config().then((c) => setResetAvailable(c.password_reset_available))
+  }, [])
 
   const emailError =
     touched.email && !EMAIL_RE.test(email) ? 'Enter a valid email address' : undefined
@@ -92,11 +97,13 @@ export function LoginForm() {
           onBlur={() => setTouched((t) => ({ ...t, password: true }))}
           error={passwordError}
         />
-        <div className="-mt-2 flex justify-end">
-          <Link href="/forgot-password" className="text-xs font-medium text-primary transition-opacity hover:opacity-80">
-            Forgot password?
-          </Link>
-        </div>
+        {resetAvailable ? (
+          <div className="-mt-2 flex justify-end">
+            <Link href="/forgot-password" className="text-xs font-medium text-primary transition-opacity hover:opacity-80">
+              Forgot password?
+            </Link>
+          </div>
+        ) : null}
 
         <button
           type="submit"

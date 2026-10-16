@@ -28,3 +28,11 @@ services:
         value: workspace-documents
       - key: FRONTEND_ORIGIN
         sync: false
+      # Email for verification and password reset (Render's free tier blocks SMTP, so use Brevo).
+      # Leave BREVO_API_KEY empty to run without email features.
+      - key: BREVO_API_KEY
+        sync: false
+      - key: EMAIL_FROM_ADDRESS
+        sync: false
+      - key: EMAIL_FROM_NAME
+        value: LumoraAI
