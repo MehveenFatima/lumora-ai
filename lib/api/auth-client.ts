@@ -11,16 +11,33 @@ export interface AuthUser {
 
 export class AuthError extends Error {
   status: number
-  constructor(message: string, status: number) {
+  code?: string
+  email?: string
+  constructor(message: string, status: number, code?: string, email?: string) {
     super(message)
     this.status = status
+    this.code = code
+    this.email = email
   }
+}
+
+export interface RegisterResult {
+  verificationRequired: boolean
+  email: string
+  emailSent: boolean
+  user: AuthUser | null
+}
+
+export interface AuthConfig {
+  email_verification_required: boolean
+  password_reset_available: boolean
 }
 
 /** Turns a FastAPI error body (string detail or validation list) into one readable message. */
 function readError(body: any, fallback: string): string {
   const detail = body?.detail
   if (typeof detail === 'string') return detail
+  if (detail && typeof detail === 'object' && typeof detail.message === 'string') return detail.message
   if (Array.isArray(detail) && detail.length > 0) {
     const msg = String(detail[0]?.msg || fallback)
     return msg.replace(/^Value error, /, '')
@@ -37,7 +54,16 @@ async function authRequest<T>(path: string, init: RequestInit = {}): Promise<T> 
   if (res.status === 204) return undefined as T
   const body = await res.json().catch(() => ({}))
   if (!res.ok) {
-    throw new AuthError(readError(body, `Request failed (${res.status})`), res.status)
+    if (res.status === 429) {
+      throw new AuthError('Too many attempts. Please wait a few minutes and try again.', 429)
+    }
+    const detail = body?.detail
+    throw new AuthError(
+      readError(body, `Request failed (${res.status})`),
+      res.status,
+      detail && typeof detail === 'object' ? detail.code : undefined,
+      detail && typeof detail === 'object' ? detail.email : undefined,
+    )
   }
   return body as T
 }
@@ -52,13 +78,84 @@ function setCachedUser(user: AuthUser | null) {
 }
 
 export const authClient = {
-  async register(name: string, email: string, password: string): Promise<AuthUser> {
-    const res = await authRequest<{ user: AuthUser }>('/register', {
+  async register(name: string, email: string, password: string): Promise<RegisterResult> {
+    const res = await authRequest<{
+      verification_required: boolean
+      email: string
+      email_sent: boolean
+      user: AuthUser | null
+    }>('/register', {
       method: 'POST',
       body: JSON.stringify({ name, email, password }),
     })
+    if (res.user) setCachedUser(res.user)
+    return {
+      verificationRequired: res.verification_required,
+      email: res.email,
+      emailSent: res.email_sent,
+      user: res.user,
+    }
+  },
+
+  async config(): Promise<AuthConfig> {
+    try {
+      return await authRequest<AuthConfig>('/config')
+    } catch {
+      return { email_verification_required: false, password_reset_available: false }
+    }
+  },
+
+  async verifyEmail(email: string, code: string): Promise<AuthUser> {
+    const res = await authRequest<{ user: AuthUser }>('/verify-email', {
+      method: 'POST',
+      body: JSON.stringify({ email, code }),
+    })
     setCachedUser(res.user)
     return res.user
+  },
+
+  async resendVerification(email: string): Promise<string> {
+    const res = await authRequest<{ message: string }>('/resend-verification', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    })
+    return res.message
+  },
+
+  async forgotPassword(email: string): Promise<string> {
+    const res = await authRequest<{ message: string }>('/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    })
+    return res.message
+  },
+
+  async resetPassword(email: string, code: string, newPassword: string): Promise<AuthUser> {
+    const res = await authRequest<{ user: AuthUser }>('/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ email, code, new_password: newPassword }),
+    })
+    setCachedUser(res.user)
+    return res.user
+  },
+
+  async updateProfile(name: string): Promise<AuthUser> {
+    const user = await authRequest<AuthUser>('/me', { method: 'PATCH', body: JSON.stringify({ name }) })
+    setCachedUser(user)
+    return user
+  },
+
+  async changePassword(currentPassword: string, newPassword: string): Promise<void> {
+    const res = await authRequest<{ user: AuthUser }>('/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    })
+    setCachedUser(res.user)
+  },
+
+  async deleteAccount(password: string): Promise<void> {
+    await authRequest<void>('/me', { method: 'DELETE', body: JSON.stringify({ password }) })
+    setCachedUser(null)
   },
 
   async login(email: string, password: string): Promise<AuthUser> {

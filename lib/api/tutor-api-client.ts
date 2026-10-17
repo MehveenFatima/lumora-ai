@@ -1,4 +1,5 @@
 import type { TutorMessage, TutorCitation, WorkspaceDocument, Workspace } from '../types/domain'
+import { localToday } from '../dates'
 
 export interface BackendTutorResponse {
   conversation_id: string
@@ -74,6 +75,23 @@ export interface HealthData {
 }
 
 const DEFAULT_SERVER_BACKEND_URL = 'http://127.0.0.1:8000'
+function mapDocument(doc: any): WorkspaceDocument {
+  return {
+    id: doc.id,
+    workspaceId: doc.workspace_id || doc.workspaceId,
+    title: doc.title,
+    filename: doc.filename,
+    type: doc.file_type || doc.type,
+    sizeBytes: doc.file_size || doc.sizeBytes,
+    pagesCount: doc.page_count || doc.pagesCount,
+    status: doc.status,
+    chunksCount: doc.chunk_count || doc.chunksCount,
+    uploadedAt: doc.created_at ? doc.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
+    summary: doc.summary,
+    errorMessage: doc.error_message || undefined,
+  }
+}
+
 // Quiz creation and next-batch generate questions with the AI provider; match the 60 s proxy limit
 const QUIZ_GENERATION_TIMEOUT_MS = 60000
 
@@ -103,8 +121,14 @@ async function apiFetch(path: string, options: RequestInit = {}): Promise<Respon
   // Browser requests MUST ALWAYS be relative to use the Next.js /api/v1 proxy
   const url = isBrowser ? cleanPath : `${getBaseUrl()}${cleanPath}`
 
+  const headers = new Headers(options.headers || {})
+  if (isBrowser) {
+    // The learner's local date, so date rules (e.g. target completion dates) follow their calendar
+    headers.set('X-Client-Date', localToday())
+  }
   const fetchOptions: RequestInit = {
     ...options,
+    headers,
     signal: options.signal || AbortSignal.timeout(30000),
   }
 
@@ -361,7 +385,8 @@ export const tutorApiClient = {
       formData.append('title', title)
     }
 
-    // Ingestion (parse, chunk, embed) runs inside this request, so allow up to 5 minutes.
+    // Small files are processed within the request; larger ones return 202 and finish in the
+    // background (follow them with getDocument). Allow time for the file itself to upload.
     const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/documents`, {
       method: 'POST',
       body: formData,
@@ -373,19 +398,17 @@ export const tutorApiClient = {
       throw new Error(errorData.detail || `Failed to upload document (HTTP ${response.status})`)
     }
 
-    const doc = await response.json()
-    return {
-      id: doc.id,
-      workspaceId: doc.workspace_id || doc.workspaceId,
-      title: doc.title,
-      filename: doc.filename,
-      type: doc.file_type || doc.type,
-      sizeBytes: doc.file_size || doc.sizeBytes,
-      pagesCount: doc.page_count || doc.pagesCount,
-      status: doc.status,
-      chunksCount: doc.chunk_count || doc.chunksCount,
-      uploadedAt: doc.created_at ? doc.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
-      summary: doc.summary,
+    return mapDocument(await response.json())
+  },
+
+  /** One document's current state; used to follow uploads that finish in the background. */
+  async getDocument(documentId: string): Promise<WorkspaceDocument | null> {
+    try {
+      const response = await apiFetch(`/api/v1/documents/${documentId}`)
+      if (!response.ok) return null
+      return mapDocument(await response.json())
+    } catch {
+      return null
     }
   },
 
@@ -394,19 +417,7 @@ export const tutorApiClient = {
       const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/documents`)
       if (!response.ok) return []
       const data = await response.json()
-      return (data.documents || []).map((doc: any) => ({
-        id: doc.id,
-        workspaceId: doc.workspace_id || doc.workspaceId,
-        title: doc.title,
-        filename: doc.filename,
-        type: doc.file_type || doc.type,
-        sizeBytes: doc.file_size || doc.sizeBytes,
-        pagesCount: doc.page_count || doc.pagesCount,
-        status: doc.status,
-        chunksCount: doc.chunk_count || doc.chunksCount,
-        uploadedAt: doc.created_at ? doc.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
-        summary: doc.summary,
-      }))
+      return (data.documents || []).map(mapDocument)
     } catch {
       return []
     }
@@ -654,6 +665,35 @@ export const tutorApiClient = {
     const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/study-plan`)
     if (!response.ok) return null
     return response.json()
+  },
+
+  /** Updates a workspace's target completion date and/or daily target. Throws with the API's message. */
+  async updateWorkspace(
+    workspaceId: string,
+    data: { targetDate?: string; dailyTargetMinutes?: number; name?: string; goal?: string },
+  ): Promise<any> {
+    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        target_date: data.targetDate,
+        daily_target_minutes: data.dailyTargetMinutes,
+        name: data.name,
+        goal: data.goal,
+      }),
+    })
+    const body = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      const detail = body?.detail
+      const message =
+        typeof detail === 'string'
+          ? detail
+          : Array.isArray(detail) && detail[0]?.msg
+            ? String(detail[0].msg).replace(/^Value error, /, '')
+            : `Could not update the workspace (HTTP ${response.status})`
+      throw new Error(message)
+    }
+    return body
   },
 
   async toggleStudyTask(workspaceId: string, taskId: string): Promise<any> {

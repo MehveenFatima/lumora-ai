@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import { WorkspaceDocument, DocumentType } from '@/lib/types/domain'
 import { workspaceService } from '@/lib/services/workspace-service'
+import { tutorApiClient } from '@/lib/api/tutor-api-client'
 import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
@@ -46,6 +47,13 @@ export function AddSourceModal({
   const [progressPercent, setProgressPercent] = useState(0)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const cancelledRef = useRef(false)
+  const [backgroundDoc, setBackgroundDoc] = useState<WorkspaceDocument | null>(null)
+
+  // Stop following a background upload when the modal unmounts
+  useEffect(() => () => {
+    cancelledRef.current = true
+  }, [])
 
   useEffect(() => {
     if (isOpen) {
@@ -54,6 +62,8 @@ export function AddSourceModal({
       setIsDragging(false)
       setStage('idle')
       setProgressPercent(0)
+      setBackgroundDoc(null)
+      cancelledRef.current = false
     }
   }, [isOpen])
 
@@ -75,6 +85,12 @@ export function AddSourceModal({
 
     // Check extension
     const name = selectedFile.name.toLowerCase()
+    if (name.endsWith('.doc') || name.endsWith('.ppt')) {
+      setValidationError(
+        `This is an older Office format. Open it and use Save As to save it as ${name.endsWith('.doc') ? '.docx' : '.pptx'} (or export as PDF), then upload again.`,
+      )
+      return
+    }
     const isSupported = SUPPORTED_EXTENSIONS.some((ext) => name.endsWith(ext))
     if (!isSupported) {
       setValidationError('Unsupported file type. Please upload PDF, DOCX, PPTX or TXT.')
@@ -140,13 +156,19 @@ export function AddSourceModal({
     const fType = getFileType(file.name)
     const title = file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' ')
     const estimatedPages = Math.max(1, Math.round(file.size / (150 * 1024)))
+    cancelledRef.current = false
+
+    // While the request is open the server parses, chunks and embeds; show that honestly
+    const stageTimer = setTimeout(() => {
+      if (!cancelledRef.current) {
+        setStage('processing')
+        setProgressPercent(40)
+      }
+    }, 1200)
 
     try {
       setStage('uploading')
-      setProgressPercent(30)
-
-      setStage('extracting')
-      setProgressPercent(60)
+      setProgressPercent(15)
 
       const newDoc = await workspaceService.addDocument(workspaceId, {
         title,
@@ -156,24 +178,62 @@ export function AddSourceModal({
         pagesCount: estimatedPages,
         rawFile: file,
       })
+      clearTimeout(stageTimer)
 
-      setStage('indexing')
-      setProgressPercent(90)
+      if (newDoc.status === 'ready') {
+        finish(newDoc)
+        return
+      }
 
-      setTimeout(() => {
-        setStage('ready')
-        setProgressPercent(100)
-
-        setTimeout(() => {
-          onSourceAdded(newDoc)
-          onClose()
-        }, 400)
-      }, 300)
+      // Large file: the server keeps processing in the background; follow its real status
+      setBackgroundDoc(newDoc)
+      await followProcessing(newDoc)
     } catch (err: any) {
+      clearTimeout(stageTimer)
       console.error('Failed to add document source:', err)
       setValidationError(err.message || 'Failed to upload document.')
       setStage('idle')
+      setProgressPercent(0)
     }
+  }
+
+  const finish = (doc: WorkspaceDocument) => {
+    setStage('ready')
+    setProgressPercent(100)
+    setTimeout(() => {
+      onSourceAdded(doc)
+      onClose()
+    }, 600)
+  }
+
+  const STAGE_PROGRESS: Record<string, number> = { uploading: 20, processing: 40, extracting: 60, indexing: 85 }
+
+  const followProcessing = async (doc: WorkspaceDocument) => {
+    while (!cancelledRef.current) {
+      await new Promise((r) => setTimeout(r, 2000))
+      if (cancelledRef.current) return
+      const latest = await tutorApiClient.getDocument(doc.id)
+      if (!latest) continue
+      if (latest.status === 'ready') {
+        finish(latest)
+        return
+      }
+      if (latest.status === 'failed') {
+        setBackgroundDoc(null)
+        setValidationError(latest.errorMessage || 'This file could not be processed.')
+        setStage('idle')
+        setProgressPercent(0)
+        return
+      }
+      setStage(latest.status as ProcessingStage)
+      setProgressPercent(STAGE_PROGRESS[latest.status] ?? 50)
+    }
+  }
+
+  const continueInBackground = () => {
+    cancelledRef.current = true
+    if (backgroundDoc) onSourceAdded(backgroundDoc)
+    onClose()
   }
 
   const formatFileSize = (bytes: number) => {
@@ -370,6 +430,12 @@ export function AddSourceModal({
                 {stage === 'ready' ? 'Document Indexed Successfully!' : getStageLabel()}
               </h3>
               <p className="mt-1 text-xs text-muted-foreground">{file?.name}</p>
+              {backgroundDoc && stage !== 'ready' ? (
+                <p className="mx-auto mt-2 max-w-sm text-[11px] text-muted-foreground">
+                  This is a larger file, so it&apos;s being processed in the background. You can keep working; we&apos;ll
+                  notify you when it&apos;s ready.
+                </p>
+              ) : null}
             </div>
 
             <div className="mx-auto max-w-sm">
@@ -379,6 +445,16 @@ export function AddSourceModal({
                 <span className="font-semibold text-primary">{progressPercent}%</span>
               </div>
             </div>
+
+            {backgroundDoc && stage !== 'ready' ? (
+              <button
+                type="button"
+                onClick={continueInBackground}
+                className="mx-auto h-9 rounded-xl border border-border bg-background px-4 text-xs font-semibold text-foreground transition-colors hover:bg-accent/40"
+              >
+                Continue in background
+              </button>
+            ) : null}
 
             {/* Processing Step Trace */}
             <div className="rounded-2xl border border-border bg-background p-4 text-left text-xs space-y-2">

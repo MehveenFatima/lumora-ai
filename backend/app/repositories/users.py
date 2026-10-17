@@ -20,7 +20,7 @@ class UserRepository:
     def normalize_email(email: str) -> str:
         return email.strip().lower()
 
-    async def create(self, email: str, name: str, password_hash: str) -> Dict[str, Any]:
+    async def create(self, email: str, name: str, password_hash: str, email_verified: bool = True) -> Dict[str, Any]:
         email = self.normalize_email(email)
         now = datetime.now(timezone.utc)
         user = {
@@ -28,6 +28,8 @@ class UserRepository:
             "email": email,
             "name": name.strip(),
             "password_hash": password_hash,
+            "email_verified": email_verified,
+            "password_changed_at": None,
             "created_at": now,
             "last_login_at": None,
         }
@@ -40,10 +42,10 @@ class UserRepository:
                 try:
                     await conn.execute(
                         """
-                        INSERT INTO users (id, email, name, password_hash, created_at)
-                        VALUES ($1, $2, $3, $4, $5)
+                        INSERT INTO users (id, email, name, password_hash, email_verified, created_at)
+                        VALUES ($1, $2, $3, $4, $5, $6)
                         """,
-                        user["id"], email, user["name"], password_hash, now,
+                        user["id"], email, user["name"], password_hash, email_verified, now,
                     )
                 except asyncpg.UniqueViolationError:
                     raise EmailAlreadyRegisteredError(email)
@@ -83,6 +85,42 @@ class UserRepository:
             return
         if user_id in _memory_users:
             _memory_users[user_id]["last_login_at"] = now
+
+    async def _update(self, user_id: str, fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Updates the given columns (names come from this module only, never from input)."""
+        pool = await get_db_pool()
+        if pool:
+            assignments = ", ".join(f"{col} = ${i + 2}" for i, col in enumerate(fields))
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    f"UPDATE users SET {assignments} WHERE id = $1 RETURNING *", user_id, *fields.values()
+                )
+                return dict(row) if row else None
+        user = _memory_users.get(user_id)
+        if user:
+            user.update(fields)
+        return user
+
+    async def mark_email_verified(self, user_id: str) -> Optional[Dict[str, Any]]:
+        return await self._update(user_id, {"email_verified": True})
+
+    async def update_password(self, user_id: str, password_hash: str) -> Optional[Dict[str, Any]]:
+        # Sessions issued before this instant stop working (see deps.get_current_user)
+        return await self._update(
+            user_id, {"password_hash": password_hash, "password_changed_at": datetime.now(timezone.utc)}
+        )
+
+    async def update_name(self, user_id: str, name: str) -> Optional[Dict[str, Any]]:
+        return await self._update(user_id, {"name": name.strip()})
+
+    async def delete(self, user_id: str) -> None:
+        """Deletes the account; workspaces and all learner data cascade with it."""
+        pool = await get_db_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                await conn.execute("DELETE FROM users WHERE id = $1", user_id)
+            return
+        _memory_users.pop(user_id, None)
 
 
 user_repo = UserRepository()

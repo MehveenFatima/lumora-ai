@@ -30,13 +30,14 @@ Each user has their own account and **workspaces**, one per subject. Every works
 
 | | |
 | :--- | :--- |
-| **Accounts** | Email and password sign-up and sign-in, httpOnly session cookies, rate-limited login, and per-user data isolation enforced on every API route. |
-| **Document ingestion** | Upload PDF, DOCX, PPTX or TXT. Files are validated, parsed page by page, split into page-aware chunks with heading metadata, embedded in batches (768-d Gemini embeddings) and indexed with pgvector. |
+| **Accounts** | Sign-up with a 6-digit email verification code, forgot/reset password by email, account settings (rename, change password, delete account), httpOnly session cookies, rate limiting, and per-user data isolation enforced on every API route. |
+| **Document ingestion** | Upload PDF, DOCX, PPTX or TXT. Files are validated, parsed page by page, split into page-aware chunks with heading metadata, embedded in batches (768-d Gemini embeddings) and indexed with pgvector. Large files keep processing in the background with live status, and scanned PDF pages are read with OCR (Gemini vision). |
 | **Grounded AI tutor** | Hybrid vector and keyword retrieval with a relevance threshold, follow-up resolution ("why is this important?"), response modes (simplify, example, compare, summary, exam points, page focus) and page-level citations. |
 | **Adaptive quiz** | Questions in batches of five. A batch score of 80% or more raises difficulty and adds new concepts, 60–80% consolidates, and below 60% lowers difficulty and revisits missed concepts. Answers are graded on the server. |
 | **Question quality checks** | Generated MCQs must pass checks for structure, true/false and "all of the above" options, duplicates, option-length balance, answer leakage, citation leakage, raw code or table dumps, and label consistency. |
 | **Learner model** | BKT mastery per concept, rolled up to topics, with knowledge gaps ranked by severity, a recommended next action and a daily mastery-over-time chart. |
 | **Study tools** | Flashcards from your sources with SM-2 spaced-repetition scheduling, a study plan built from your gaps, learning analytics and an activity log. |
+| **Search and notifications** | Ctrl/Cmd + K search across topics, documents, flashcards and note passages. In-app notifications when a document is ready, a quiz finds weak topics, or flashcards are due. |
 | **Resilient AI layer** | Gemini 3.8 Flash with automatic failover to Qwen via OpenRouter, rate-limit cooldowns, and an extractive source-only answer when no model is available. |
 
 ## Screenshots
@@ -77,7 +78,8 @@ The browser only talks to the Next.js app, which proxies `/api/v1/*` to FastAPI 
 | AI | Google Gemini 3.8 Flash and Gemini Embedding 001; Qwen3.8-27B via OpenRouter as fallback |
 | Documents | PyMuPDF, python-docx, python-pptx |
 | Delivery | Docker and Docker Compose, Render blueprint, Vercel, GitHub Actions CI |
-| Testing | pytest (151 tests), TypeScript type check, production build in CI |
+| Email | Brevo transactional API or any SMTP server (verification and reset codes) |
+| Testing | pytest (178 tests), TypeScript type check, production build in CI |
 
 ## Project structure
 
@@ -88,6 +90,8 @@ lumora-ai/
 │   ├── dashboard/             Workspace list and per-workspace pages
 │   │   └── workspace/[workspaceId]/   tutor · quiz · flashcards · topics · analytics · study-plan · sources · activity
 │   ├── login/ · register/     Sign in and sign up
+│   ├── verify-email/ · forgot-password/   Email code verification and password reset
+│   ├── dashboard/account/     Account settings
 │   └── page.tsx               Landing page
 ├── proxy.ts                   Redirects signed-out visitors to /login
 ├── components/                landing · workspace · auth · ui
@@ -140,6 +144,7 @@ pip install -r backend/requirements.txt
 cp .env.example .env                 # fill in GEMINI_API_KEY and DATABASE_URL
 python -m backend.app.cli migrate    # create or upgrade the schema
 npm run dev:all                      # FastAPI on :8000 and Next.js on :3000
+npm run stop                         # stops any dev servers still running (e.g. after closing a terminal)
 ```
 
 Open <http://localhost:3000>, create an account, add a workspace and upload a document.
@@ -177,8 +182,20 @@ python -m backend.app.cli claim-workspaces --email you@example.com  # adopt work
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_STORAGE_BUCKET` | API | Supabase Storage for original files (otherwise stored on local disk) |
 | `RAG_TOP_K` | API | Passages retrieved per answer (default 5) |
 | `FRONTEND_ORIGIN` | API | Additional allowed CORS origin |
+| `BREVO_API_KEY` | API | Brevo API key for sending email (works on hosts that block SMTP) |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD` | API | SMTP alternative, e.g. Gmail with an App Password |
+| `EMAIL_FROM_ADDRESS`, `EMAIL_FROM_NAME` | API | Sender address and name (the address must be verified with your provider) |
+| `EMAIL_VERIFICATION` | API | `auto` (default: required when an email provider is set) or `false` |
 
 The full template is [`.env.example`](.env.example). Never commit a real `.env`.
+
+## Security
+
+- Passwords hashed with PBKDF2-SHA256 (600,000 iterations, per-user salt); sessions are signed JWTs in an httpOnly, SameSite cookie.
+- Email codes are stored only as HMACs, expire after 10 minutes, are single-use and lock after 5 wrong attempts; re-sending is limited to once a minute.
+- "Forgot password" gives the same reply whether or not an account exists, and a password change or reset signs out every other session.
+- Every workspace route checks ownership and returns 404 for other users' data; uploads are type-, signature- and size-checked and stored under sanitised paths.
+- In production a missing `JWT_SECRET` stops start-up, errors never expose internals, and an unreachable database returns 503 instead of falling back to memory.
 
 ## Deployment
 
@@ -187,14 +204,17 @@ The app deploys as two services plus a database:
 1. **Database and file storage: Supabase.** Create a project and copy its PostgreSQL connection string. The `vector` extension is available there. Create a Storage bucket named `workspace-documents`.
 2. **API: Render** (or any Docker host). Create a Blueprint from this repository; [`render.yaml`](render.yaml) builds `backend/Dockerfile`, generates `JWT_SECRET` and checks `/api/v1/health`. Set `DATABASE_URL`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. The container applies migrations on every start.
 3. **Web app: Vercel.** Import the repository and set `BACKEND_API_URL` to the Render service URL. The browser only talks to the Vercel domain, so session cookies stay first-party.
+4. **Email (optional): Brevo.** Create a free Brevo account, verify one sender address and create an API key, then set `BREVO_API_KEY` and `EMAIL_FROM_ADDRESS` on Render. Render's free tier blocks outbound SMTP, which is why the API uses Brevo's HTTPS API there. Without these, sign-up works without verification and password reset is hidden.
 
 The root [`Dockerfile`](Dockerfile) builds the web app as a standalone Node server if you prefer to host both services yourself.
 
 ## API
 
-The FastAPI backend exposes 40 endpoints under `/api/v1`:
+The FastAPI backend exposes 53 endpoints under `/api/v1`:
 
-- auth (register, login, logout, me)
+- auth (register, verify email, resend code, login, logout, forgot and reset password, profile, change password, delete account)
+- notifications (list, mark read, mark all read)
+- workspace search
 - workspaces
 - documents (upload, list, view, download, delete)
 - tutor
@@ -209,19 +229,18 @@ Everything except `/health` and the auth endpoints requires a session, and works
 ## Testing
 
 ```bash
-npm run test:backend     # 151 backend tests; no database or API keys needed
+npm run test:backend     # 178 backend tests; no database or API keys needed
 npm run typecheck        # TypeScript type check
 npm run build            # production build
 ```
 
-The backend tests cover accounts, sessions and cross-user isolation, chunking, parsing, embeddings and vector-space consistency, retrieval and grounding, the tutor's response modes and fallbacks, BKT, the adaptive quiz, question quality and leakage checks, spaced repetition and provider health. To run them against PostgreSQL, set `DATABASE_URL` to a **disposable** database migrated with `python -m backend.app.cli migrate`. [GitHub Actions](.github/workflows/ci.yml) runs the suite in both modes, plus the type check and build, on every push.
+The backend tests cover accounts, email verification and password reset (codes, expiry, lockout, session revocation), sessions and cross-user isolation, background processing and OCR, search and notifications, chunking, parsing, embeddings and vector-space consistency, retrieval and grounding, the tutor's response modes and fallbacks, BKT, the adaptive quiz, question quality and leakage checks, spaced repetition and provider health. To run them against PostgreSQL, set `DATABASE_URL` to a **disposable** database migrated with `python -m backend.app.cli migrate`. [GitHub Actions](.github/workflows/ci.yml) runs the suite in both modes, plus the type check and build, on every push.
 
 ## Roadmap
 
-- Email verification and password reset (needs an email provider)
-- A job queue for very large uploads (ingestion currently runs inside the request, with batched embeddings)
+- A durable job queue (e.g. a worker process) so background uploads survive restarts; today an interrupted upload is marked failed and can be re-uploaded
 - Migrating from the deprecated `google-generativeai` SDK to `google-genai`
-- Notifications
+- Email notifications (reminders for due flashcards), in addition to in-app ones
 - Fitting BKT parameters from collected responses, and a controlled study with learners
 
 ## License

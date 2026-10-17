@@ -1,13 +1,14 @@
 import asyncio
 import re
 from typing import List, Dict, Any, Optional
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from backend.app.repositories.chunks import chunk_repo
 from backend.app.repositories.documents import document_repo
 from backend.app.repositories.workspaces import workspace_repo
 from backend.app.repositories.secondary import flashcard_repo, study_plan_repo, activity_repo
 from backend.app.repositories.bkt import bkt_repo
 from backend.app.services.knowledge_gap_engine import knowledge_gap_engine
+from backend.app.core.dates import client_today, parse_date
 from backend.app.core.logging import get_logger
 from backend.app.services.text_cleanup import clean_label, clean_study_text, split_sentences, truncate_at_sentence
 
@@ -256,17 +257,49 @@ class SecondaryService:
         self,
         workspace_id: str,
         user_id: str = "default_user",
+        today: Optional[date] = None,
     ) -> Dict[str, Any]:
         """
         Returns the workspace's adaptive study plan. Tasks are rebuilt from the latest knowledge gaps
         and mastery on every call, so the plan follows quiz results. Tasks the learner already ticked
         off are kept (and stay completed); open tasks that no longer apply are dropped.
+
+        If the workspace's target completion date is before `today`, no plan is generated: the
+        result has no tasks and target_passed=True, so the learner is asked to set a new date.
         """
+        today = today or client_today()
         ws = await workspace_repo.get_by_id(workspace_id)
         ws_name = ws.get("name", "Workspace") if ws else "Workspace"
         daily = (ws.get("daily_target_minutes") or 45) if ws else 45
+        target = parse_date(ws.get("target_date")) if ws else None
+        timing = {
+            "target_date": target.isoformat() if target else None,
+            "days_remaining": (target - today).days if target else None,
+            "target_passed": bool(target and target < today),
+        }
 
         existing = await study_plan_repo.get_by_workspace(workspace_id)
+        if timing["target_passed"]:
+            return {
+                "workspace_id": workspace_id,
+                "daily_target_minutes": daily,
+                "today_completed_minutes": 0,
+                "weekly_target_minutes": daily * 5,
+                "week_completed_minutes": 0,
+                "tasks": [],
+                **timing,
+            }
+        plan = await self._build_plan(workspace_id, ws_name, user_id, daily, existing)
+        return {**plan, **timing}
+
+    async def _build_plan(
+        self,
+        workspace_id: str,
+        ws_name: str,
+        user_id: str,
+        daily: int,
+        existing: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
         old_tasks = (existing or {}).get("tasks") or []
         fresh = await self._build_tasks(workspace_id, ws_name, user_id)
 

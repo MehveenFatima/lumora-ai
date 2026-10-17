@@ -591,13 +591,16 @@ export const workspaceService = {
 
     try {
       const res = await tutorApiClient.getStudyPlan(workspaceId)
-      if (res && res.tasks && res.tasks.length > 0) {
+      if (res && Array.isArray(res.tasks)) {
         const mappedPlan: StudyPlan = {
           workspaceId: res.workspace_id || workspaceId,
           dailyTargetMinutes: res.daily_target_minutes || 45,
           todayCompletedMinutes: res.today_completed_minutes || 0,
           weeklyTargetMinutes: res.weekly_target_minutes || 225,
           weekCompletedMinutes: res.week_completed_minutes || 0,
+          targetDate: res.target_date ?? null,
+          daysRemaining: res.days_remaining ?? null,
+          targetPassed: Boolean(res.target_passed),
           tasks: res.tasks.map((t: any) => ({
             id: t.id,
             workspaceId: res.workspace_id || workspaceId,
@@ -711,9 +714,10 @@ export const workspaceService = {
     if (!workspaceId) return { conversationId: '', messages: [] }
     const res = await tutorApiClient.getTutorHistory(workspaceId, conversationId)
     if (res && res.messages.length > 0) {
-      tutorMessagesCache[workspaceId] = res.messages
+      tutorMessagesCache[workspaceId] = [...res.messages]
     }
-    return res
+    // The page gets its own copy, so later cache updates can never change what it shows
+    return { ...res, messages: [...(res?.messages || [])] }
   },
 
   async sendTutorMessage(
@@ -730,10 +734,9 @@ export const workspaceService = {
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     }
 
-    if (!tutorMessagesCache[workspaceId]) {
-      tutorMessagesCache[workspaceId] = []
-    }
-    tutorMessagesCache[workspaceId].push(userMsg)
+    // Replace the cached list instead of pushing into it: the chat page may hold the old array
+    // as its state, and mutating it made the question appear twice while the answer loaded.
+    tutorMessagesCache[workspaceId] = [...(tutorMessagesCache[workspaceId] || []), userMsg]
 
     try {
       const assistantMsg = await tutorApiClient.sendTutorMessage(
@@ -742,7 +745,7 @@ export const workspaceService = {
         conversationId,
         currentDocumentId
       )
-      tutorMessagesCache[workspaceId].push(assistantMsg)
+      tutorMessagesCache[workspaceId] = [...tutorMessagesCache[workspaceId], assistantMsg]
       return assistantMsg
     } catch (err: any) {
       console.error('RAG request failed on FastAPI backend:', err)
@@ -755,7 +758,7 @@ export const workspaceService = {
         citations: [],
         suggestedFollowUps: ['Try again', 'Manage workspace sources'],
       }
-      tutorMessagesCache[workspaceId].push(errorMsg)
+      tutorMessagesCache[workspaceId] = [...tutorMessagesCache[workspaceId], errorMsg]
       return errorMsg
     }
   },

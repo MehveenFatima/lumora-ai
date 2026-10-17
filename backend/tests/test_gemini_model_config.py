@@ -42,7 +42,7 @@ def test_provider_rejects_obsolete_model_without_silent_substitution():
 
 def test_gateway_tutor_routing_model_identifier():
     """Verify Inherited Gateway Tutor routing assigns Gemini provider with model gemini-3.8-flash."""
-    provider = GeminiProvider(api_key="test_dummy_key_12345", model_name="models/gemini-3.8-flash")
+    provider = GeminiProvider(api_key="test_dummy_key_12345", model_name="models/gemini-3.8-flash")  # gitleaks:allow (placeholder, not a real key)
     assert provider.model_name == "gemini-3.8-flash"
 
     gw = AIGateway(gemini_provider=provider)

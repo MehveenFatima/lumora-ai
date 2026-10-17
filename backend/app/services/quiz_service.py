@@ -986,6 +986,10 @@ class QuizService:
         except Exception as e:
             logger.warning(f"Error syncing learner profile on quiz completion: {e}")
 
+        from backend.app.services.notification_service import notification_service
+
+        await notification_service.quiz_gaps(workspace_id, session_id, accuracy, gap_names)
+
         try:
             await activity_repo.add_activity(
                 workspace_id=workspace_id,

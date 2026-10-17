@@ -111,5 +111,25 @@ class StorageService:
                 logger.error(f"Error downloading from Supabase storage: {e}")
         return None
 
+    async def delete_file(self, storage_path: Optional[str]) -> None:
+        """Removes a stored document (local copy and Supabase object). Never raises."""
+        if not storage_path:
+            return
+        parts = storage_path.split("/")
+        if len(parts) >= 5 and parts[0] == "workspace" and parts[2] == "documents":
+            root_dir = os.path.join(os.getcwd(), *_LOCAL_ROOT_PARTS)
+            local_dir = os.path.join(root_dir, parts[1], parts[3])
+            if _within(root_dir, local_dir) and os.path.isdir(local_dir):
+                import shutil
+
+                shutil.rmtree(local_dir, ignore_errors=True)
+        if self._client:
+            try:
+                import asyncio
+
+                await asyncio.to_thread(self._client.storage.from_(self.bucket_name).remove, [storage_path])
+            except Exception as e:
+                logger.warning(f"Could not delete stored document from Supabase: {type(e).__name__}")
+
 
 storage_service = StorageService()

@@ -1,4 +1,0 @@
-Binary Search Tree Invariant (Chapter 4, Page 42):
-In an AVL tree, the balance factor BF is calculated as height(left) minus height(right).
-If BF becomes +2 or -2, tree rotations such as Left-Right double rotations restore balance in O(1) time.
-Binary heaps maintain the complete binary tree invariant and min-heap order.

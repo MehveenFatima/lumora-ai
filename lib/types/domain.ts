@@ -53,6 +53,7 @@ export interface WorkspaceDocument {
   chunksCount: number
   uploadedAt: string
   summary?: string
+  errorMessage?: string
   chunks?: DocumentChunk[]
 }
 
@@ -248,6 +249,12 @@ export interface StudyPlan {
   weeklyTargetMinutes: number
   weekCompletedMinutes: number
   tasks: StudyTask[]
+  /** Target completion date (YYYY-MM-DD) */
+  targetDate?: string | null
+  /** Days left until the target date (negative once it has passed) */
+  daysRemaining?: number | null
+  /** True when the target date is before today: no plan is generated until it is moved */
+  targetPassed?: boolean
 }
 
 export type ActivityType =

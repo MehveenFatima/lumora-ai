@@ -34,6 +34,7 @@ import { DeleteWorkspaceModal } from '@/components/workspace/delete-workspace-mo
 import { cn } from '@/lib/utils'
 import { computeStudyStreak } from '@/lib/learning-stats'
 import { UserMenu } from '@/components/auth/user-menu'
+import { NotificationBell } from '@/components/notifications/notification-bell'
 import { firstNameOf, useCurrentUser } from '@/lib/api/auth-client'
 
 export default function GlobalDashboardPage() {
@@ -169,6 +170,8 @@ export default function GlobalDashboardPage() {
           </button>
 
           <ThemeToggle />
+
+          <NotificationBell />
 
           <UserMenu />
         </div>

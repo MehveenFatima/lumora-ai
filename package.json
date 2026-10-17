@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "dev:all": "node scripts/start_dev_all.mjs",
+    "dev:restart": "node scripts/start_dev_all.mjs --restart",
+    "stop": "node scripts/stop_dev.mjs",
     "backend": "python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --reload",
     "seed:presentation": "python scripts/seed_presentation_data.py",
     "build": "next build",
@@ -18,10 +20,9 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.16.0",
-    "next": "16.2.6",
+    "next": "16.4.2",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "shadcn": "^4.8.0",
     "tailwind-merge": "^3.3.1",
     "tw-animate-css": "^1.4.0"
   },
@@ -31,6 +32,7 @@
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "postcss": "^8.5",
+    "shadcn": "^4.21.5",
     "tailwindcss": "^4.3.3",
     "typescript": "5.7.3"
   },

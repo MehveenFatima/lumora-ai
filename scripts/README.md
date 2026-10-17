@@ -13,7 +13,8 @@ Scripts that call the API sign in first through `_api_auth.py`, using `LUMORA_EM
 
 | Script | Purpose |
 | :--- | :--- |
-| `start_dev_all.mjs` | Starts FastAPI (`:8000`) and Next.js (`:3000`) together (`npm run dev:all`). |
+| `start_dev_all.mjs` | Starts FastAPI (`:8000`) and Next.js (`:3000`) together (`npm run dev:all`); Ctrl+C stops both. Refuses to start a second copy; `npm run dev:restart` stops the old one first. |
+| `stop_dev.mjs` | Stops any LumoraAI dev servers still running (`npm run stop`). |
 
 ## Seed data
 

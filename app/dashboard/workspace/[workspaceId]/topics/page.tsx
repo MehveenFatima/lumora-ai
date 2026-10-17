@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useParams } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import {
   BookOpen,
@@ -33,6 +33,7 @@ import { cn } from '@/lib/utils'
 export default function TopicsPage() {
   const params = useParams()
   const workspaceId = params?.workspaceId as string
+  const wantedTopic = (useSearchParams().get('topic') || '').toLowerCase()
 
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [topics, setTopics] = useState<Topic[]>([])
@@ -51,11 +52,20 @@ export default function TopicsPage() {
       setWorkspace(ws)
       setTopics(top)
       if (top.length > 0) {
-        setSelectedTopic(top[0])
+        // Opened from search: preselect the topic named in ?topic=
+        const wanted = wantedTopic
+        const match = wanted
+          ? top.find(
+              (t) =>
+                t.name.toLowerCase() === wanted ||
+                t.concepts?.some((c) => c.name.toLowerCase() === wanted),
+            )
+          : undefined
+        setSelectedTopic(match || top[0])
       }
     }
     loadTopics()
-  }, [workspaceId])
+  }, [workspaceId, wantedTopic])
 
   const filteredTopics = topics.filter((t) => {
     const matchesSearch = t.name.toLowerCase().includes(searchQuery.toLowerCase()) ||

@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 from fastapi import Depends, HTTPException, Request, status
 
 from backend.app.core.config import settings
-from backend.app.core.security import decode_session_token
+from backend.app.core.security import decode_session_claims, password_version
 from backend.app.repositories.users import user_repo
 from backend.app.repositories.workspaces import workspace_repo
 
@@ -25,10 +25,17 @@ def _extract_token(request: Request) -> Optional[str]:
     return request.cookies.get(settings.session_cookie_name)
 
 
+def _session_still_valid(user: Dict[str, Any], claims: Dict[str, Any]) -> bool:
+    """A password change (or reset) ends every session that was issued before it."""
+    return int(claims.get("pv", 0) or 0) == password_version(user.get("password_changed_at"))
+
+
 async def get_current_user(request: Request) -> CurrentUser:
     token = _extract_token(request)
-    user_id = decode_session_token(token) if token else None
-    user = await user_repo.get_by_id(user_id) if user_id else None
+    claims = decode_session_claims(token) if token else None
+    user = await user_repo.get_by_id(str(claims["sub"])) if claims else None
+    if user and (not _session_still_valid(user, claims) or user.get("email_verified") is False):
+        user = None
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
