@@ -143,10 +143,10 @@ async def test_gemini_success(gateway, mock_gemini, mock_secondary):
 
 
 @pytest.mark.asyncio
-async def test_secondary_provider_success(gateway, mock_gemini, mock_secondary):
-    """Scenario 2: Primary provider (Secondary for Quiz) succeeds cleanly."""
+async def test_quiz_primary_provider_success(gateway, mock_gemini, mock_secondary):
+    """Scenario 2: Quiz generation goes to Gemini first and succeeds cleanly."""
     quiz_data = {"questions": [{"id": 1, "prompt": "What is 2+2?"}]}
-    mock_secondary.queue_structured_response(quiz_data)
+    mock_gemini.queue_structured_response(quiz_data)
     request = AIRequest(
         prompt="Generate a math quiz question.",
         task_type=TaskType.QUIZ,
@@ -154,13 +154,13 @@ async def test_secondary_provider_success(gateway, mock_gemini, mock_secondary):
 
     response = await gateway.generate_structured(request)
 
-    assert response.provider == "openai_compatible"
+    assert response.provider == "gemini"
     assert response.is_fallback is False
     assert response.structured_data == quiz_data
     assert len(response.attempts_history) == 1
     assert response.attempts_history[0].success is True
-    assert mock_secondary.call_count == 1
-    assert mock_gemini.call_count == 0
+    assert mock_gemini.call_count == 1
+    assert mock_secondary.call_count == 0
 
 
 @pytest.mark.asyncio
@@ -228,11 +228,11 @@ async def test_gemini_timeout_failover(gateway, mock_gemini, mock_secondary):
 
 
 @pytest.mark.asyncio
-async def test_secondary_failure_gemini_fallback(gateway, mock_gemini, mock_secondary):
-    """Scenario 5: Quiz task routes to secondary first; secondary fails (500), falls back to Gemini."""
-    mock_secondary.queue_structured_response(ProviderUnavailableError("500 Internal Server Error"))
-    gemini_data = {"quiz": [{"q": "Explain virtual memory"}]}
-    mock_gemini.queue_structured_response(gemini_data)
+async def test_quiz_gemini_failure_secondary_fallback(gateway, mock_gemini, mock_secondary):
+    """Scenario 5: Quiz task routes to Gemini first; Gemini fails (500), falls back to the secondary provider."""
+    mock_gemini.queue_structured_response(ProviderUnavailableError("500 Internal Server Error"))
+    secondary_data = {"quiz": [{"q": "Explain virtual memory"}]}
+    mock_secondary.queue_structured_response(secondary_data)
 
     request = AIRequest(
         prompt="Generate OS quiz.",
@@ -241,14 +241,14 @@ async def test_secondary_failure_gemini_fallback(gateway, mock_gemini, mock_seco
 
     response = await gateway.generate_structured(request)
 
-    assert response.provider == "gemini"
+    assert response.provider == "openai_compatible"
     assert response.is_fallback is True
-    assert response.structured_data == gemini_data
-    assert mock_secondary.call_count == 1
+    assert response.structured_data == secondary_data
     assert mock_gemini.call_count == 1
-    assert response.attempts_history[0].provider == "openai_compatible"
+    assert mock_secondary.call_count == 1
+    assert response.attempts_history[0].provider == "gemini"
     assert response.attempts_history[0].success is False
-    assert response.attempts_history[1].provider == "gemini"
+    assert response.attempts_history[1].provider == "openai_compatible"
     assert response.attempts_history[1].success is True
 
 
@@ -278,15 +278,15 @@ async def test_both_providers_failing_emergency_response(gateway, mock_gemini, m
 @pytest.mark.asyncio
 async def test_malformed_json_retry_and_fallback(gateway, mock_gemini, mock_secondary):
     """Scenario 7: Primary returns malformed JSON -> retries once -> falls back to secondary."""
-    # Secondary is primary for FLASHCARDS
-    mock_secondary.queue_structured_response(
+    # Gemini is primary for FLASHCARDS
+    mock_gemini.queue_structured_response(
         MalformedStructuredOutputError("Failed to parse JSON: invalid char")
     )
-    mock_secondary.queue_structured_response(
+    mock_gemini.queue_structured_response(
         MalformedStructuredOutputError("Failed to parse JSON: invalid char")
     )
     valid_flashcards = {"cards": [{"front": "Mutex", "back": "Mutual exclusion lock"}]}
-    mock_gemini.queue_structured_response(valid_flashcards)
+    mock_secondary.queue_structured_response(valid_flashcards)
 
     request = AIRequest(
         prompt="Generate flashcards for synchronization primitives.",
@@ -295,12 +295,12 @@ async def test_malformed_json_retry_and_fallback(gateway, mock_gemini, mock_seco
 
     response = await gateway.generate_structured(request)
 
-    assert response.provider == "gemini"
+    assert response.provider == "openai_compatible"
     assert response.is_fallback is True
     assert response.structured_data == valid_flashcards
-    # Secondary called twice due to 1 retry on malformed JSON
-    assert mock_secondary.call_count == 2
-    assert mock_gemini.call_count == 1
+    # Gemini called twice due to 1 retry on malformed JSON
+    assert mock_gemini.call_count == 2
+    assert mock_secondary.call_count == 1
     assert response.attempts_history[0].error_type == "MALFORMED_OUTPUT"
     assert response.attempts_history[1].success is True
 
@@ -368,14 +368,13 @@ async def test_boot_without_secondary_provider():
     assert res_tutor.provider == "gemini"
     assert res_tutor.is_fallback is False
 
-    # Quiz request (primary is openai_compatible) skips unconfigured secondary and falls back to Gemini
+    # Quiz request goes straight to Gemini (its primary); the unconfigured secondary is never needed
     gemini.queue_structured_response({"quiz_ready": True})
     request_quiz = AIRequest(prompt="Generate quiz", task_type=TaskType.QUIZ)
     res_quiz = await gw.generate_structured(request_quiz)
     assert res_quiz.provider == "gemini"
-    assert res_quiz.is_fallback is True
-    assert res_quiz.attempts_history[0].error_type == "UNCONFIGURED"
-    assert res_quiz.attempts_history[1].success is True
+    assert res_quiz.is_fallback is False
+    assert res_quiz.attempts_history[0].success is True
 
 
 @pytest.mark.asyncio
@@ -388,8 +387,8 @@ async def test_openrouter_qwen_routing_and_failover():
 
     # 1. Verify exact routing priorities
     assert gw.get_routing_order(TaskType.TUTOR) == ["gemini", "openrouter"]
-    assert gw.get_routing_order(TaskType.QUIZ) == ["openrouter", "gemini"]
-    assert gw.get_routing_order(TaskType.FLASHCARDS) == ["openrouter", "gemini"]
+    assert gw.get_routing_order(TaskType.QUIZ) == ["gemini", "openrouter"]
+    assert gw.get_routing_order(TaskType.FLASHCARDS) == ["gemini", "openrouter"]
 
     # 2. Tutor: Gemini primary fails (429) -> OpenRouter Qwen fallback succeeds
     gemini.queue_text_response(RateLimitError("Gemini 3.8 429 quota reached"))
@@ -409,24 +408,24 @@ async def test_openrouter_qwen_routing_and_failover():
     assert tutor_res.attempts_history[1].provider == "openrouter"
     assert tutor_res.attempts_history[1].success is True
 
-    # 3. Quiz: OpenRouter Qwen primary fails (429) -> Gemini 3.8 fallback succeeds
+    # 3. Quiz: Gemini primary fails (429) -> OpenRouter Qwen fallback succeeds
     # Reset gemini cooldown for this sub-scenario
     gemini.mark_success()
-    openrouter.queue_structured_response(RateLimitError("OpenRouter ModelRun 429 upstream rate limit"))
+    gemini.queue_structured_response(RateLimitError("Gemini 3.8 429 quota reached"))
     quiz_data = {"question": "What is a semaphore?", "options": ["Signaling mechanism", "Hardware bus"]}
-    gemini.queue_structured_response(quiz_data)
+    openrouter.queue_structured_response(quiz_data)
 
     quiz_req = AIRequest(prompt="Generate semaphore question", task_type=TaskType.QUIZ)
     quiz_res = await gw.generate_structured(quiz_req)
 
-    assert quiz_res.provider == "gemini"
-    assert quiz_res.model == "gemini-3.8-flash"
+    assert quiz_res.provider == "openrouter"
+    assert quiz_res.model == "qwen/qwen3.8-27b:free"
     assert quiz_res.is_fallback is True
     assert quiz_res.structured_data == quiz_data
-    assert openrouter.get_health().status == ProviderStatus.COOLDOWN
+    assert gemini.get_health().status == ProviderStatus.COOLDOWN
     assert len(quiz_res.attempts_history) == 2
-    assert quiz_res.attempts_history[0].provider == "openrouter"
+    assert quiz_res.attempts_history[0].provider == "gemini"
     assert quiz_res.attempts_history[0].error_type == "RATE_LIMIT"
-    assert quiz_res.attempts_history[1].provider == "gemini"
+    assert quiz_res.attempts_history[1].provider == "openrouter"
     assert quiz_res.attempts_history[1].success is True
 

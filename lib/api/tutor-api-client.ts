@@ -628,7 +628,10 @@ export const tutorApiClient = {
 
   // 6. FLASHCARDS, STUDY PLAN & ACTIVITY API METHODS
   async getFlashcards(workspaceId: string): Promise<any> {
-    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/flashcards`)
+    // A new deck is written by the AI provider on first open, so allow as long as the API proxy does
+    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/flashcards`, {
+      signal: AbortSignal.timeout(QUIZ_GENERATION_TIMEOUT_MS),
+    })
     if (!response.ok) return { workspace_id: workspaceId, total_count: 0, flashcards: [] }
     return response.json()
   },
@@ -656,8 +659,15 @@ export const tutorApiClient = {
   async generateFlashcards(workspaceId: string): Promise<any> {
     const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/flashcards/generate`, {
       method: 'POST',
+      signal: AbortSignal.timeout(QUIZ_GENERATION_TIMEOUT_MS),
     })
-    if (!response.ok) return { workspace_id: workspaceId, total_count: 0, flashcards: [] }
+    if (!response.ok) throw new Error(`Could not write more flashcards (HTTP ${response.status})`)
+    return response.json()
+  },
+
+  async getStudyMaterialStatus(workspaceId: string): Promise<{ state: string; stage?: string } | null> {
+    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/study-material/status`)
+    if (!response.ok) return null
     return response.json()
   },
 

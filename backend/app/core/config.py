@@ -20,6 +20,9 @@ if _BACKEND_ENV.exists():
     load_dotenv(_BACKEND_ENV)
 
 
+# Gemini models that may generate study material (GEMINI_GENERATION_MODEL)
+GENERATION_MODELS = {"gemini-3.8-flash", "gemini-3.1-pro-preview", "gemini-4-argon"}
+
 class Settings(BaseSettings):
     # Server & Environment
     app_name: str = "LumoraAI Backend"
@@ -39,6 +42,13 @@ class Settings(BaseSettings):
         default="models/gemini-embedding-001", validation_alias="GEMINI_EMBEDDING_MODEL"
     )
     embedding_dimensions: int = Field(default=768, validation_alias="EMBEDDING_DIMENSIONS")
+    # Model used to build study material (topic maps, quiz questions, flashcards). Gemini 3.8 Flash
+    # is the default; a stronger model can be chosen when the API key's plan includes it.
+    gemini_generation_model: str = Field(
+        default="gemini-3.8-flash", validation_alias="GEMINI_GENERATION_MODEL"
+    )
+    # A second AI pass reviews every generated quiz question and rejects weak ones
+    study_material_review: bool = Field(default=True, validation_alias="STUDY_MATERIAL_REVIEW")
 
     # Secondary AI Provider Configuration (OpenRouter / OpenAI-compatible)
     secondary_ai_provider_name: str = Field(default="openrouter", validation_alias="SECONDARY_AI_PROVIDER_NAME")
@@ -169,6 +179,16 @@ class Settings(BaseSettings):
                 f"Please check GEMINI_MODEL in your environment."
             )
         return trimmed
+
+    @field_validator("gemini_generation_model")
+    @classmethod
+    def validate_generation_model(cls, v: str) -> str:
+        normalized = (v or "").strip().replace("models/", "")
+        if normalized not in GENERATION_MODELS:
+            raise ValueError(
+                f"Unsupported GEMINI_GENERATION_MODEL '{v}'. Choose one of: {', '.join(sorted(GENERATION_MODELS))}."
+            )
+        return normalized
 
     @field_validator("gemini_embedding_model")
     @classmethod

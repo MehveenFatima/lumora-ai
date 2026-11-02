@@ -212,6 +212,8 @@ export interface Flashcard {
   keyPoints?: string[]
   codeSnippet?: string
   sourceCitation?: string
+  // Concept of the topic map the card tests
+  concept?: string
   difficulty: 'easy' | 'medium' | 'hard'
   intervalDays: number
   repetitions: number

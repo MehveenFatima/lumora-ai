@@ -252,6 +252,13 @@ async def _ingest_document(
         except Exception:
             pass
         await notification_service.document_ready(workspace_id, updated_doc)
+        try:
+            # Topic map, flashcards and quiz questions for the new document are prepared in the background
+            from backend.app.services.study_prep import study_prep_service
+
+            study_prep_service.schedule(workspace_id, force=True)
+        except Exception as prep_err:
+            logger.warning(f"Could not schedule study material preparation for {workspace_id}: {prep_err}")
         return updated_doc
 
     except Exception as e:
@@ -390,6 +397,14 @@ async def delete_document(document_id: str, user: CurrentUser = Depends(get_curr
         )
 
     workspace_id = doc["workspace_id"]
+    # Study material written from this document goes with it
+    from backend.app.repositories.concepts import concept_repo
+    from backend.app.repositories.quizzes import quiz_repo
+    from backend.app.repositories.secondary import flashcard_repo
+
+    await concept_repo.delete_by_document(document_id)
+    await quiz_repo.delete_question_bank_by_document(workspace_id, document_id)
+    await flashcard_repo.delete_by_document(workspace_id, document_id)
     await chunk_repo.delete_by_document(document_id)
     await document_repo.delete(document_id)
     await storage_service.delete_file(doc.get("storage_path"))

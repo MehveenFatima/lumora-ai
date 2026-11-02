@@ -36,6 +36,15 @@ class FlashcardListResponse(BaseModel):
     workspace_id: str
     total_count: int
     flashcards: List[FlashcardItem]
+    # "preparing" while the concept-based deck is still being written in the background
+    status: str = "ready"
+    added_count: int = 0
+
+
+def _deck_status(workspace_id: str) -> str:
+    from backend.app.services.study_prep import study_prep_service
+
+    return "preparing" if study_prep_service.is_running(workspace_id) else "ready"
 
 
 @router.get(
@@ -48,6 +57,7 @@ async def get_flashcards(workspace_id: str) -> FlashcardListResponse:
         workspace_id=workspace_id,
         total_count=len(cards),
         flashcards=[FlashcardItem(**c) for c in cards],
+        status=_deck_status(workspace_id),
     )
 
 
@@ -57,12 +67,33 @@ async def get_flashcards(workspace_id: str) -> FlashcardListResponse:
     status_code=status.HTTP_201_CREATED,
 )
 async def generate_flashcards(workspace_id: str) -> FlashcardListResponse:
-    cards = await secondary_service.get_or_generate_flashcards(workspace_id)
+    """Adds new cards for the concepts the deck covers least (never repeating an existing card).
+
+    Without an AI provider this returns the current (extractive) deck.
+    """
+    from backend.app.services.study_prep import ai_available, study_prep_service
+
+    added: List[Dict[str, Any]] = []
+    if ai_available():
+        added = await study_prep_service.more_flashcards(workspace_id)
+        cards = await flashcard_repo.list_by_workspace(workspace_id)
+    else:
+        cards = await secondary_service.get_or_generate_flashcards(workspace_id)
     return FlashcardListResponse(
         workspace_id=workspace_id,
         total_count=len(cards),
         flashcards=[FlashcardItem(**c) for c in cards],
+        status=_deck_status(workspace_id),
+        added_count=len(added),
     )
+
+
+@router.get("/workspaces/{workspace_id}/study-material/status")
+async def study_material_status(workspace_id: str) -> Dict[str, Any]:
+    """Progress of the background preparation of topic map, flashcards and question bank."""
+    from backend.app.services.study_prep import study_prep_service
+
+    return {"workspace_id": workspace_id, **study_prep_service.status(workspace_id)}
 
 
 @router.post(

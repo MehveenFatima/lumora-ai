@@ -11,6 +11,7 @@ logger = get_logger(__name__)
 _memory_quiz_sessions: Dict[str, Dict[str, Any]] = {}
 _memory_quiz_questions: Dict[str, Dict[str, Any]] = {}
 _memory_quiz_attempts: Dict[str, Dict[str, Any]] = {}
+_memory_question_bank: Dict[str, Dict[str, Any]] = {}
 
 
 def _safe_uuid(val: Any) -> uuid.UUID:
@@ -668,7 +669,11 @@ class QuizRepository:
         fingerprint: Optional[str] = None,
         question_type: Optional[str] = "conceptual",
         quality_score: Optional[float] = 1.0,
-    ) -> Dict[str, Any]:
+        concept_id: Optional[str] = None,
+        embedding: Optional[List[float]] = None,
+        generator: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Stores a validated question; returns None when the workspace already has it."""
         q_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
         topic = (topic or "").replace("\x00", "")
@@ -700,6 +705,9 @@ class QuizRepository:
             "fingerprint": fingerprint,
             "question_type": question_type or "conceptual",
             "quality_score": float(quality_score) if quality_score is not None else 1.0,
+            "concept_id": concept_id,
+            "embedding": list(embedding) if embedding else None,
+            "generator": generator,
             "created_at": now,
         }
 
@@ -707,18 +715,15 @@ class QuizRepository:
         if pool:
             try:
                 async with pool.acquire() as conn:
-                    await conn.execute(
+                    inserted = await conn.fetchval(
                         """
                         INSERT INTO workspace_question_bank
-                        (id, workspace_id, topic, concept, difficulty, question_text, options, correct_option, explanation, document_id, source_chunk_id, page_number, source_excerpt, citation_metadata, generation_metadata, fingerprint, question_type, quality_score, created_at)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
-                        ON CONFLICT (fingerprint) DO UPDATE SET
-                            topic = EXCLUDED.topic,
-                            concept = EXCLUDED.concept,
-                            question_text = EXCLUDED.question_text,
-                            options = EXCLUDED.options,
-                            correct_option = EXCLUDED.correct_option,
-                            explanation = EXCLUDED.explanation
+                        (id, workspace_id, topic, concept, difficulty, question_text, options, correct_option, explanation,
+                         document_id, source_chunk_id, page_number, source_excerpt, citation_metadata, generation_metadata,
+                         fingerprint, question_type, quality_score, created_at, concept_id, embedding, generator)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+                        ON CONFLICT (workspace_id, fingerprint) DO NOTHING
+                        RETURNING id
                         """,
                         _safe_uuid(q_id),
                         workspace_id,
@@ -739,11 +744,37 @@ class QuizRepository:
                         question_type or "conceptual",
                         float(quality_score) if quality_score is not None else 1.0,
                         now,
+                        concept_id,
+                        json.dumps(record["embedding"]) if record["embedding"] else None,
+                        generator,
                     )
+                    return record if inserted else None
             except Exception as e:
                 logger.error(f"Error inserting into workspace_question_bank: {e}")
+                return None
 
+        if fingerprint and any(
+            r["workspace_id"] == workspace_id and r.get("fingerprint") == fingerprint
+            for r in _memory_question_bank.values()
+        ):
+            return None
+        _memory_question_bank[q_id] = record
         return record
+
+    @staticmethod
+    def _bank_row(row: Dict[str, Any]) -> Dict[str, Any]:
+        d = dict(row)
+        for key in ("options", "citation_metadata", "generation_metadata", "embedding"):
+            if isinstance(d.get(key), str):
+                try:
+                    d[key] = json.loads(d[key])
+                except ValueError:
+                    d[key] = None if key == "embedding" else ({} if key != "options" else [])
+        if d.get("id") is not None:
+            d["id"] = str(d["id"])
+        if d.get("document_id") is not None:
+            d["document_id"] = str(d["document_id"])
+        return d
 
     async def list_question_bank(
         self,
@@ -753,10 +784,11 @@ class QuizRepository:
     ) -> List[Dict[str, Any]]:
         excluded = set(excluded_fingerprints or [])
         pool = await get_db_pool()
+        rows: List[Dict[str, Any]] = []
         if pool:
             try:
                 async with pool.acquire() as conn:
-                    rows = await conn.fetch(
+                    fetched = await conn.fetch(
                         """
                         SELECT * FROM workspace_question_bank
                         WHERE workspace_id = $1
@@ -764,21 +796,24 @@ class QuizRepository:
                         """,
                         workspace_id,
                     )
-                    if rows:
-                        results = []
-                        for r in rows:
-                            d = dict(r)
-                            if isinstance(d.get("options"), str):
-                                d["options"] = json.loads(d["options"])
-                            if d.get("fingerprint") and d["fingerprint"] in excluded:
-                                continue
-                            results.append(d)
-                            if len(results) >= limit:
-                                break
-                        return results
+                    rows = [self._bank_row(dict(r)) for r in fetched]
             except Exception as e:
                 logger.error(f"Error listing workspace_question_bank: {e}")
-        return []
+                return []
+        else:
+            rows = sorted(
+                (dict(r) for r in _memory_question_bank.values() if r["workspace_id"] == workspace_id),
+                key=lambda r: r["created_at"],
+            )
+
+        results = []
+        for d in rows:
+            if d.get("fingerprint") and d["fingerprint"] in excluded:
+                continue
+            results.append(d)
+            if len(results) >= limit:
+                break
+        return results
 
     async def count_question_bank(self, workspace_id: str) -> int:
         pool = await get_db_pool()
@@ -791,7 +826,28 @@ class QuizRepository:
                     ) or 0
             except Exception as e:
                 logger.error(f"Error counting workspace_question_bank: {e}")
-        return 0
+                return 0
+        return sum(1 for r in _memory_question_bank.values() if r["workspace_id"] == workspace_id)
+
+    async def delete_question_bank_by_document(self, workspace_id: str, document_id: str) -> None:
+        """Removes the bank questions written from a deleted document."""
+        pool = await get_db_pool()
+        if pool:
+            try:
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "DELETE FROM workspace_question_bank WHERE workspace_id = $1 AND document_id = $2",
+                        workspace_id,
+                        _safe_uuid(document_id),
+                    )
+            except Exception as e:
+                logger.error(f"Error deleting bank questions of document {document_id}: {e}")
+            return
+        for qid in [
+            k for k, r in _memory_question_bank.items()
+            if r["workspace_id"] == workspace_id and str(r.get("document_id")) == str(document_id)
+        ]:
+            _memory_question_bank.pop(qid, None)
 
 
 quiz_repo = QuizRepository()

@@ -13,6 +13,15 @@ _memory_study_plans: Dict[str, Dict[str, Any]] = {}
 _memory_activities: Dict[str, List[Dict[str, Any]]] = {}
 
 
+def _card_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    if isinstance(row.get("embedding"), str):
+        try:
+            row["embedding"] = json.loads(row["embedding"])
+        except ValueError:
+            row["embedding"] = None
+    return row
+
+
 class FlashcardRepository:
     async def list_by_workspace(self, workspace_id: str) -> List[Dict[str, Any]]:
         pool = await get_db_pool()
@@ -26,7 +35,7 @@ class FlashcardRepository:
                         workspace_id,
                     )
                     if rows:
-                        return [dict(r) for r in rows]
+                        return [_card_row(dict(r)) for r in rows]
             except Exception as e:
                 logger.error(f"Error querying flashcards for workspace {workspace_id}: {e}")
 
@@ -50,6 +59,10 @@ class FlashcardRepository:
                 "source_page": c.get("source_page", 1),
                 "interval_days": c.get("interval_days", 1),
                 "last_reviewed": c.get("last_reviewed"),
+                "document_id": c.get("document_id"),
+                "concept_id": c.get("concept_id"),
+                "generator": c.get("generator"),
+                "embedding": c.get("embedding"),
                 "created_at": now,
             }
             if pool:
@@ -57,8 +70,9 @@ class FlashcardRepository:
                     async with pool.acquire() as conn:
                         await conn.execute(
                             """
-                            INSERT INTO flashcards (id, workspace_id, front, back, concept, source_document, source_page, interval_days, last_reviewed, created_at)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                            INSERT INTO flashcards (id, workspace_id, front, back, concept, source_document, source_page, interval_days, last_reviewed, created_at,
+                                                    document_id, concept_id, generator, embedding)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                             ON CONFLICT (id) DO UPDATE SET
                                 front = EXCLUDED.front,
                                 back = EXCLUDED.back,
@@ -75,6 +89,10 @@ class FlashcardRepository:
                             item["interval_days"],
                             item["last_reviewed"],
                             item["created_at"],
+                            item["document_id"],
+                            item["concept_id"],
+                            item["generator"],
+                            json.dumps(item["embedding"]) if item["embedding"] else None,
                         )
                 except Exception as e:
                     logger.error(f"Error saving flashcard {cid}: {e}")
@@ -100,6 +118,41 @@ class FlashcardRepository:
             async with pool.acquire() as conn:
                 await conn.execute("DELETE FROM flashcards WHERE workspace_id = $1", workspace_id)
         _memory_flashcards.pop(workspace_id, None)
+
+    async def delete_ids(self, workspace_id: str, card_ids: List[str]) -> None:
+        """Removes the given cards (used to retire an old deck once its replacement is saved)."""
+        if not card_ids:
+            return
+        pool = await get_db_pool()
+        if pool:
+            try:
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "DELETE FROM flashcards WHERE workspace_id = $1 AND id = ANY($2::text[])",
+                        workspace_id, list(card_ids),
+                    )
+            except Exception as e:
+                logger.error(f"Error deleting old flashcards of workspace {workspace_id}: {e}")
+        ids = set(card_ids)
+        if workspace_id in _memory_flashcards:
+            _memory_flashcards[workspace_id] = [c for c in _memory_flashcards[workspace_id] if c["id"] not in ids]
+
+    async def delete_by_document(self, workspace_id: str, document_id: str) -> None:
+        """Removes the cards written from a deleted document."""
+        pool = await get_db_pool()
+        if pool:
+            try:
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "DELETE FROM flashcards WHERE workspace_id = $1 AND document_id = $2",
+                        workspace_id, str(document_id),
+                    )
+            except Exception as e:
+                logger.error(f"Error deleting flashcards of document {document_id}: {e}")
+        if workspace_id in _memory_flashcards:
+            _memory_flashcards[workspace_id] = [
+                c for c in _memory_flashcards[workspace_id] if str(c.get("document_id")) != str(document_id)
+            ]
 
     async def record_review(
         self,

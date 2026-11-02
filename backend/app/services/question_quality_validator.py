@@ -134,7 +134,16 @@ QUESTION_TYPES = [
     "interpretation",
     "edge_case",
     "complexity_analysis",
+    "calculation",
 ]
+
+# A modulus or absolute value such as |z| or |3 - 4i| is maths notation, not a Markdown table
+_ABSOLUTE_VALUE = re.compile(r"\|([^|\n]{1,24})\|")
+
+
+def _without_absolute_values(text: str) -> str:
+    # U+2016 (double vertical line) keeps the notation readable for the checks without being a pipe
+    return _ABSOLUTE_VALUE.sub(lambda m: f"\u2016{m.group(1)}\u2016", text or "")
 
 
 _AGGREGATE_OPTION_RE = re.compile(
@@ -372,8 +381,8 @@ class QuestionQualityValidator:
 
         texts = [opt.get("text", "").strip() for opt in options]
 
-        # Check distinctness
-        norm_texts = [self.normalize_text(t) for t in texts]
+        # Check distinctness (signs and symbols matter: "y = 3" and "y = -3" are different answers)
+        norm_texts = [re.sub(r"\s+", " ", t.lower()).strip().rstrip(".") for t in texts]
         if len(set(norm_texts)) != len(norm_texts):
             notes.append("Options contain duplicate or near-identical text.")
             return 0.0, notes
@@ -598,6 +607,18 @@ class QuestionQualityValidator:
         rejections = []
         notes = []
 
+        # Maths notation (|z|) must not trip the Markdown-table checks below
+        question_text = _without_absolute_values(question_text)
+        options = [
+            {**opt, "text": _without_absolute_values(opt.get("text", ""))} if isinstance(opt, dict) else opt
+            for opt in (options or [])
+        ]
+        # Numeric answers ("12", "-3") are complete options when every option is a number or expression
+        numeric_options = bool(options) and all(
+            isinstance(o, dict) and re.search(r"\d", o.get("text", "") or "") and len((o.get("text") or "").strip()) <= 40
+            for o in options
+        )
+
         # 1. Basic structural checks
         clean_q = (question_text or "").strip()
         if not clean_q or len(clean_q) < 20:
@@ -679,7 +700,7 @@ class QuestionQualityValidator:
             opt_key = opt.get("key", "?")
             opt_text = (opt.get("text") or "").strip()
 
-            if len(opt_text) < 4:
+            if len(opt_text) < (1 if numeric_options else 4):
                 rejections.append(f"Option '{opt_key}' is too short (< 4 characters).")
             if len(opt_text) > 250:
                 rejections.append(f"Option '{opt_key}' is excessively long (> 250 characters), likely a raw chunk dump.")
@@ -781,10 +802,7 @@ class QuestionQualityValidator:
         quality_score *= balance_score
 
         # Reward varied question types
-        valid_types = {
-            "conceptual", "comparison", "application", "scenario",
-            "reasoning", "trace_output", "interpretation", "edge_case", "complexity_analysis"
-        }
+        valid_types = set(QUESTION_TYPES)
         if question_type and question_type in valid_types:
             quality_score = min(1.0, quality_score + 0.05)
         else:

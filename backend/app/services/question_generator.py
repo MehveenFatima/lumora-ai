@@ -1,13 +1,13 @@
 """
 LumoraAI - Grounded Adaptive Question Generation Service
 =========================================================
-Generates pedagogically sound, technically rigorous, deduplicated, diverse
-multiple-choice questions strictly grounded in workspace materials.
+Assembles quiz questions grounded in workspace materials.
 
-PIPELINE:
-RAG retrieval -> source context -> concept extraction -> assessment target selection
--> question generation (independent assessment) -> quality validation & anti-leakage
--> deduplication -> final question
+With an AI provider: unseen questions from the concept-based question bank (services/question_bank.py),
+completed by on-demand generation for the targeted concepts. Every question is written per concept of
+the topic map, validated, reviewed by a second AI pass and de-duplicated by meaning.
+
+Without an AI provider (local development, tests): grounded template synthesis from chunks.
 """
 from typing import List, Dict, Any, Optional, Tuple, Set
 import asyncio
@@ -18,6 +18,9 @@ from backend.app.core.config import settings
 from backend.app.core.logging import get_logger
 from backend.app.repositories.documents import document_repo
 from backend.app.repositories.chunks import chunk_repo
+from backend.app.repositories.concepts import concept_repo
+from backend.app.repositories.quizzes import quiz_repo
+from backend.app.services.concept_map import concept_map_service, heuristic_concepts, is_meta_content, normalize_concept_name
 from backend.app.services.text_cleanup import clean_label
 from backend.app.services.question_quality_validator import (
     question_quality_validator,
@@ -38,6 +41,11 @@ class NoIndexedDocumentsError(Exception):
 
 class InsufficientContextError(Exception):
     """Raised when indexed materials do not have extractable semantic chunks."""
+    pass
+
+
+class QuizPreparingError(Exception):
+    """Raised when no reviewed questions are ready yet; they are being written in the background."""
     pass
 
 
@@ -135,6 +143,9 @@ class GeneratedQuestionData:
         self.quality_score = quality_score
         self.leakage_score = leakage_score
         self.fingerprint = fingerprint or compute_question_fingerprint(question_text, options)
+        # Set for questions from the concept-based bank (meaning-based duplicate checks)
+        self.embedding: Optional[List[float]] = None
+        self.concept_id: Optional[str] = None
 
     def validate(self) -> bool:
         """
@@ -293,6 +304,9 @@ class QuestionGeneratorService:
             concept_candidate = None
             # Strip PDF layout noise such as "Card 1 front" or "Q1 Q2 Q5" from headings
             heading = clean_label(heading)
+            if is_meta_content(heading):
+                # Slides about the lesson ("Independent Practice", "Learning Objectives") are not concepts
+                continue
             if heading and heading.lower() not in {"general", "introduction", "unit - 1", "chapter 1"}:
                 concept_candidate = heading
             else:
@@ -328,8 +342,14 @@ class QuestionGeneratorService:
         return list(concept_map.values())
 
     async def extract_available_concepts(self, workspace_id: str) -> List[Dict[str, Any]]:
-        """Extracts an inventory of distinct concepts and topics present in the workspace materials."""
+        """The workspace's concepts: its topic map when one exists, otherwise its headings."""
         chunks = await self.get_workspace_chunks(workspace_id)
+        mapped = await concept_repo.list_by_workspace(workspace_id)
+        if mapped:
+            return [
+                {"concept": c["concept"], "topic": c.get("topic") or "General", "id": c.get("id"), "document_id": c.get("document_id")}
+                for c in mapped
+            ]
         return self.build_concept_inventory_from_chunks(chunks)
 
     async def generate_candidate_pool(
@@ -349,117 +369,139 @@ class QuestionGeneratorService:
         excluded_fps = set(excluded_fingerprints or [])
         excluded_qs = list(excluded_texts or [])
         all_chunks = chunks if chunks is not None else await self.get_workspace_chunks(workspace_id)
-        concept_inventory = self.build_concept_inventory_from_chunks(all_chunks)
 
+        from backend.app.ai.gateway import ai_gateway
+        from backend.app.ai.types import TaskType
+
+        if ai_gateway.has_configured_provider(TaskType.QUIZ):
+            return await self._ai_candidate_pool(
+                workspace_id, target_count, target_concepts, excluded_fps, excluded_qs, preferred_difficulty, all_chunks
+            )
+        # No AI provider (local development, tests): grounded template synthesis
+        return await self._offline_candidate_pool(
+            target_count, target_concepts, excluded_fps, excluded_qs, preferred_difficulty, all_chunks
+        )
+
+    async def _ai_candidate_pool(
+        self,
+        workspace_id: str,
+        target_count: int,
+        target_concepts: Optional[List[Any]],
+        excluded_fps: Set[str],
+        excluded_qs: List[str],
+        preferred_difficulty: int,
+        all_chunks: List[Dict[str, Any]],
+    ) -> List[GeneratedQuestionData]:
+        """Unseen questions from the workspace's question bank, completed by on-demand generation.
+
+        Questions written on demand are validated, reviewed and de-duplicated exactly like the bank's,
+        and are stored in the bank. There is no template fallback: when the AI provider cannot write
+        enough questions in time, fewer are returned and the bank keeps filling in the background.
+        """
+        from backend.app.services import question_bank as qb
+        from backend.app.services.similarity import DuplicateIndex
+
+        targets = list(target_concepts or [])
+        rows = await quiz_repo.list_question_bank(workspace_id, limit=100000)
+        selected = qb.select_questions(rows, target_count, targets, preferred_difficulty, excluded_fps, excluded_qs)
+        if len(selected) >= target_count:
+            return selected[:target_count]
+
+        # Concepts to write for: targeted ones first, then the rest of the topic map. With a topic
+        # map, only its concepts are used (targets carried over from older sessions may name
+        # sections that are not concepts).
+        stored = await concept_repo.list_by_workspace(workspace_id)
+        mapped = stored or heuristic_concepts(all_chunks)
+        by_name = {normalize_concept_name(c["concept"]): c for c in mapped}
+        default_doc = all_chunks[0] if all_chunks else {}
+        plan: List[Dict[str, Any]] = []
+        names_seen: Set[str] = set()
+        for t in targets + mapped:
+            name = t.get("concept") if isinstance(t, dict) else t
+            if not name:
+                continue
+            key = normalize_concept_name(str(name))
+            if key in names_seen or is_meta_content(str(name)):
+                continue
+            if stored and key not in by_name:
+                continue
+            names_seen.add(key)
+            concept = by_name.get(key) or {
+                "concept": str(name),
+                "topic": (t.get("topic") if isinstance(t, dict) else None) or "General",
+                "summary": "",
+                "key_points": [],
+                "document_id": (t.get("document_id") if isinstance(t, dict) else None) or default_doc.get("document_id"),
+                "document_name": default_doc.get("document_name"),
+            }
+            plan.append(concept)
+        used = {normalize_concept_name(q.concept) for q in selected}
+        plan.sort(key=lambda c: normalize_concept_name(c["concept"]) in used)  # stable: new concepts first
+        plan = plan[:6]
+        if not plan:
+            return selected
+
+        duplicates = DuplicateIndex()
+        for row in rows:
+            duplicates.add(qb._row_signature(row), row.get("embedding"))
+        for text in excluded_qs:
+            duplicates.add(text)
+        avoid = [r.get("question_text", "") for r in rows]
+        per_concept = 2 if target_count - len(selected) <= len(plan) * 2 else 3
+
+        async def _write(concept: Dict[str, Any]) -> List[GeneratedQuestionData]:
+            source = concept_map_service.source_text(concept, all_chunks)
+            try:
+                return await qb.generate_for_concept(
+                    concept, source, per_concept, duplicates,
+                    excluded_fingerprints=excluded_fps, preferred_difficulty=preferred_difficulty,
+                    avoid_texts=[a for a in avoid if a],
+                )
+            except Exception as gen_err:
+                logger.warning(f"AI question generation for concept '{concept.get('concept')}' failed: {gen_err}")
+                return []
+
+        # The concept requests are independent, so they run concurrently; a time budget keeps the
+        # request inside the API timeout and anything still pending is dropped.
+        jobs = [asyncio.create_task(_write(c)) for c in plan]
+        done, pending = await asyncio.wait(jobs, timeout=AI_CANDIDATE_BUDGET_SECONDS)
+        for job in pending:
+            job.cancel()
+        if pending:
+            logger.info(f"{len(pending)} AI question request(s) exceeded the {AI_CANDIDATE_BUDGET_SECONDS}s budget.")
+
+        fresh: List[GeneratedQuestionData] = []
+        for job in jobs:  # keep the concept priority order
+            if job in done and not job.cancelled() and job.exception() is None:
+                fresh.extend(job.result())
+        if fresh:
+            try:
+                await qb.store_questions(workspace_id, fresh)
+            except Exception as store_err:
+                logger.warning(f"Could not store generated questions in the bank: {store_err}")
+
+        # One question per concept first, so a batch covers as many concepts as possible
+        ordered: List[GeneratedQuestionData] = []
+        covered = {normalize_concept_name(q.concept) for q in selected}
+        for q in sorted(fresh, key=lambda q: abs(q.difficulty - preferred_difficulty)):
+            key = normalize_concept_name(q.concept)
+            if key not in covered:
+                ordered.append(q)
+                covered.add(key)
+        ordered += [q for q in fresh if q not in ordered]
+        return selected + ordered
+
+    async def _offline_candidate_pool(
+        self,
+        target_count: int,
+        target_concepts: Optional[List[Any]],
+        excluded_fps: Set[str],
+        excluded_qs: List[str],
+        preferred_difficulty: int,
+        all_chunks: List[Dict[str, Any]],
+    ) -> List[GeneratedQuestionData]:
         candidates: List[GeneratedQuestionData] = []
         target_pool_size = max(10, target_count * 2)
-
-        # 1. Determine concept targets to query
-        targets_to_query = []
-        if target_concepts:
-            for tc in target_concepts:
-                if isinstance(tc, dict):
-                    targets_to_query.append(tc)
-                elif isinstance(tc, str):
-                    targets_to_query.append({"concept": tc, "topic": "General"})
-        for c_item in concept_inventory:
-            if c_item not in targets_to_query:
-                targets_to_query.append(c_item)
-
-        if not targets_to_query:
-            targets_to_query = [{"concept": "Core Principles", "topic": "General", "primary_chunk": all_chunks[0], "chunks": all_chunks}]
-
-        # 2. Try Multi-Model AI Gateway Generation (Primary: OpenRouter Qwen 3.8 27B, Fallback: Gemini 3.8 Flash)
-        try:
-            from backend.app.ai.gateway import ai_gateway
-            from backend.app.ai.types import AIRequest, TaskType
-
-            async def _request_candidates(target: Dict[str, Any]):
-                c_name = target.get("concept", "Concept")
-                t_name = target.get("topic", "Topic")
-                chunk = target.get("primary_chunk") or all_chunks[0]
-                context_sample = "\n\n".join([(c.get("content") or c.get("text") or "") for c in target.get("chunks", [chunk])[:3]])
-
-                prompt = (
-                    f"{QUESTION_GEN_PROMPT}\n\n"
-                    f"TARGET TOPIC: {t_name}\n"
-                    f"TARGET CONCEPT: {c_name}\n"
-                    f"DESIRED DIFFICULTY: {preferred_difficulty}\n"
-                    f"EXCLUDED QUESTIONS TO AVOID:\n" + "\n".join([f"- {t}" for t in excluded_qs[-5:]]) + "\n\n"
-                    f"[SOURCE CONTEXT]:\n{context_sample[:3000]}\n\n"
-                    f"Generate 2 distinct, non-overlapping JSON question objects for this concept. Return a JSON object with a 'questions' array containing the question objects."
-                )
-
-                ai_req = AIRequest(
-                    prompt=prompt,
-                    system_prompt="You are an expert assessment designer. Respond strictly in valid JSON format with a top-level 'questions' array of question objects.",
-                    task_type=TaskType.QUIZ,
-                    temperature=0.3,
-                )
-                try:
-                    return c_name, t_name, chunk, await ai_gateway.generate_structured(ai_req)
-                except Exception as gen_err:
-                    logger.warning(f"AI candidate request for concept '{c_name}' failed: {gen_err}")
-                    return c_name, t_name, chunk, None
-
-            # The concept prompts are independent, so they run concurrently instead of one after another.
-            # A time budget keeps the request well inside the API timeout; anything still pending is
-            # dropped and the pool is completed by deterministic synthesis below.
-            jobs = [asyncio.create_task(_request_candidates(t)) for t in targets_to_query[:6]]
-            done, pending = await asyncio.wait(jobs, timeout=AI_CANDIDATE_BUDGET_SECONDS)
-            for job in pending:
-                job.cancel()
-            if pending:
-                logger.info(f"{len(pending)} AI candidate request(s) exceeded the {AI_CANDIDATE_BUDGET_SECONDS}s budget; using deterministic synthesis for the rest.")
-
-            for job in jobs:  # keep the original concept priority order
-                if job not in done:
-                    continue
-                c_name, t_name, chunk, ai_res = job.result()
-                if ai_res and ai_res.structured_data:
-                    data = ai_res.structured_data
-                    if isinstance(data, dict):
-                        items = data.get("questions") or data.get("items") or [data]
-                    elif isinstance(data, list):
-                        items = data
-                    else:
-                        items = []
-
-                    for item in items:
-                        if not isinstance(item, dict):
-                            continue
-                        q_data = GeneratedQuestionData(
-                            topic=item.get("topic") or t_name,
-                            concept=item.get("concept") or c_name,
-                            difficulty=int(item.get("difficulty", preferred_difficulty)),
-                            question_type=item.get("question_type") or "conceptual",
-                            question_text=item.get("question_text", ""),
-                            options=item.get("options", []),
-                            correct_option=item.get("correct_option", "A"),
-                            explanation=item.get("explanation", ""),
-                            document_id=str(chunk.get("document_id")),
-                            document_name=chunk.get("document_name"),
-                            page_number=chunk.get("page_number", 1),
-                            source_excerpt=(chunk.get("content") or chunk.get("text") or "")[:300],
-                        )
-                        # Strict quality validation & anti-leakage check
-                        if q_data.validate():
-                            fp = q_data.fingerprint
-                            is_dupe = (
-                                fp in excluded_fps
-                                or any(fp == c.fingerprint for c in candidates)
-                                or any(q_data.question_text.strip().lower() == c.question_text.strip().lower() for c in candidates)
-                                or any(c.concept.lower() == q_data.concept.lower() and is_paraphrase_duplicate(q_data.question_text, c.question_text) for c in candidates)
-                                or any(is_paraphrase_duplicate(q_data.question_text, eq) for eq in excluded_qs)
-                            )
-                            if not is_dupe:
-                                candidates.append(q_data)
-
-                if len(candidates) >= target_pool_size:
-                    break
-        except Exception as e:
-            logger.warning(f"AI Gateway candidate pool generation notice: {e}. Supplementing with deterministic synthesis.")
-
 
         # 3. Deterministic Grounded Synthesis (100% Leakage-Free & Distinct)
         chunk_count = len(all_chunks)
@@ -471,6 +513,8 @@ class QuestionGeneratorService:
 
             chunk_idx = (i * step) % chunk_count
             chunk = all_chunks[chunk_idx]
+            if is_meta_content(chunk.get("heading")):
+                continue
 
             synth_q = self._synthesize_diverse_question(
                 chunk=chunk,

@@ -40,6 +40,7 @@ async def test_ai_candidate_requests_run_concurrently(monkeypatch):
         return SimpleNamespace(structured_data={"questions": []})
 
     monkeypatch.setattr(ai_gateway, "generate_structured", slow_provider)
+    monkeypatch.setattr(ai_gateway, "has_configured_provider", lambda task_type: True)
 
     start = time.perf_counter()
     candidates = await question_generator_service.generate_candidate_pool(
@@ -59,6 +60,7 @@ async def test_slow_provider_is_cut_off_by_the_time_budget(monkeypatch):
         await asyncio.sleep(30)
 
     monkeypatch.setattr(ai_gateway, "generate_structured", stuck_provider)
+    monkeypatch.setattr(ai_gateway, "has_configured_provider", lambda task_type: True)
     monkeypatch.setattr(qg, "AI_CANDIDATE_BUDGET_SECONDS", 0.3)
 
     start = time.perf_counter()

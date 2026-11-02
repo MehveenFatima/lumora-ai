@@ -56,6 +56,42 @@ function formatActivityTimestamp(rawTs: any): string {
   return 'Just now'
 }
 
+function toDeck(workspaceId: string, flashcards: any[]): FlashcardDeck {
+  const today = new Date().toISOString().split('T')[0]
+  const isDue = (c: any) => !c.due_date || String(c.due_date) <= today
+  const cards = flashcards
+    .map((c: any) => ({
+      id: c.id,
+      deckId: `deck_${workspaceId}`,
+      question: c.front,
+      answer: c.back,
+      concept: c.concept || undefined,
+      sourceCitation: c.source_document ? `${c.source_document} (p. ${c.source_page || 1})` : undefined,
+      difficulty: 'medium' as const,
+      intervalDays: c.interval_days || 0,
+      repetitions: c.repetitions || 0,
+      lastReviewed: c.last_reviewed || undefined,
+      dueDate: isDue(c) ? 'Today' : String(c.due_date),
+      isDue: isDue(c),
+    }))
+    // Due cards first, then the ones scheduled soonest
+    .sort((a: any, b: any) => Number(b.isDue) - Number(a.isDue) || String(a.dueDate).localeCompare(String(b.dueDate)))
+    .map(({ isDue: _isDue, ...card }: any) => card)
+
+  const learned = flashcards.filter((c: any) => (c.repetitions || 0) >= 2).length
+  return {
+    id: `deck_${workspaceId}`,
+    workspaceId,
+    title: 'Core Concepts & Definitions',
+    topicName: 'From your sources',
+    totalCards: cards.length,
+    dueTodayCount: flashcards.filter(isDue).length,
+    // Share of cards recalled successfully on at least two consecutive reviews
+    masteryPercentage: cards.length ? Math.round((learned / cards.length) * 100) : 0,
+    cards,
+  }
+}
+
 export const workspaceService = {
   // 1. WORKSPACE METHODS (Authoritative Source: FastAPI + PostgreSQL)
   async getWorkspaces(): Promise<Workspace[]> {
@@ -528,51 +564,38 @@ export const workspaceService = {
   },
 
   async getFlashcardDecks(workspaceId: string): Promise<FlashcardDeck[]> {
-    if (!workspaceId) return []
+    return (await this.loadFlashcards(workspaceId)).decks
+  },
+
+  /** The deck plus whether a better (concept-based) deck is still being written in the background. */
+  async loadFlashcards(workspaceId: string): Promise<{ decks: FlashcardDeck[]; status: 'ready' | 'preparing' }> {
+    if (!workspaceId) return { decks: [], status: 'ready' }
 
     try {
       const res = await tutorApiClient.getFlashcards(workspaceId)
+      const status = res?.status === 'preparing' ? 'preparing' : 'ready'
       if (res && res.flashcards && res.flashcards.length > 0) {
-        const today = new Date().toISOString().split('T')[0]
-        const isDue = (c: any) => !c.due_date || String(c.due_date) <= today
-        const cards = res.flashcards
-          .map((c: any) => ({
-            id: c.id,
-            deckId: `deck_${workspaceId}`,
-            question: c.front,
-            answer: c.back,
-            sourceCitation: c.source_document ? `${c.source_document} (p. ${c.source_page || 1})` : undefined,
-            difficulty: 'medium' as const,
-            intervalDays: c.interval_days || 0,
-            repetitions: c.repetitions || 0,
-            lastReviewed: c.last_reviewed || undefined,
-            dueDate: isDue(c) ? 'Today' : String(c.due_date),
-            isDue: isDue(c),
-          }))
-          // Due cards first, then the ones scheduled soonest
-          .sort((a: any, b: any) => Number(b.isDue) - Number(a.isDue) || String(a.dueDate).localeCompare(String(b.dueDate)))
-          .map(({ isDue: _isDue, ...card }: any) => card)
-
-        const learned = res.flashcards.filter((c: any) => (c.repetitions || 0) >= 2).length
-        const deck: FlashcardDeck = {
-          id: `deck_${workspaceId}`,
-          workspaceId,
-          title: 'Core Concepts & Definitions',
-          topicName: 'From your sources',
-          totalCards: cards.length,
-          dueTodayCount: res.flashcards.filter(isDue).length,
-          // Share of cards recalled successfully on at least two consecutive reviews
-          masteryPercentage: cards.length ? Math.round((learned / cards.length) * 100) : 0,
-          cards: cards,
-        }
+        const deck = toDeck(workspaceId, res.flashcards)
         flashcardDecksCache[workspaceId] = [deck]
-        return [deck]
+        return { decks: [deck], status }
       }
+      return { decks: [], status }
     } catch (err) {
       console.warn(`Failed to fetch backend flashcards for '${workspaceId}':`, err)
     }
 
-    return flashcardDecksCache[workspaceId] ? [...flashcardDecksCache[workspaceId]] : []
+    return {
+      decks: flashcardDecksCache[workspaceId] ? [...flashcardDecksCache[workspaceId]] : [],
+      status: 'ready',
+    }
+  },
+
+  /** Asks for new cards on the concepts the deck covers least. Returns the updated deck and how many were added. */
+  async generateMoreFlashcards(workspaceId: string): Promise<{ decks: FlashcardDeck[]; added: number }> {
+    const res = await tutorApiClient.generateFlashcards(workspaceId)
+    const decks = res?.flashcards?.length ? [toDeck(workspaceId, res.flashcards)] : []
+    if (decks.length) flashcardDecksCache[workspaceId] = decks
+    return { decks, added: res?.added_count || 0 }
   },
 
   async reviewFlashcard(

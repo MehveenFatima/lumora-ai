@@ -139,15 +139,26 @@ flowchart LR
     E & C & R --> A
 ```
 
-- A session serves batches of 5 questions, for up to 5 rounds. The first batch is a diagnostic drawn from the workspace's validated question bank when it has enough questions, and is generated otherwise.
-- After each batch, the score selects the band above for the next one. Questions come from the bank, ranked by difficulty match and the band's concept rule, or are generated with the same target difficulty and concept order when the bank runs out.
-- Correct answers are never sent to the browser. Answers are graded on the server, and question fingerprints prevent repeats within a session.
+- A session serves batches of 5 questions, for up to 5 rounds. The first batch is a diagnostic that covers as many concepts as possible (one question per concept first).
+- After each batch, the score selects the band above for the next one: the band orders the target concepts (missed concepts first below 60 %, unseen concepts first at 80 %+) and sets the target difficulty. Questions are picked from the question bank by target concept and difficulty; when the bank has too few unseen questions, the rest are written on demand within a 25-second budget.
+- Correct answers are never sent to the browser. Answers are graded on the server. Questions a learner has seen are never served again in that workspace, nor are other questions that ask the same thing in different words.
 
 ## Question generation and quality checks
 
 `services/question_generator.py`, `services/question_quality_validator.py`
 
-Candidate MCQs are generated from retrieved chunks by the AI gateway (the quiz task routes to OpenRouter first, then Gemini). A template-based synthesiser is used when no provider is available, and by the seed script. Every candidate must pass the validator before it is stored:
+`services/concept_map.py`, `services/question_bank.py`, `services/flashcard_builder.py`, `services/study_prep.py`, `services/similarity.py`
+
+Quiz questions and flashcards are written per **concept**, not per chunk:
+
+1. **Topic map.** After a document is indexed, a background job sends the document (in sections of about 14 000 characters, marked with page numbers) to the model, which lists the subject-matter concepts it teaches, each with a topic, a short summary, 2–6 key points (formulas, rules, worked-example results) and source pages. Slides about the lesson rather than the subject ("Independent Practice", "Learning Objectives", "Exit Ticket", agendas, references) are left out. Stored in `workspace_concepts`. Without an AI provider the map falls back to the document's headings, with the same filter.
+2. **Question bank.** For every concept the model writes six questions (two each at difficulty 1, 2 and 3) from the key points and the pages that teach the concept. The prompt asks for understanding and application, varied forms, and, for maths and other problem-solving subjects, worked problems whose wrong options are the results of typical mistakes. Options are shuffled so the answer position varies.
+3. **Checks.** Each question must pass the structural and anti-leakage validator below, then a second model pass that re-computes the answer and rejects questions with a wrong or ambiguous key, weak distractors, or a subject other than the course content (`STUDY_MATERIAL_REVIEW`, on by default). Finally it is compared by meaning (embedding cosine ≥ 0.90 of question plus answer) and wording with every question already in the bank, so the same fact is never asked twice.
+4. **Top-up.** Each quiz request schedules the job again; concepts with fewer than three unseen questions get new ones, written to differ from everything already in the bank.
+
+The model is `GEMINI_GENERATION_MODEL` (default `gemini-3.8-flash`; `gemini-3.1-pro-preview` or `gemini-4-argon` when the API plan includes them). There is no template fallback when a provider is configured: if no reviewed question is ready yet, the API returns `503 QUIZ_PREPARING` and the quiz page retries. A template-based synthesiser is used only when no provider is configured (local development, tests) and by the seed script. `python -m backend.app.cli preview-study-material notes.pdf` writes a Markdown report of the topic map, questions and flashcards for one file, without storing anything.
+
+Every question must pass the validator before it is stored:
 
 - exactly four options with no duplicates, no true/false options and no "all/none of the above" or "both A and B" options
 - a known difficulty label (easy, medium or hard) and a non-empty concept tag
@@ -162,7 +173,7 @@ Candidate MCQs are generated from retrieved chunks by the AI gateway (the quiz t
 
 ## Flashcards, study plan and activity
 
-- **Flashcards** (`services/secondary_service.py`, `services/spaced_repetition.py`): if a workspace has fewer than six cards, up to ten are generated from cleaned passages spread across its documents: the AI provider writes a question and a 1–2 sentence answer grounded in one passage, and an extractive fallback turns definitional sentences into questions. Layout noise (card or question numbers, file names, page labels) is stripped first. Each Again / Hard / Good / Easy rating is saved through `POST /flashcards/{card_id}/review` and scheduled with SM-2: "again" makes the card due today and lowers its ease by 0.2; successful reviews are due after 1 day, then 6 days, then the previous interval × ease (× 1.2 for "hard", with a further × 1.3 for "easy"). The ease never drops below 1.3. Due cards are shown first.
+- **Flashcards** (`services/flashcard_builder.py`, `services/study_prep.py`, `services/spaced_repetition.py`): with an AI provider, the deck is written per concept of the topic map, 2–3 cards each, every card testing a different fact or skill (definition, formula, rule, comparison, typical mistake, small worked example). A card whose answer repeats an existing card's, by meaning or wording, is dropped. Cards for new documents are added in the background, older decks are replaced once the new deck is saved, and **Generate more cards** (`POST /flashcards/generate`) adds cards for the concepts the deck covers least. Without a provider, an extractive fallback turns definitional sentences into questions. Each Again / Hard / Good / Easy rating is saved through `POST /flashcards/{card_id}/review` and scheduled with SM-2: "again" makes the card due today and lowers its ease by 0.2; successful reviews are due after 1 day, then 6 days, then the previous interval × ease (× 1.2 for "hard", with a further × 1.3 for "easy"). The ease never drops below 1.3. Due cards are shown first.
 - **Study plan:** rebuilt from the latest knowledge gaps and concept mastery each time it is opened or regenerated, so it follows quiz results. It counts down to the workspace's target completion date, which can't be set in the past (checked against the learner's local date, sent as `X-Client-Date`). Once the target date has passed, no plan is generated until the learner sets a new date (`PATCH /workspaces/{id}`). Active gaps become "Review & Remediate" tasks (the top two scheduled for today) and concepts at 50–80% mastery become practice tasks; with no quiz evidence yet it shows two starter tasks. Completed tasks and the minutes logged against the daily target are kept across rebuilds.
 - **Search** (`services/search_service.py`, `GET /workspaces/{id}/search`): matches the query against the topic inventory, document titles, flashcards and (lexically) the indexed chunks, and returns grouped results with links; the header box opens with Ctrl/Cmd + K.
 - **Notifications** (`services/notification_service.py`): stored per user in `notifications` with a `dedupe_key` so an event is recorded once. Created when a document is ready or fails, when a quiz finds weak topics (or none), once a day per workspace when flashcards are due, and on sign-up.
@@ -175,7 +186,7 @@ Candidate MCQs are generated from retrieved chunks by the AI gateway (the quiz t
 | Task | Primary | Fallback |
 | :--- | :--- | :--- |
 | Tutor answers | Gemini (`gemini-3.8-flash`) | OpenRouter (`qwen/qwen3.8-27b:free`) |
-| Quiz / flashcard generation | OpenRouter | Gemini |
+| Topic maps, quiz questions, flashcards | Gemini (`GEMINI_GENERATION_MODEL`) | OpenRouter |
 
 - A provider that returns HTTP 429 enters a cooldown and is skipped until it expires. `GET /health` reports backend, database and per-provider status separately.
 - API keys are masked in logs and error messages (`ai/secret_masker.py`).
@@ -183,14 +194,14 @@ Candidate MCQs are generated from retrieved chunks by the AI gateway (the quiz t
 
 ## Data model
 
-Ten SQL migrations (`backend/app/db/migrations/`, applied by `python -m backend.app.cli migrate`, which records them in `schema_migrations`) create 20 tables:
+Eleven SQL migrations (`backend/app/db/migrations/`, applied by `python -m backend.app.cli migrate`, which records them in `schema_migrations`) create 21 tables:
 
 | Area | Tables |
 | :--- | :--- |
 | Accounts | `users` (and `workspaces.owner_id`), `email_codes`, `notifications` |
 | Content | `workspaces`, `documents`, `document_chunks` |
 | Tutor | `tutor_conversations`, `tutor_messages` |
-| Quiz | `quiz_sessions`, `quiz_questions`, `quiz_attempts`, `quiz_question_fingerprints`, `workspace_question_bank` |
+| Quiz | `quiz_sessions`, `quiz_questions`, `quiz_attempts`, `quiz_question_fingerprints`, `workspace_question_bank`, `workspace_concepts` (topic map) |
 | Learner model | `learner_concept_mastery`, `learner_knowledge_gaps`, `learner_topic_mastery`, `learner_mastery_snapshots` |
 | Study tools | `flashcards`, `study_plans`, `activity_events` |
 
@@ -198,6 +209,7 @@ Ten SQL migrations (`backend/app/db/migrations/`, applied by `python -m backend.
 
 - **Background processing is in-process.** Long uploads continue in the API process; if it restarts mid-upload, the document is marked failed and must be uploaded again. A durable job queue would remove that.
 - **Rate limits are per process.** Login and code limits are kept in memory, which suits a single API instance; several instances would need a shared store such as Redis.
-- **Template questions are weaker.** Without an AI provider, quiz questions come from a template synthesiser and can be generic or easy to guess. With a Gemini or OpenRouter key, questions are written by the LLM and pass the same checks.
+- **Template questions are weaker.** Without an AI provider, quiz questions come from a template synthesiser and can be generic or easy to guess. With a Gemini or OpenRouter key, questions are written per concept by the LLM, reviewed and de-duplicated.
+- **Preparation takes provider quota.** A 40-concept document needs roughly 100 model calls for its map, deck and question bank (about half without `STUDY_MATERIAL_REVIEW`). On a free API tier the bank fills over several minutes; quizzes started earlier use the questions ready so far.
 - **Older SDK.** Gemini is called through `google-generativeai`, which Google has deprecated in favour of `google-genai`.
 - **Fixed model configuration.** Start-up validation requires `gemini-3.8-flash` and `gemini-embedding-001`; changing models means updating that check.

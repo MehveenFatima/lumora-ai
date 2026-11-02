@@ -4,6 +4,7 @@ Operational commands for LumoraAI. Run from the repository root:
     python -m backend.app.cli migrate
     python -m backend.app.cli create-user --email you@example.com --name "Your Name"
     python -m backend.app.cli claim-workspaces --email you@example.com
+    python -m backend.app.cli preview-study-material notes.pdf --out preview.md
 
 `migrate` applies backend/app/db/migrations/*.sql in order and records each file in
 `schema_migrations`, so it is safe to run on every deploy.
@@ -82,6 +83,55 @@ async def claim_workspaces(email: str) -> None:
     print(f"Assigned {count} unowned workspace(s) to {user['email']}.")
 
 
+async def preview_study_material(path: str, out: str, max_concepts: int) -> None:
+    """Runs the topic map, quiz and flashcard pipeline on one file and writes a Markdown report.
+
+    Nothing is stored. Needs GEMINI_API_KEY; use it to judge question quality on your own notes.
+    """
+    from backend.app.ai.gateway import ai_gateway
+    from backend.app.ai.types import TaskType
+    from backend.app.services import flashcard_builder
+    from backend.app.services.chunker import chunker_service
+    from backend.app.services.concept_map import concept_map_service
+    from backend.app.services.document_parser import document_parser
+    from backend.app.services.question_bank import generate_for_concept
+    from backend.app.services.similarity import DuplicateIndex
+
+    if not ai_gateway.has_configured_provider(TaskType.QUIZ):
+        sys.exit("Set GEMINI_API_KEY (or a secondary provider key) to preview AI-written study material.")
+    file = Path(path)
+    if not file.is_file():
+        sys.exit(f"File not found: {path}")
+    pages = document_parser.parse(file.read_bytes(), file.suffix.lstrip(".").lower())
+    chunks = [
+        {**c.to_dict(), "document_name": file.name}
+        for c in chunker_service.chunk_pages("preview", "preview_doc", pages, file.stem, file.name)
+    ]
+    print(f"{len(pages)} pages, {len(chunks)} chunks. Building the topic map ...")
+    concepts = await concept_map_service.extract(chunks, file.name)
+    concepts = [{**c, "id": f"c{i}", "document_id": "preview_doc", "document_name": file.name} for i, c in enumerate(concepts)]
+    print(f"{len(concepts)} concepts. Writing questions and flashcards ...")
+
+    lines = [f"# Study material preview: {file.name}", "", f"{len(concepts)} concepts", ""]
+    duplicates = DuplicateIndex()
+    for c in concepts[:max_concepts]:
+        source = concept_map_service.source_text(c, chunks)
+        questions = await generate_for_concept(c, source, 6, duplicates)
+        lines += [f"## {c['concept']}  ({c['topic']}, pages {c['source_pages']})", "", c.get("summary", ""), ""]
+        lines += [f"- {p}" for p in c.get("key_points") or []] + ["", f"### Questions ({len(questions)} kept)", ""]
+        for q in questions:
+            lines.append(f"**[{q.difficulty}, {q.question_type}]** {q.question_text}")
+            lines += [f"- {'**' if o['key'] == q.correct_option else ''}{o['key']}. {o['text']}{'**' if o['key'] == q.correct_option else ''}" for o in q.options]
+            lines += [f"  _{q.explanation}_", ""]
+        print(f"  {c['concept']}: {len(questions)} questions")
+    cards = await flashcard_builder.write_cards(concepts[:max_concepts], chunks)
+    lines += ["## Flashcards", ""]
+    for card in cards:
+        lines += [f"- **{card['front']}** {card['back']}  _({card['concept']})_"]
+    Path(out).write_text("\n".join(lines), encoding="utf-8")
+    print(f"{len(cards)} flashcards. Report written to {out}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m backend.app.cli")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -95,6 +145,11 @@ def main() -> None:
     cw = sub.add_parser("claim-workspaces", help="Give workspaces without an owner to an account")
     cw.add_argument("--email", required=True)
 
+    ps = sub.add_parser("preview-study-material", help="Preview the topic map, quiz questions and flashcards for a file")
+    ps.add_argument("file")
+    ps.add_argument("--out", default="study-material-preview.md")
+    ps.add_argument("--max-concepts", type=int, default=12)
+
     args = parser.parse_args()
     if args.command == "migrate":
         asyncio.run(migrate())
@@ -105,6 +160,8 @@ def main() -> None:
         asyncio.run(create_user(args.email, args.name, password))
     elif args.command == "claim-workspaces":
         asyncio.run(claim_workspaces(args.email))
+    elif args.command == "preview-study-material":
+        asyncio.run(preview_study_material(args.file, args.out, args.max_concepts))
 
 
 if __name__ == "__main__":

@@ -224,6 +224,9 @@ export default function AdaptiveQuizPage() {
       if (isNoDocs) {
         setErrorCode('NO_INDEXED_DOCUMENTS')
         setErrorMessage('Upload learning material to generate a grounded adaptive quiz.')
+      } else if (err.code === 'QUIZ_PREPARING') {
+        setErrorCode('QUIZ_PREPARING')
+        setErrorMessage(err.message || 'Your quiz questions are still being written and checked from your notes.')
       } else if (isBackendDown) {
         setErrorCode('BACKEND_UNAVAILABLE')
         setErrorMessage(
@@ -241,6 +244,21 @@ export default function AdaptiveQuizPage() {
   useEffect(() => {
     startQuizSession()
   }, [workspaceId])
+
+  // Questions are written and reviewed in the background after an upload; retry automatically
+  const preparingRetriesRef = useRef(0)
+  useEffect(() => {
+    if (errorCode !== 'QUIZ_PREPARING') {
+      if (errorCode === null && currentQuestion) preparingRetriesRef.current = 0
+      return
+    }
+    if (preparingRetriesRef.current >= 6) return
+    const timer = setTimeout(() => {
+      preparingRetriesRef.current += 1
+      startQuizSession(true)
+    }, 20000)
+    return () => clearTimeout(timer)
+  }, [errorCode, currentQuestion])
 
   // Timer per question
   useEffect(() => {
@@ -383,6 +401,35 @@ export default function AdaptiveQuizPage() {
               <span>Add Source</span>
               <ArrowRight className="size-3.5" />
             </Link>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ============================================================
+  // PREPARING STATE: questions are still being written from the notes
+  // ============================================================
+  if (errorCode === 'QUIZ_PREPARING' && !isLoading) {
+    return (
+      <div className="mx-auto w-full max-w-2xl px-4 py-16 text-center animate-in fade-in duration-200">
+        <div className="rounded-3xl border border-border bg-card/60 p-10 shadow-soft">
+          <Loader2 className="mx-auto size-10 animate-spin text-primary" />
+          <h2 className="mt-4 font-display text-lg font-semibold text-foreground">
+            Preparing your quiz
+          </h2>
+          <p className="mt-2 text-xs text-muted-foreground leading-relaxed max-w-md mx-auto">
+            {errorMessage} Each question is checked for a correct answer key before you see it. This page
+            retries on its own.
+          </p>
+          <div className="mt-6 flex justify-center gap-3">
+            <button
+              onClick={() => startQuizSession(true)}
+              className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-xs font-medium text-foreground hover:bg-accent/40"
+            >
+              <RotateCcw className="size-3.5" />
+              <span>Try now</span>
+            </button>
           </div>
         </div>
       </div>

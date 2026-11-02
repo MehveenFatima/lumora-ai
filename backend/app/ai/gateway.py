@@ -52,8 +52,9 @@ class AIGateway:
         # Routing Table (Primary -> Fallback)
         self._routing_table: Dict[TaskType, Tuple[str, str]] = {
             TaskType.TUTOR: ("gemini", sec_key),
-            TaskType.QUIZ: (sec_key, "gemini"),
-            TaskType.FLASHCARDS: (sec_key, "gemini"),
+            # Study material needs the strongest available reasoning: Gemini first
+            TaskType.QUIZ: ("gemini", sec_key),
+            TaskType.FLASHCARDS: ("gemini", sec_key),
             TaskType.GENERAL: ("gemini", sec_key),
         }
 
@@ -83,6 +84,12 @@ class AIGateway:
             if name in self.providers and name not in ordered:
                 ordered.append(name)
         return ordered
+
+    def has_configured_provider(self, task_type: TaskType) -> bool:
+        """True when at least one provider that serves this task has credentials."""
+        return any(
+            self.providers[name].is_configured() for name in self.get_routing_order(task_type)
+        )
 
     def get_readiness_report(self) -> Dict[str, Any]:
         """

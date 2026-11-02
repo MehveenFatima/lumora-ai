@@ -34,9 +34,9 @@ Each user has their own account and **workspaces**, one per subject. Every works
 | **Document ingestion** | Upload PDF, DOCX, PPTX or TXT. Files are validated, parsed page by page, split into page-aware chunks with heading metadata, embedded in batches (768-d Gemini embeddings) and indexed with pgvector. Large files keep processing in the background with live status, and scanned PDF pages are read with OCR (Gemini vision). |
 | **Grounded AI tutor** | Hybrid vector and keyword retrieval with a relevance threshold, follow-up resolution ("why is this important?"), response modes (simplify, example, compare, summary, exam points, page focus) and page-level citations. |
 | **Adaptive quiz** | Questions in batches of five. A batch score of 80% or more raises difficulty and adds new concepts, 60–80% consolidates, and below 60% lowers difficulty and revisits missed concepts. Answers are graded on the server. |
-| **Question quality checks** | Generated MCQs must pass checks for structure, true/false and "all of the above" options, duplicates, option-length balance, answer leakage, citation leakage, raw code or table dumps, and label consistency. |
+| **Question quality** | Each document is mapped into the concepts it teaches (lesson slides such as "Independent Practice" are skipped). Questions are written per concept at three difficulties, with worked problems for maths-style subjects, then checked for structure and answer leakage, re-verified by a second AI pass, and compared by meaning with every existing question so the same fact is never asked twice. |
 | **Learner model** | BKT mastery per concept, rolled up to topics, with knowledge gaps ranked by severity, a recommended next action and a daily mastery-over-time chart. |
-| **Study tools** | Flashcards from your sources with SM-2 spaced-repetition scheduling, a study plan built from your gaps, learning analytics and an activity log. |
+| **Study tools** | Flashcards written for every concept in your notes, each card testing a different fact, with "Generate more cards" and SM-2 spaced-repetition scheduling; a study plan built from your gaps, learning analytics and an activity log. |
 | **Search and notifications** | Ctrl/Cmd + K search across topics, documents, flashcards and note passages. In-app notifications when a document is ready, a quiz finds weak topics, or flashcards are due. |
 | **Resilient AI layer** | Gemini 3.8 Flash with automatic failover to Qwen via OpenRouter, rate-limit cooldowns, and an extractive source-only answer when no model is available. |
 
@@ -178,6 +178,8 @@ python -m backend.app.cli claim-workspaces --email you@example.com  # adopt work
 | `DATABASE_URL` | API | PostgreSQL connection string. Leave empty to use the in-memory store. |
 | `GEMINI_API_KEY` | API | Google Gemini key for generation and embeddings |
 | `GEMINI_MODEL`, `GEMINI_EMBEDDING_MODEL` | API | `models/gemini-3.8-flash` and `models/gemini-embedding-001` (768 dimensions) |
+| `GEMINI_GENERATION_MODEL` | API | Model that writes topic maps, quiz questions and flashcards: `gemini-3.8-flash` (default), `gemini-3.1-pro-preview` or `gemini-4-argon` |
+| `STUDY_MATERIAL_REVIEW` | API | `true` (default) to re-check every quiz question with a second AI pass; `false` halves model calls |
 | `OPENROUTER_API_KEY`, `SECONDARY_AI_MODEL` | API | Failover provider (default `qwen/qwen3.8-27b:free`) |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_STORAGE_BUCKET` | API | Supabase Storage for original files (otherwise stored on local disk) |
 | `RAG_TOP_K` | API | Passages retrieved per answer (default 5) |

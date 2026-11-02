@@ -13,7 +13,7 @@ from backend.app.schemas.quizzes import (
     QuizNextBatchResponse,
 )
 from backend.app.services.quiz_service import quiz_service
-from backend.app.services.question_generator import InsufficientContextError, NoIndexedDocumentsError
+from backend.app.services.question_generator import InsufficientContextError, NoIndexedDocumentsError, QuizPreparingError
 from backend.app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -42,6 +42,11 @@ async def create_quiz_session(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"No indexed documents found in workspace '{workspace_id}'. Upload and index a resource before starting an adaptive quiz. ({str(e)})",
+        )
+    except QuizPreparingError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "QUIZ_PREPARING", "message": str(e)},
         )
     except InsufficientContextError as e:
         raise HTTPException(
@@ -195,6 +200,16 @@ async def start_next_quiz_batch(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "NO_INDEXED_DOCUMENTS", "message": str(e)},
+        )
+    except QuizPreparingError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "QUIZ_PREPARING", "message": str(e)},
+        )
+    except InsufficientContextError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
         )
     except ValueError as e:
         raise HTTPException(
