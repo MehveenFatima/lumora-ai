@@ -36,8 +36,9 @@ async function handleProxy(req: NextRequest, { params }: { params: Promise<{ pat
 
   try {
     const headers = sanitizeHeaders(req.headers)
-    // Document uploads are parsed, chunked and embedded inside the request, so they need longer than API calls.
-    const isUpload = (req.headers.get('content-type') || '').includes('multipart/form-data')
+    // Document uploads (whole files or parts of one) take longer than API calls.
+    const contentType = req.headers.get('content-type') || ''
+    const isUpload = contentType.includes('multipart/form-data') || contentType.includes('application/octet-stream')
 
     const fetchOptions: RequestInit = {
       method,
@@ -46,17 +47,12 @@ async function handleProxy(req: NextRequest, { params }: { params: Promise<{ pat
       signal: AbortSignal.timeout(isUpload ? 300000 : 60000),
     }
 
-    // Attach body for modifying methods
+    // Attach body for modifying methods. Bodies are forwarded as raw bytes, so multipart
+    // boundaries and binary upload parts arrive unchanged.
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
-      const contentType = req.headers.get('content-type') || ''
-      if (contentType.includes('multipart/form-data')) {
-        // Stream raw body array buffer to preserve multipart boundaries intact
-        fetchOptions.body = await req.arrayBuffer()
-      } else {
-        const text = await req.text()
-        if (text) {
-          fetchOptions.body = text
-        }
+      const body = await req.arrayBuffer()
+      if (body.byteLength > 0) {
+        fetchOptions.body = body
       }
     }
 

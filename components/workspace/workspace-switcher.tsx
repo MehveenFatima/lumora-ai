@@ -53,29 +53,29 @@ export function WorkspaceSwitcher({
   const CurrentIcon = iconMap[currentWorkspace.iconName] || FolderKanban
 
   return (
-    <div className="relative inline-block text-left" ref={menuRef}>
+    <div className="relative inline-block min-w-0 text-left" ref={menuRef}>
       <button
         type="button"
         onClick={() => setOpen(!open)}
         className={cn(
-          'flex items-center gap-2.5 rounded-xl border border-border bg-card px-3 py-1.5 text-left transition-all hover:border-primary/40 hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/20',
+          'flex min-w-0 max-w-full items-center gap-2 rounded-xl border border-border bg-card px-2 py-1.5 text-left sm:gap-2.5 sm:px-3 transition-all hover:border-primary/40 hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/20',
           open && 'border-primary/50 ring-2 ring-primary/10'
         )}
         aria-label="Switch workspace"
         aria-expanded={open}
       >
-        <span className="flex size-7 items-center justify-center rounded-lg bg-primary/10 text-primary">
+        <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
           <CurrentIcon className="size-4" />
         </span>
-        <div className="flex flex-col leading-none">
-          <span className="max-w-[140px] truncate text-xs font-semibold text-foreground sm:max-w-[200px]">
+        <div className="flex min-w-0 flex-col leading-none">
+          <span className="max-w-[110px] truncate text-xs font-semibold text-foreground sm:max-w-[200px]">
             {currentWorkspace.name}
           </span>
-          <span className="mt-0.5 max-w-[140px] truncate text-[10px] text-muted-foreground sm:max-w-[180px]">
+          <span className="mt-0.5 max-w-[110px] truncate text-[10px] text-muted-foreground sm:max-w-[180px]">
             {currentWorkspace.goal}
           </span>
         </div>
-        <ChevronDown className={cn('ml-1 size-3.5 text-muted-foreground transition-transform', open && 'rotate-180')} />
+        <ChevronDown className={cn('ml-0.5 size-3.5 shrink-0 text-muted-foreground transition-transform sm:ml-1', open && 'rotate-180')} />
       </button>
 
       {open && (

@@ -1,8 +1,12 @@
 import asyncio
+import math
 import os
 import re
-from typing import List
-from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, status
+import secrets
+import time
+from typing import List, Optional
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Request, status
+from pydantic import BaseModel, Field as PydanticField
 from backend.app.api.deps import CurrentUser, get_current_user, ensure_document_access, require_workspace
 from fastapi.responses import Response
 from backend.app.schemas.documents import (
@@ -39,28 +43,8 @@ def _safe_filename(name: str) -> str:
     return cleaned.strip() or "document"
 
 
-@router.post(
-    "/workspaces/{workspace_id}/documents",
-    response_model=DocumentResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-async def upload_document(
-    workspace_id: str,
-    response: Response,
-    file: UploadFile = File(...),
-    title: str = Form(None),
-    workspace: dict = Depends(require_workspace),
-) -> DocumentResponse:
-    # 1. Validate workspace
-    workspace = await workspace_repo.get_by_id(workspace_id)
-    if not workspace:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Workspace '{workspace_id}' not found.",
-        )
-
-    # 2. Validate file extension
-    ext = os.path.splitext(file.filename)[1].lower()
+def _validate_extension(filename: str) -> str:
+    ext = os.path.splitext(filename or "")[1].lower()
     if ext in LEGACY_OFFICE_EXTENSIONS:
         modern = LEGACY_OFFICE_EXTENSIONS[ext]
         raise HTTPException(
@@ -73,11 +57,11 @@ async def upload_document(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unsupported file type '{ext}'. Supported formats: PDF, DOCX, PPTX, TXT.",
         )
+    return ext
 
-    # 3. Read and validate file size
-    file_bytes = await file.read()
-    file_size = len(file_bytes)
-    if file_size == 0:
+
+def _validate_size(file_size: int) -> None:
+    if file_size <= 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Uploaded file is empty.",
@@ -88,7 +72,28 @@ async def upload_document(
             detail=f"File exceeds maximum allowed size of {settings.max_file_size_bytes / (1024 * 1024):.0f} MB.",
         )
 
-    # 3b. Validate the file signature so a renamed or corrupt file is rejected as a client error
+
+async def _accept_document(
+    workspace_id: str,
+    response: Response,
+    filename: str,
+    content_type: str,
+    file_bytes: bytes,
+    title: str = None,
+) -> DocumentResponse:
+    """Validates a complete file and indexes it (shared by direct and chunked uploads)."""
+    workspace = await workspace_repo.get_by_id(workspace_id)
+    if not workspace:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Workspace '{workspace_id}' not found.",
+        )
+
+    ext = _validate_extension(filename)
+    file_size = len(file_bytes)
+    _validate_size(file_size)
+
+    # Validate the file signature so a renamed or corrupt file is rejected as a client error
     if ext == ".pdf" and not file_bytes.lstrip()[:5] == b"%PDF-":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -100,16 +105,16 @@ async def upload_document(
             detail=f"The uploaded file is not a valid {ext.lstrip('.').upper()} document.",
         )
 
-    doc_title = title.strip() if title else os.path.splitext(file.filename)[0].replace("_", " ")
+    doc_title = title.strip() if title and title.strip() else os.path.splitext(filename)[0].replace("_", " ")
     file_type = ext.lstrip(".")
 
-    # 4. Create the document record, then process it. Small files finish within the wait window
+    # Create the document record, then process it. Small files finish within the wait window
     # and return 201 with status "ready"; larger ones return 202 and keep processing in the
     # background while the UI polls GET /documents/{id}.
     doc_record = await document_repo.create(
         workspace_id=workspace_id,
         title=doc_title,
-        filename=file.filename,
+        filename=filename,
         file_type=file_type,
         file_size=file_size,
         status="processing",
@@ -118,8 +123,8 @@ async def upload_document(
     mode = {"background": False}
     task = asyncio.create_task(
         _ingest_document(
-            mode, workspace_id, doc_id, doc_title, file.filename, file_type, file_bytes,
-            file.content_type or "application/octet-stream",
+            mode, workspace_id, doc_id, doc_title, filename, file_type, file_bytes,
+            content_type or "application/octet-stream",
         )
     )
     _INGEST_TASKS.add(task)
@@ -143,6 +148,153 @@ async def upload_document(
         )
         raise HTTPException(status_code=code, detail=str(exc))
     raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=_GENERIC_INGEST_ERROR)
+
+
+@router.post(
+    "/workspaces/{workspace_id}/documents",
+    response_model=DocumentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_document(
+    workspace_id: str,
+    response: Response,
+    file: UploadFile = File(...),
+    title: str = Form(None),
+    workspace: dict = Depends(require_workspace),
+) -> DocumentResponse:
+    _validate_extension(file.filename)
+    file_bytes = await file.read()
+    return await _accept_document(
+        workspace_id, response, file.filename, file.content_type or "application/octet-stream", file_bytes, title
+    )
+
+
+# ----------------------------------------------------------------------------------------------
+# Chunked uploads
+#
+# Serverless hosts cap the size of one request body (Vercel: 4.5 MB), so a larger file sent in a
+# single request never reaches the API and the browser only reports "Failed to fetch". The web app
+# therefore sends larger files in parts below that cap: start an upload, send each part (a failed
+# part is simply sent again), then complete it, which indexes the file like a direct upload.
+# Parts are kept in memory for UPLOAD_SESSION_TTL_SECONDS on the single API process.
+# ----------------------------------------------------------------------------------------------
+UPLOAD_CHUNK_BYTES = 3 * 1024 * 1024
+UPLOAD_SESSION_TTL_SECONDS = 30 * 60
+MAX_OPEN_UPLOADS_PER_WORKSPACE = 4
+_UPLOAD_SESSIONS: dict = {}
+
+
+class UploadStartRequest(BaseModel):
+    filename: str = PydanticField(..., min_length=1, max_length=255)
+    size: int = PydanticField(..., ge=1)
+    title: Optional[str] = PydanticField(None, max_length=255)
+    content_type: Optional[str] = PydanticField(None, max_length=120)
+
+
+class UploadStartResponse(BaseModel):
+    upload_id: str
+    chunk_size: int
+    total_chunks: int
+
+
+def _expire_upload_sessions() -> None:
+    now = time.monotonic()
+    for key in [k for k, v in _UPLOAD_SESSIONS.items() if now - v["created"] > UPLOAD_SESSION_TTL_SECONDS]:
+        _UPLOAD_SESSIONS.pop(key, None)
+
+
+def _upload_session(workspace_id: str, upload_id: str) -> dict:
+    _expire_upload_sessions()
+    session = _UPLOAD_SESSIONS.get(upload_id)
+    if not session or session["workspace_id"] != workspace_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="This upload has expired or does not exist. Please upload the file again.",
+        )
+    return session
+
+
+@router.post(
+    "/workspaces/{workspace_id}/uploads",
+    response_model=UploadStartResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def start_chunked_upload(
+    workspace_id: str,
+    request: UploadStartRequest,
+    workspace: dict = Depends(require_workspace),
+) -> UploadStartResponse:
+    _validate_extension(request.filename)
+    _validate_size(request.size)
+    _expire_upload_sessions()
+    open_here = [s for s in _UPLOAD_SESSIONS.values() if s["workspace_id"] == workspace_id]
+    if len(open_here) >= MAX_OPEN_UPLOADS_PER_WORKSPACE:
+        # Drop the oldest unfinished upload of this workspace rather than refusing a new one
+        oldest = min(open_here, key=lambda s: s["created"])
+        _UPLOAD_SESSIONS.pop(oldest["id"], None)
+
+    upload_id = f"upl_{secrets.token_urlsafe(16)}"
+    total_chunks = math.ceil(request.size / UPLOAD_CHUNK_BYTES)
+    _UPLOAD_SESSIONS[upload_id] = {
+        "id": upload_id,
+        "workspace_id": workspace_id,
+        "filename": os.path.basename(request.filename),
+        "title": request.title,
+        "content_type": request.content_type or "application/octet-stream",
+        "size": request.size,
+        "total_chunks": total_chunks,
+        "chunks": {},
+        "created": time.monotonic(),
+    }
+    return UploadStartResponse(upload_id=upload_id, chunk_size=UPLOAD_CHUNK_BYTES, total_chunks=total_chunks)
+
+
+@router.put("/workspaces/{workspace_id}/uploads/{upload_id}/chunks/{index}")
+async def upload_chunk(
+    workspace_id: str,
+    upload_id: str,
+    index: int,
+    http_request: Request,
+    workspace: dict = Depends(require_workspace),
+) -> dict:
+    session = _upload_session(workspace_id, upload_id)
+    if index < 0 or index >= session["total_chunks"]:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid upload part number.")
+    data = await http_request.body()
+    is_last = index == session["total_chunks"] - 1
+    expected = session["size"] - UPLOAD_CHUNK_BYTES * index if is_last else UPLOAD_CHUNK_BYTES
+    if len(data) != expected:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Upload part {index + 1} is {len(data)} bytes; expected {expected}.",
+        )
+    session["chunks"][index] = data
+    return {"upload_id": upload_id, "received_chunks": len(session["chunks"]), "total_chunks": session["total_chunks"]}
+
+
+@router.post(
+    "/workspaces/{workspace_id}/uploads/{upload_id}/complete",
+    response_model=DocumentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def complete_chunked_upload(
+    workspace_id: str,
+    upload_id: str,
+    response: Response,
+    workspace: dict = Depends(require_workspace),
+) -> DocumentResponse:
+    session = _upload_session(workspace_id, upload_id)
+    missing = [i + 1 for i in range(session["total_chunks"]) if i not in session["chunks"]]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"The upload is missing part(s) {', '.join(map(str, missing[:5]))}.",
+        )
+    _UPLOAD_SESSIONS.pop(upload_id, None)
+    file_bytes = b"".join(session["chunks"][i] for i in range(session["total_chunks"]))
+    return await _accept_document(
+        workspace_id, response, session["filename"], session["content_type"], file_bytes, session["title"]
+    )
 
 
 INGEST_WAIT_SECONDS = 20

@@ -126,13 +126,13 @@ export default function GlobalDashboardPage() {
       )}
 
       {/* Global Header */}
-      <header className="sticky top-0 z-30 flex h-16 w-full items-center justify-between border-b border-border bg-background/85 px-4 backdrop-blur-xl md:px-8">
-        <div className="flex items-center gap-3">
-          <Link href="/" className="flex items-center gap-2.5">
+      <header className="sticky top-0 z-30 flex h-16 w-full items-center justify-between gap-2 border-b border-border bg-background/85 px-3 backdrop-blur-xl sm:px-4 md:px-8">
+        <div className="flex min-w-0 items-center gap-3">
+          <Link href="/" className="flex shrink-0 items-center gap-2.5">
             <span className="flex size-9 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-glow">
               <GraduationCap className="size-5" strokeWidth={2.25} />
             </span>
-            <span className="font-display text-base font-semibold tracking-tight text-foreground">
+            <span className="hidden font-display text-base font-semibold tracking-tight text-foreground min-[380px]:inline">
               Lumora<span className="text-primary">AI</span>
             </span>
           </Link>
@@ -141,7 +141,7 @@ export default function GlobalDashboardPage() {
           </span>
         </div>
 
-        <div className="flex items-center gap-2 md:gap-2.5">
+        <div className="flex shrink-0 items-center gap-1.5 sm:gap-2 md:gap-2.5">
           {workspaces.length > 0 && (
             <Link
               href={`/dashboard/workspace/${workspaces[0].id}/quiz`}
@@ -154,15 +154,16 @@ export default function GlobalDashboardPage() {
 
           <button
             onClick={() => setCreateModalOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-1.5 text-xs font-semibold text-primary-foreground shadow-glow transition-opacity hover:opacity-90"
+            className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-xl bg-primary px-2.5 py-2 text-xs font-semibold text-primary-foreground shadow-glow transition-opacity hover:opacity-90 sm:px-3.5 sm:py-1.5"
+            aria-label="New workspace"
           >
             <Plus className="size-3.5" />
-            <span>New Workspace</span>
+            <span className="hidden sm:inline">New Workspace</span>
           </button>
 
           <button
             onClick={() => setDeleteModalOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+            className="hidden items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive sm:inline-flex"
             aria-label="Delete workspace"
           >
             <Trash2 className="size-3.5" />

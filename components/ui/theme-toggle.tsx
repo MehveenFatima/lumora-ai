@@ -53,7 +53,7 @@ export function ThemeToggle({ className, showLabel = false }: ThemeToggleProps) 
             {theme}
           </span>
         )}
-        <ChevronDown className={cn("size-3.5 transition-transform opacity-70", open && "rotate-180")} />
+        <ChevronDown className={cn("hidden size-3.5 transition-transform opacity-70 sm:block", open && "rotate-180")} />
       </button>
 
       {open && (

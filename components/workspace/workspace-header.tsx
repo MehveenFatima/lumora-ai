@@ -57,19 +57,19 @@ export function WorkspaceHeader({
 
 
   return (
-    <header className="sticky top-0 z-30 flex h-16 w-full items-center justify-between border-b border-border bg-background/85 px-4 backdrop-blur-xl md:px-6">
-      <div className="flex items-center gap-3">
+    <header className="sticky top-0 z-30 flex h-16 w-full items-center justify-between gap-2 border-b border-border bg-background/85 px-3 backdrop-blur-xl sm:px-4 md:px-6">
+      <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
         {/* Mobile menu trigger */}
         <button
           onClick={onToggleSidebar}
-          className="flex size-9 items-center justify-center rounded-xl border border-border bg-card text-muted-foreground transition-colors hover:text-foreground lg:hidden"
+          className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-muted-foreground transition-colors hover:text-foreground lg:hidden"
           aria-label="Toggle navigation menu"
         >
           <PanelLeft className="size-4" />
         </button>
 
         {/* Mobile brand icon */}
-        <Link href="/dashboard" className="flex items-center gap-2 lg:hidden">
+        <Link href="/dashboard" className="hidden shrink-0 items-center gap-2 sm:flex lg:hidden">
           <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
             <GraduationCap className="size-4" />
           </span>
@@ -137,7 +137,7 @@ export function WorkspaceHeader({
       </div>
 
       {/* Center / Right: Search & Actions */}
-      <div className="flex items-center gap-2 md:gap-3">
+      <div className="flex shrink-0 items-center gap-1.5 sm:gap-2 md:gap-3">
         {/* Workspace search (Ctrl/Cmd + K) */}
         <div className="hidden md:block">
           <CommandSearch workspaceId={currentWorkspace.id} />
