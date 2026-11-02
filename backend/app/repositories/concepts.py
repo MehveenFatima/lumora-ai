@@ -82,7 +82,7 @@ class ConceptRepository:
                 return saved
             except Exception as e:
                 logger.error(f"Error saving the topic map for document {document_id}: {e}")
-                return saved
+                return []
 
         for c in saved:
             _memory_concepts[c["id"]] = c

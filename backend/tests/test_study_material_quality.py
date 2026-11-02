@@ -5,6 +5,7 @@ the same fact in other words. Slides about the lesson ("Independent Practice") a
 The AI provider is replaced by a scripted fake so the pipeline can be checked end to end offline.
 """
 import json
+import uuid
 from types import SimpleNamespace
 
 import pytest
@@ -135,7 +136,11 @@ def test_heading_based_map_skips_lesson_slides():
 
 @pytest.mark.asyncio
 async def test_ai_topic_map_drops_meta_concepts(fake_ai):
-    saved = await cm.concept_map_service.build_for_document("ws_map", "doc_cx", "complex-numbers.pdf", chunks=CHUNKS)
+    ws_id, doc_id, chunks = await _workspace_with_notes("ws_map")
+    saved = await cm.concept_map_service.build_for_document(ws_id, doc_id, "complex-numbers.pdf", chunks=chunks)
+    assert [c["concept"] for c in await concepts_repo_module.concept_repo.list_by_workspace(ws_id)] == [
+        c["concept"] for c in saved
+    ]
     names = [c["concept"] for c in saved]
     assert names == ["Equality of complex numbers", "Modulus of a complex number"]
     assert all(c["method"] == "ai" for c in saved)
@@ -219,18 +224,19 @@ def test_selection_covers_concepts_and_skips_rephrased_served_questions():
 
 @pytest.mark.asyncio
 async def test_quiz_pool_writes_on_demand_then_serves_from_the_bank(fake_ai):
-    await cm.concept_map_service.build_for_document("ws_pool", "doc_cx", "complex-numbers.pdf", chunks=CHUNKS)
+    ws_id, doc_id, chunks = await _workspace_with_notes("ws_pool")
+    await cm.concept_map_service.build_for_document(ws_id, doc_id, "complex-numbers.pdf", chunks=chunks)
 
-    first = await question_generator_service.generate_candidate_pool("ws_pool", target_count=3, chunks=CHUNKS)
+    first = await question_generator_service.generate_candidate_pool(ws_id, target_count=3, chunks=chunks)
     assert len(first) >= 3
     assert not any("practice" in q.question_text.lower() for q in first)
     assert len({q.concept for q in first[:2]}) == 2  # one question per concept first
-    assert await quizzes_repo_module.quiz_repo.count_question_bank("ws_pool") == len(first)
+    assert await quizzes_repo_module.quiz_repo.count_question_bank(ws_id) == len(first)
 
     calls_before = len(fake_ai.prompts)
     served = {q.fingerprint for q in first[:2]}
     second = await question_generator_service.generate_candidate_pool(
-        "ws_pool", target_count=1, chunks=CHUNKS, excluded_fingerprints=served
+        ws_id, target_count=1, chunks=chunks, excluded_fingerprints=served
     )
     assert len(second) == 1 and second[0].fingerprint not in served
     assert len(fake_ai.prompts) == calls_before  # answered from the bank, no new AI call
@@ -274,6 +280,13 @@ def test_question_signature_includes_the_answer():
     assert question_signature("What is |z|?", "5") == "What is |z|? Answer: 5"
 
 
+async def _workspace_with_notes(prefix: str):
+    """A workspace and document that exist in the configured store (memory or PostgreSQL)."""
+    ws_id = f"{prefix}_{uuid.uuid4().hex[:8]}"
+    doc_id = await _seed_workspace(ws_id)
+    return ws_id, doc_id, [{**c, "document_id": doc_id} for c in CHUNKS]
+
+
 async def _seed_workspace(ws_id: str) -> str:
     from backend.app.repositories.chunks import chunk_repo
     from backend.app.repositories.documents import document_repo
@@ -297,8 +310,7 @@ async def test_background_preparation_builds_map_deck_and_bank(fake_ai):
     from backend.app.repositories.secondary import flashcard_repo
     from backend.app.services.study_prep import study_prep_service
 
-    ws_id = "ws_prep_e2e"
-    doc_id = await _seed_workspace(ws_id)
+    ws_id, doc_id, _ = await _workspace_with_notes("ws_prep_e2e")
     old_deck = await flashcard_repo.save_flashcards(ws_id, [
         {"front": f"What is the key idea behind Q{i}?", "back": "raw text", "concept": "Q"} for i in range(6)
     ])
@@ -340,8 +352,7 @@ async def test_quiz_api_reports_preparing_instead_of_template_questions(async_cl
     monkeypatch.setattr(study_prep_service, "schedule", lambda *a, **k: False)
     quizzes_repo_module._memory_question_bank.clear()
 
-    ws_id = "ws_quiz_preparing"
-    await _seed_workspace(ws_id)
+    ws_id, _, _ = await _workspace_with_notes("ws_quiz_preparing")
     res = await async_client.post(f"/api/v1/workspaces/{ws_id}/quizzes", json={"target_question_count": 5})
     assert res.status_code == 503
     assert res.json()["detail"]["code"] == "QUIZ_PREPARING"
