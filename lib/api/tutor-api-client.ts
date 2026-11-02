@@ -95,6 +95,78 @@ function mapDocument(doc: any): WorkspaceDocument {
 // Quiz creation and next-batch generate questions with the AI provider; match the 60 s proxy limit
 const QUIZ_GENERATION_TIMEOUT_MS = 60000
 
+// Files up to this size are sent in one request; larger ones in parts (see uploadInParts)
+const DIRECT_UPLOAD_MAX_BYTES = 3 * 1024 * 1024
+const UPLOAD_PART_ATTEMPTS = 4
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+async function uploadErrorMessage(response: Response): Promise<string> {
+  const data = await response.json().catch(() => ({}))
+  if (typeof data.detail === 'string') return data.detail
+  if (data.detail?.message) return data.detail.message
+  if (response.status === 413) return 'This file is too large to upload. The limit is 10 MB.'
+  return `Failed to upload document (HTTP ${response.status})`
+}
+
+/** Turns network failures ("Failed to fetch") into a message a learner can act on. */
+async function withUploadErrors(send: () => Promise<Response>): Promise<Response> {
+  try {
+    return await send()
+  } catch (err: any) {
+    if (err?.code === 'TIMEOUT') {
+      throw new Error('The upload took too long. Check your internet connection and try again.')
+    }
+    throw new Error('The upload was interrupted. Check your internet connection and try again.')
+  }
+}
+
+/** Sends a file in parts below the hosting platform's request limit, retrying any part that fails. */
+async function uploadInParts(workspaceId: string, file: File, title?: string): Promise<WorkspaceDocument> {
+  const base = `/api/v1/workspaces/${workspaceId}/uploads`
+  const start = await withUploadErrors(() =>
+    apiFetch(base, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // The API may need to wake up first on free hosting
+      signal: AbortSignal.timeout(90000),
+      body: JSON.stringify({ filename: file.name, size: file.size, title, content_type: file.type || undefined }),
+    })
+  )
+  if (!start.ok) throw new Error(await uploadErrorMessage(start))
+  const { upload_id: uploadId, chunk_size: chunkSize, total_chunks: totalChunks } = await start.json()
+
+  for (let index = 0; index < totalChunks; index++) {
+    const part = file.slice(index * chunkSize, Math.min(file.size, (index + 1) * chunkSize))
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const res = await apiFetch(`${base}/${uploadId}/chunks/${index}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/octet-stream' },
+          body: part,
+          signal: AbortSignal.timeout(120000),
+        })
+        if (res.ok) break
+        // A rejected part (wrong size, expired upload) will not succeed on a retry
+        if (res.status >= 400 && res.status < 500) throw Object.assign(new Error(await uploadErrorMessage(res)), { final: true })
+        if (attempt >= UPLOAD_PART_ATTEMPTS) throw new Error(await uploadErrorMessage(res))
+      } catch (err: any) {
+        if (err?.final) throw err
+        if (attempt >= UPLOAD_PART_ATTEMPTS) {
+          throw new Error('The upload was interrupted. Check your internet connection and try again.')
+        }
+      }
+      await sleep(1500 * attempt)
+    }
+  }
+
+  const done = await withUploadErrors(() =>
+    apiFetch(`${base}/${uploadId}/complete`, { method: 'POST', signal: AbortSignal.timeout(120000) })
+  )
+  if (!done.ok) throw new Error(await uploadErrorMessage(done))
+  return mapDocument(await done.json())
+}
+
 function getBaseUrl(): string {
   if (typeof window !== 'undefined') {
     // In browser: strictly relative path, always routed through Next.js proxy
@@ -379,6 +451,11 @@ export const tutorApiClient = {
     file: File,
     title?: string
   ): Promise<WorkspaceDocument> {
+    // Hosting platforms cap one request body (Vercel: 4.5 MB), so larger files go up in parts
+    if (file.size > DIRECT_UPLOAD_MAX_BYTES) {
+      return uploadInParts(workspaceId, file, title)
+    }
+
     const formData = new FormData()
     formData.append('file', file)
     if (title) {
@@ -387,15 +464,16 @@ export const tutorApiClient = {
 
     // Small files are processed within the request; larger ones return 202 and finish in the
     // background (follow them with getDocument). Allow time for the file itself to upload.
-    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/documents`, {
-      method: 'POST',
-      body: formData,
-      signal: AbortSignal.timeout(300000),
-    })
+    const response = await withUploadErrors(() =>
+      apiFetch(`/api/v1/workspaces/${workspaceId}/documents`, {
+        method: 'POST',
+        body: formData,
+        signal: AbortSignal.timeout(300000),
+      })
+    )
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}))
-      throw new Error(errorData.detail || `Failed to upload document (HTTP ${response.status})`)
+      throw new Error(await uploadErrorMessage(response))
     }
 
     return mapDocument(await response.json())
