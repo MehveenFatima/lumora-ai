@@ -86,6 +86,9 @@ class AIRequest(BaseModel):
     task_type: TaskType = TaskType.GENERAL
     # Expected structured output format or schema description
     schema_definition: Optional[Dict[str, Any]] = None
+    # Optional model for this request (e.g. the study-material model); providers that do not
+    # recognise it use their default model
+    model: Optional[str] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

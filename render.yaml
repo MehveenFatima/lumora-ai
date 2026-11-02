@@ -20,6 +20,11 @@ services:
         sync: false
       - key: OPENROUTER_API_KEY
         sync: false
+      # Model that writes topic maps, quiz questions and flashcards
+      - key: GEMINI_GENERATION_MODEL
+        value: gemini-3.8-flash
+      - key: STUDY_MATERIAL_REVIEW
+        value: "true"
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY

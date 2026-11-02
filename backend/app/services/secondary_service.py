@@ -17,6 +17,8 @@ logger = get_logger(__name__)
 FLASHCARD_TARGET = 10
 FLASHCARD_SOURCE_LIMIT = 12
 FLASHCARD_AI_BUDGET_SECONDS = 20
+# Time allowed to write a concept-based deck while the learner waits
+FLASHCARD_DECK_BUDGET_SECONDS = 40
 # Front text used by the earlier generator, which copied raw PDF text onto the back of cards
 _LEGACY_FRONT_PREFIX = "What is the key mechanism of "
 # "<Subject> is/are/refers to ..." definitional sentences
@@ -25,6 +27,34 @@ _DEFINITION = re.compile(r"^([A-Z][\w\-/()]*(?:\s+[\w\-/()]+){0,6}?)\s+(is|are|r
 
 class SecondaryService:
     async def get_or_generate_flashcards(self, workspace_id: str) -> List[Dict[str, Any]]:
+        from backend.app.services.study_prep import ai_available
+
+        if ai_available():
+            return await self._concept_flashcards(workspace_id)
+        return await self._offline_flashcards(workspace_id)
+
+    async def _concept_flashcards(self, workspace_id: str) -> List[Dict[str, Any]]:
+        """The concept-based deck. While it is being written, any older deck is shown instead."""
+        from backend.app.services import flashcard_builder
+        from backend.app.services.concept_map import concept_map_service
+        from backend.app.services.study_prep import study_prep_service, workspace_chunks
+
+        existing = await flashcard_repo.list_by_workspace(workspace_id)
+        if any(c.get("generator") == flashcard_builder.GENERATOR_TAG for c in existing):
+            return existing
+        if not study_prep_service.is_running(workspace_id):
+            concepts = await concept_map_service.get_workspace_concepts(workspace_id)
+            if concepts:
+                chunks = await workspace_chunks(workspace_id)
+                added = await study_prep_service.prepare_flashcards(
+                    workspace_id, concepts, chunks, budget_seconds=FLASHCARD_DECK_BUDGET_SECONDS
+                )
+                if added:
+                    return await flashcard_repo.list_by_workspace(workspace_id)
+            study_prep_service.schedule(workspace_id, force=True)
+        return existing
+
+    async def _offline_flashcards(self, workspace_id: str) -> List[Dict[str, Any]]:
         existing = await flashcard_repo.list_by_workspace(workspace_id)
         if existing and any(str(c.get("front", "")).startswith(_LEGACY_FRONT_PREFIX) for c in existing):
             # Decks from the earlier generator copied raw PDF text onto the cards; rebuild them

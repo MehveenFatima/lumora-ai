@@ -74,6 +74,13 @@ class GeminiProvider(BaseAIProvider):
 
         return normalized
 
+    def _model_for(self, request: AIRequest) -> str:
+        """The model a request runs on: an allowed study-material model, otherwise the default."""
+        from backend.app.core.config import GENERATION_MODELS
+
+        wanted = (request.model or "").strip().replace("models/", "")
+        return wanted if wanted in GENERATION_MODELS else self.model_name
+
     def is_configured(self) -> bool:
         return bool(self._api_key and len(self._api_key.strip()) >= 10)
 
@@ -135,8 +142,9 @@ class GeminiProvider(BaseAIProvider):
             if request.max_tokens is not None:
                 gen_config["max_output_tokens"] = int(request.max_tokens)
 
+            model_name = self._model_for(request)
             model = genai.GenerativeModel(
-                model_name=self.model_name,
+                model_name=model_name,
                 system_instruction=request.system_prompt if request.system_prompt else None,
                 generation_config=gen_config or None,
             )
@@ -162,7 +170,7 @@ class GeminiProvider(BaseAIProvider):
                 content=response.text.strip(),
                 structured_data=None,
                 provider=self.provider_name,
-                model=self.model_name,
+                model=model_name,
                 latency_ms=latency_ms,
                 is_fallback=False,
             )
@@ -186,8 +194,9 @@ class GeminiProvider(BaseAIProvider):
             if request.max_tokens is not None:
                 gen_config["max_output_tokens"] = int(request.max_tokens)
 
+            model_name = self._model_for(request)
             model = genai.GenerativeModel(
-                model_name=self.model_name,
+                model_name=model_name,
                 system_instruction=request.system_prompt if request.system_prompt else None,
                 generation_config=gen_config,
             )
@@ -231,7 +240,7 @@ class GeminiProvider(BaseAIProvider):
                 content=raw_text,
                 structured_data=parsed_json,
                 provider=self.provider_name,
-                model=self.model_name,
+                model=model_name,
                 latency_ms=latency_ms,
                 is_fallback=False,
             )

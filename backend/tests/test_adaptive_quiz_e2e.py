@@ -470,8 +470,8 @@ async def test_edge_cases_and_workspace_isolation():
 
 @pytest.mark.asyncio
 async def test_ai_gateway_quiz_task_routing():
-    """Verifies that the AI Gateway routes TaskType.QUIZ to secondary provider (openrouter) first, then gemini."""
+    """Quiz questions are written by Gemini first, with the secondary provider as fallback."""
     routing = ai_gateway.get_routing_order(TaskType.QUIZ)
     assert len(routing) >= 2
-    assert routing[0] == "openrouter" or routing[0] == "openai_compatible"
-    assert routing[1] == "gemini"
+    assert routing[0] == "gemini"
+    assert routing[1] in ("openrouter", "openai_compatible")

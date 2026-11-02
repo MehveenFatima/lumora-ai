@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import {
@@ -15,6 +15,8 @@ import {
   BookOpen,
   FileText,
   Zap,
+  Loader2,
+  Plus,
 } from 'lucide-react'
 import { workspaceService } from '@/lib/services/workspace-service'
 import {
@@ -37,23 +39,72 @@ export default function FlashcardsPage() {
   const [isRevealed, setIsRevealed] = useState(false)
   const [reviewedCount, setReviewedCount] = useState(0)
   const [deckCompleted, setDeckCompleted] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [deckStatus, setDeckStatus] = useState<'ready' | 'preparing'>('ready')
+  const [isGeneratingMore, setIsGeneratingMore] = useState(false)
+  const [moreMessage, setMoreMessage] = useState<string | null>(null)
+
+  const applyDecks = useCallback((dks: FlashcardDeck[], resetPosition: boolean) => {
+    setDecks(dks)
+    if (dks.length > 0) setSelectedDeckId((prev) => prev ?? dks[0].id)
+    if (resetPosition) {
+      setCardIndex(0)
+      setIsRevealed(false)
+      setDeckCompleted(false)
+    }
+  }, [])
 
   useEffect(() => {
     if (!workspaceId) return
 
     async function loadFlashcards() {
-      const [ws, dks] = await Promise.all([
+      setIsLoading(true)
+      const [ws, result] = await Promise.all([
         workspaceService.getWorkspaceById(workspaceId),
-        workspaceService.getFlashcardDecks(workspaceId),
+        workspaceService.loadFlashcards(workspaceId),
       ])
       setWorkspace(ws)
-      setDecks(dks)
-      if (dks.length > 0) {
-        setSelectedDeckId(dks[0].id)
-      }
+      applyDecks(result.decks, true)
+      setDeckStatus(result.status)
+      setIsLoading(false)
     }
     loadFlashcards()
-  }, [workspaceId])
+  }, [workspaceId, applyDecks])
+
+  // While the concept-based deck is written in the background, check back until it is ready
+  useEffect(() => {
+    if (!workspaceId || deckStatus !== 'preparing') return
+    let attempts = 0
+    const timer = setInterval(async () => {
+      attempts += 1
+      const result = await workspaceService.loadFlashcards(workspaceId)
+      if (result.status === 'ready' || attempts >= 30) {
+        clearInterval(timer)
+        applyDecks(result.decks, true)
+        setDeckStatus('ready')
+      }
+    }, 10000)
+    return () => clearInterval(timer)
+  }, [workspaceId, deckStatus, applyDecks])
+
+  const handleGenerateMore = async () => {
+    if (!workspaceId || isGeneratingMore) return
+    setIsGeneratingMore(true)
+    setMoreMessage(null)
+    try {
+      const { decks: updated, added } = await workspaceService.generateMoreFlashcards(workspaceId)
+      if (updated.length) applyDecks(updated, false)
+      setMoreMessage(
+        added > 0
+          ? `Added ${added} new card${added === 1 ? '' : 's'} on the concepts your deck covered least.`
+          : 'No new cards were added: your deck already covers the facts in your notes.'
+      )
+    } catch (err: any) {
+      setMoreMessage(err?.message || 'Could not write more flashcards right now. Please try again.')
+    } finally {
+      setIsGeneratingMore(false)
+    }
+  }
 
   const currentDeck = decks.find((d) => d.id === selectedDeckId) || decks[0]
   const currentCards = currentDeck?.cards || []
@@ -80,6 +131,35 @@ export default function FlashcardsPage() {
     setIsRevealed(false)
     setReviewedCount(0)
     setDeckCompleted(false)
+  }
+
+  if (isLoading) {
+    return (
+      <div className="mx-auto w-full max-w-2xl px-4 py-24 text-center">
+        <div className="flex flex-col items-center justify-center gap-4 rounded-3xl border border-border bg-card/60 p-12 shadow-soft">
+          <Loader2 className="size-10 animate-spin text-primary" />
+          <h2 className="font-display text-lg font-semibold text-foreground">Loading your flashcards</h2>
+          <p className="max-w-md text-xs text-muted-foreground leading-relaxed">
+            The first time, cards are written for each concept in your notes. This can take up to a minute.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  if ((!currentDeck || currentCards.length === 0) && deckStatus === 'preparing') {
+    return (
+      <div className="mx-auto w-full max-w-2xl px-4 py-16 text-center">
+        <div className="rounded-3xl border border-border bg-card/60 p-10 shadow-soft">
+          <Loader2 className="mx-auto size-10 animate-spin text-primary" />
+          <h2 className="mt-4 font-display text-lg font-semibold text-foreground">Preparing your flashcards</h2>
+          <p className="mt-2 text-xs text-muted-foreground leading-relaxed max-w-md mx-auto">
+            Your notes are being mapped into concepts and a deck is being written for each of them. This page
+            updates on its own.
+          </p>
+        </div>
+      </div>
+    )
   }
 
   if (!currentDeck || currentCards.length === 0) {
@@ -125,7 +205,15 @@ export default function FlashcardsPage() {
         </div>
 
         {/* Deck Switcher Tabs */}
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={handleGenerateMore}
+            disabled={isGeneratingMore || deckStatus === 'preparing'}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-accent/40 disabled:opacity-60"
+          >
+            {isGeneratingMore ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
+            <span>{isGeneratingMore ? 'Writing new cards…' : 'Generate more cards'}</span>
+          </button>
           {decks.map((deck) => (
             <button
               key={deck.id}
@@ -148,6 +236,18 @@ export default function FlashcardsPage() {
         </div>
       </div>
 
+      {deckStatus === 'preparing' && (
+        <div className="mt-4 flex items-center gap-2 rounded-2xl border border-primary/20 bg-primary/5 px-4 py-2.5 text-xs text-muted-foreground">
+          <Loader2 className="size-3.5 animate-spin text-primary" />
+          <span>A new deck with cards for every concept in your notes is being written. It replaces this one when ready.</span>
+        </div>
+      )}
+      {moreMessage && (
+        <div className="mt-4 rounded-2xl border border-border bg-card px-4 py-2.5 text-xs text-muted-foreground">
+          {moreMessage}
+        </div>
+      )}
+
       {/* Main Flashcard Stage */}
       {!deckCompleted ? (
         <div className="mt-8 flex flex-col items-center">
@@ -158,7 +258,7 @@ export default function FlashcardsPage() {
               <strong className="text-foreground">{currentCards.length}</strong>
             </span>
             <Badge variant="neutral" size="sm">
-              {currentDeck.topicName}
+              {currentCard?.concept || currentDeck.topicName}
             </Badge>
           </div>
 
