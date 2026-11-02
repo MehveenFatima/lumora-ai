@@ -16,11 +16,32 @@ const spaceGrotesk = Space_Grotesk({
   display: 'swap',
 })
 
+const siteUrl =
+  process.env.NEXT_PUBLIC_SITE_URL ||
+  (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : 'http://localhost:3000')
+const description =
+  'LumoraAI is a RAG-based adaptive learning and knowledge-gap prediction platform. Build workspace knowledge bases, converse with AI tutors grounded in your sources, test mastery with adaptive quizzes, and follow self-adapting roadmaps.'
+
 export const metadata: Metadata = {
+  metadataBase: new URL(siteUrl),
   title: 'LumoraAI — Adaptive Learning, Reimagined',
-  description:
-    'LumoraAI is a RAG-based adaptive learning and knowledge-gap prediction platform. Build workspace knowledge bases, converse with AI tutors grounded in your sources, test mastery with adaptive quizzes, and follow self-adapting roadmaps.',
+  description,
   generator: 'LumoraAI',
+  applicationName: 'LumoraAI',
+  // Link previews on WhatsApp, LinkedIn, Slack and X (image from app/opengraph-image.tsx)
+  openGraph: {
+    type: 'website',
+    siteName: 'LumoraAI',
+    title: 'LumoraAI — Adaptive Learning, Reimagined',
+    description:
+      'Upload your notes and get an AI tutor grounded in them, adaptive quizzes, flashcards and a study plan built from your knowledge gaps.',
+    url: '/',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'LumoraAI — Adaptive Learning, Reimagined',
+    description: 'An AI tutor, adaptive quizzes and flashcards built from your own notes.',
+  },
 }
 
 export const viewport: Viewport = {
