@@ -1,0 +1,20 @@
+name: Temporary live check
+on:
+  push:
+    branches: ["diag/live-check"]
+permissions: {}
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Probe website and API
+        run: |
+          probe() { echo "== $1"; curl -sS -m 170 -o body.txt -w "HTTP %{http_code} in %{time_total}s\n" "$1" || true; head -c 400 body.txt; echo; }
+          probe https://lumora-ai-alpha.vercel.app/
+          for u in https://lumora-api.onrender.com https://lumora-ai.onrender.com https://lumora-ai-backend.onrender.com https://lumoraai.onrender.com https://lumora-backend.onrender.com; do
+            probe "$u/api/v1/health"
+          done
+          sleep 30
+          probe "https://lumora-ai-alpha.vercel.app/api/v1/health"
+          probe "https://lumora-ai-alpha.vercel.app/api/v1/health?check_db=true"
