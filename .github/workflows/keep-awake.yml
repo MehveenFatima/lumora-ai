@@ -1,0 +1,26 @@
+# Free hosting tiers go to sleep when nobody uses them: Render stops the API after 15 minutes
+# without requests (the next visit then waits about a minute while it starts, and background
+# work such as writing quiz questions is cut off), and Supabase pauses an inactive database.
+# This pings the health check every 10 minutes through the website, which keeps both awake.
+# Set the repository variable APP_URL to change the address.
+name: Keep the API awake
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Ping the health check
+        env:
+          APP_URL: ${{ vars.APP_URL || 'https://lumora-ai-alpha.vercel.app' }}
+        run: |
+          curl -fsS --max-time 100 --retry 2 --retry-delay 10 \
+            -o /dev/null -w "HTTP %{http_code} in %{time_total}s\n" \
+            "$APP_URL/api/v1/health?check_db=true"

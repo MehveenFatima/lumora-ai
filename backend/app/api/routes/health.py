@@ -1,5 +1,6 @@
+import asyncio
 from datetime import datetime, timezone
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from backend.app.ai.gateway import ai_gateway
 from backend.app.core.config import settings
 from backend.app.db.connection import get_db_pool
@@ -9,7 +10,9 @@ router = APIRouter(tags=["Health"])
 
 
 @router.get("/health", response_model=HealthResponse)
-async def health_check() -> HealthResponse:
+async def health_check(
+    check_db: bool = Query(False, description="Also run a query, so the database counts as active"),
+) -> HealthResponse:
     now_iso = datetime.now(timezone.utc).isoformat()
     pool = await get_db_pool()
 
@@ -19,6 +22,14 @@ async def health_check() -> HealthResponse:
         "pool_active": bool(pool),
         "url_configured": bool(settings.database_url),
     }
+    if check_db and pool:
+        # Used by the scheduled keep-awake ping: a real query keeps a free-tier database active
+        try:
+            async with pool.acquire() as conn:
+                await asyncio.wait_for(conn.fetchval("SELECT 1"), timeout=5)
+        except Exception as e:
+            db_info["status"] = "error"
+            db_info["error"] = type(e).__name__
 
     if settings.presentation_mode and not pool:
         db_info["status"] = "unavailable"
