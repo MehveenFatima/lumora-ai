@@ -27,5 +27,6 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import os,urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"PORT\",\"8000\")}/api/v1/health', timeout=4)"
 
-# Apply pending migrations (when a database is configured), then serve
-CMD ["sh", "-c", "if [ -n \"$DATABASE_URL\" ]; then python -m backend.app.cli migrate; fi && exec uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT} --proxy-headers --forwarded-allow-ips='*'"]
+# The API applies pending migrations itself as soon as it reaches the database, so the service
+# starts (and reports the outage at /api/v1/health) even while the database is unreachable
+CMD ["sh", "-c", "exec uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT} --proxy-headers --forwarded-allow-ips='*'"]

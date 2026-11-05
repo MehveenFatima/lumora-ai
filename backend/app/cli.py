@@ -17,8 +17,6 @@ from pathlib import Path
 
 from backend.app.core.config import settings
 
-MIGRATIONS_DIR = Path(__file__).resolve().parent / "db" / "migrations"
-
 
 async def _connect():
     if not settings.database_url:
@@ -31,32 +29,23 @@ async def _connect():
             return await asyncpg.connect(settings.database_url, timeout=30)
         except (OSError, asyncpg.PostgresError, asyncio.TimeoutError) as e:
             if attempt == 6:
-                sys.exit(f"Could not connect to the database: {type(e).__name__}")
+                from backend.app.db.migrations_runner import describe_db_error
+
+                sys.exit(f"Could not connect to the database: {describe_db_error(e)}")
             delay = 2 ** (attempt - 1)
             print(f"Database not reachable yet ({type(e).__name__}); retrying in {delay}s ...")
             await asyncio.sleep(delay)
 
 
 async def migrate() -> None:
+    from backend.app.db.migrations_runner import apply_migrations
+
     conn = await _connect()
     try:
-        await conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS schema_migrations (
-                filename TEXT PRIMARY KEY,
-                applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-            """
-        )
-        applied = {r["filename"] for r in await conn.fetch("SELECT filename FROM schema_migrations")}
-        files = sorted(MIGRATIONS_DIR.glob("[0-9][0-9][0-9]_*.sql"))
-        pending = [f for f in files if f.name not in applied]
-        for f in pending:
-            print(f"Applying {f.name} ...")
-            async with conn.transaction():
-                await conn.execute(f.read_text(encoding="utf-8"))
-                await conn.execute("INSERT INTO schema_migrations (filename) VALUES ($1)", f.name)
-        print(f"Database is up to date ({len(files)} migrations, {len(pending)} applied now).")
+        total, done = await apply_migrations(conn)
+        for name in done:
+            print(f"Applied {name}")
+        print(f"Database is up to date ({total} migrations, {len(done)} applied now).")
     finally:
         await conn.close()
 

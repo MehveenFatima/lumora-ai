@@ -1,10 +1,11 @@
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from backend.app.core.config import settings
 from backend.app.core.logging import setup_logging, get_logger
-from backend.app.db.connection import close_db_pool, connect_with_retry
+from backend.app.db.connection import close_db_pool, connect_with_retry, keep_connecting, run_migrations
 from backend.app.api.v1.router import api_router
 
 logger = get_logger(__name__)
@@ -36,7 +37,8 @@ async def lifespan(app: FastAPI):
         if not settings.database_url:
             logger.warning("ENVIRONMENT=production without DATABASE_URL: data will not survive a restart.")
 
-    if await connect_with_retry():
+    async def on_database_ready():
+        await run_migrations()
         from backend.app.api.routes.documents import mark_interrupted_documents
 
         try:
@@ -45,9 +47,20 @@ async def lifespan(app: FastAPI):
                 logger.warning(f"Marked {interrupted} interrupted document upload(s) as failed.")
         except Exception as e:
             logger.warning(f"Could not check for interrupted uploads: {e}")
+
+    # Start serving even when the database is unreachable (e.g. a paused free-tier project):
+    # data requests get a clear 503 and the API reconnects and migrates on its own once it is back.
+    reconnect_task = None
+    if await connect_with_retry(attempts=3):
+        await on_database_ready()
+    elif settings.database_url:
+        logger.error("Starting without the database; retrying every 30 s in the background.")
+        reconnect_task = asyncio.create_task(keep_connecting(on_database_ready))
     yield
     # Shutdown
     logger.info(f"Shutting down {settings.app_name}...")
+    if reconnect_task:
+        reconnect_task.cancel()
     await close_db_pool()
 
 

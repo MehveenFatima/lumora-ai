@@ -194,7 +194,7 @@ Every question must pass the validator before it is stored:
 
 ## Data model
 
-Eleven SQL migrations (`backend/app/db/migrations/`, applied by `python -m backend.app.cli migrate`, which records them in `schema_migrations`) create 21 tables:
+Eleven SQL migrations (`backend/app/db/migrations/`, applied by the API when it connects to the database, or by `python -m backend.app.cli migrate`; both record them in `schema_migrations`) create 21 tables:
 
 | Area | Tables |
 | :--- | :--- |

@@ -204,9 +204,11 @@ The full template is [`.env.example`](.env.example). Never commit a real `.env`.
 The app deploys as two services plus a database:
 
 1. **Database and file storage: Supabase.** Create a project and copy its PostgreSQL connection string. The `vector` extension is available there. Create a Storage bucket named `workspace-documents`.
-2. **API: Render** (or any Docker host). Create a Blueprint from this repository; [`render.yaml`](render.yaml) builds `backend/Dockerfile`, generates `JWT_SECRET` and checks `/api/v1/health`. Set `DATABASE_URL`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. The container applies migrations on every start.
+2. **API: Render** (or any Docker host). Create a Blueprint from this repository; [`render.yaml`](render.yaml) builds `backend/Dockerfile`, generates `JWT_SECRET` and checks `/api/v1/health`. Set `DATABASE_URL`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. The API applies pending migrations itself whenever it connects to the database, and it starts even while the database is unreachable: data requests then get a 503, `/api/v1/health` reports `database.status: "unavailable"` with the reason, and the API reconnects every 30 s on its own.
 3. **Web app: Vercel.** Import the repository and set `BACKEND_API_URL` to the Render service URL. The browser only talks to the Vercel domain, so session cookies stay first-party.
 4. **Email (optional): Brevo.** Create a free Brevo account, verify one sender address and create an API key, then set `BREVO_API_KEY` and `EMAIL_FROM_ADDRESS` on Render. Render's free tier blocks outbound SMTP, which is why the API uses Brevo's HTTPS API there. Without these, sign-up works without verification and password reset is hidden.
+
+**If the app stops loading data**, open `/api/v1/health` on the API. `database.error: "project_not_found_or_paused"` means Supabase paused the free project after a week without activity: restore it from the Supabase dashboard and the API reconnects within a minute, with no redeploy. The [keep-awake workflow](.github/workflows/keep-awake.yml) runs a query every 10 minutes so this does not happen again, and a failed run is the early warning.
 
 The root [`Dockerfile`](Dockerfile) builds the web app as a standalone Node server if you prefer to host both services yourself.
 
