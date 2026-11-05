@@ -19,7 +19,18 @@ def test_database_errors_are_described_without_details():
     assert describe_db_error(ConnectionRefusedError("[Errno 111] Connection refused")) == "connection_refused"
     assert describe_db_error(OSError("[Errno -2] Name or service not known")) == "host_not_found"
     assert describe_db_error(asyncio.TimeoutError()) == "timeout"
-    assert describe_db_error(ValueError("something else")) == "ValueError"
+    assert describe_db_error(_PoolerError("(ENOTFOUND) tenant/user postgres.abcd1234 not found")) == (
+        "project_not_found_or_paused"
+    )
+    assert describe_db_error(_PoolerError("(EDBHANDLEREXITED) connection to database closed")) == (
+        "database_starting_or_restoring"
+    )
+    assert describe_db_error(_PoolerError("Max client connections reached")) == "too_many_connections"
+    # Unrecognised errors keep a short message, with user names and hosts masked
+    unknown = describe_db_error(_PoolerError('odd failure for user "postgres.abcd1234" at abcd1234.pooler.supabase.com'))
+    assert unknown.startswith("_PoolerError: odd failure")
+    assert "abcd1234" not in unknown
+    assert describe_db_error(ValueError()) == "ValueError"
 
 
 @pytest.fixture
