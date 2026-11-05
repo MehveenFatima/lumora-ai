@@ -9,12 +9,16 @@ logger = get_logger(__name__)
 # Global asyncpg connection pool if PostgreSQL is configured
 _pool = None
 _last_failure: float = 0.0
+# Short, secret-free reason for the last failed connection (shown by the health check)
+_last_error: Optional[str] = None
+# Result of applying migrations once the database was reached: None (not yet), "ok" or an error name
+_migration_state: Optional[str] = None
 # After a failed connection attempt, wait this long before trying again (keeps requests fast)
 RECONNECT_BACKOFF_SECONDS = 5.0
 
 
 async def get_db_pool():
-    global _pool, _last_failure
+    global _pool, _last_failure, _last_error
     if _pool is not None:
         try:
             if hasattr(_pool, "_loop") and _pool._loop.is_closed():
@@ -35,12 +39,16 @@ async def get_db_pool():
                 max_size=5,
                 timeout=30.0,
             )
+            _last_error = None
             logger.info("Connected to Supabase PostgreSQL database pool.")
         except Exception as e:
+            from backend.app.db.migrations_runner import describe_db_error
+
             _last_failure = time.monotonic()
+            _last_error = describe_db_error(e)
             _pool = None
             if settings.is_production:
-                logger.error(f"Database unavailable ({type(e).__name__}); requests will get 503 until it recovers.")
+                logger.error(f"Database unavailable ({_last_error}); requests will get 503 until it recovers.")
                 return _require_pool_in_production()
             logger.warning(
                 f"Could not connect to database pool ({e}). Operating in memory-backed mode."
@@ -61,6 +69,53 @@ def _require_pool_in_production():
             detail="The database is temporarily unavailable. Please try again in a moment.",
         )
     return None
+
+
+def database_state() -> Dict[str, Any]:
+    """What the health check reports about the database, without touching it."""
+    return {"last_error": _last_error, "migrations": _migration_state}
+
+
+async def run_migrations() -> bool:
+    """Applies pending migrations through the pool. A failure is logged and the API keeps serving."""
+    global _migration_state
+    pool = _pool
+    if pool is None:
+        return False
+    from backend.app.db.migrations_runner import apply_migrations
+
+    try:
+        async with pool.acquire() as conn:
+            total, done = await apply_migrations(conn)
+        _migration_state = "ok"
+        if done:
+            logger.info(f"Applied migrations: {', '.join(done)}")
+        logger.info(f"Database schema is up to date ({total} migrations).")
+        return True
+    except Exception as e:
+        _migration_state = type(e).__name__
+        logger.error(f"Could not apply database migrations ({type(e).__name__}: {e}).", exc_info=True)
+        return False
+
+
+async def keep_connecting(on_connect, interval: float = 30.0) -> None:
+    """
+    Background task started when the database was unreachable at start-up (for example a paused
+    free-tier project): keeps trying, and runs `on_connect` once it is reachable again.
+    """
+    global _last_failure
+    while True:
+        await asyncio.sleep(interval)
+        _last_failure = 0.0
+        try:
+            if await get_db_pool():
+                logger.info("Database reachable again.")
+                await on_connect()
+                return
+        except HTTPException:
+            pass
+        except Exception as e:  # never let the retry loop die
+            logger.warning(f"Database retry failed: {type(e).__name__}")
 
 
 async def connect_with_retry(attempts: int = 6) -> bool:
