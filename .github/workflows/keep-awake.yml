@@ -9,6 +9,8 @@ on:
   schedule:
     - cron: "*/10 * * * *"
   workflow_dispatch:
+  pull_request:
+    paths: [".github/workflows/keep-awake.yml"]
 
 permissions: {}
 
@@ -21,6 +23,14 @@ jobs:
         env:
           APP_URL: ${{ vars.APP_URL || 'https://lumora-ai-alpha.vercel.app' }}
         run: |
-          curl -fsS --max-time 100 --retry 2 --retry-delay 10 \
-            -o /dev/null -w "HTTP %{http_code} in %{time_total}s\n" \
-            "$APP_URL/api/v1/health?check_db=true"
+          for attempt in 1 2 3; do
+            code=$(curl -sS --max-time 100 -o health.json -w "%{http_code}" \
+              "$APP_URL/api/v1/health?check_db=true" || echo 000)
+            echo "Attempt $attempt: HTTP $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 10
+          done
+          # Show why (the database part of the health report holds no secrets, only a short reason)
+          db=$(python3 -c "import json; d=json.load(open('health.json')).get('database', {}); print(d.get('status'), d.get('error') or '')" 2>/dev/null || echo "no health report")
+          echo "::error title=API health check failed::HTTP $code, database: $db"
+          exit 1
