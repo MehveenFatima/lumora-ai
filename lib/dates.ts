@@ -28,3 +28,14 @@ export function formatLongDate(isoDate?: string | null): string {
 export function isPastDate(isoDate?: string | null): boolean {
   return Boolean(isoDate) && (isoDate as string) < localToday()
 }
+
+/** "Today", "Tomorrow", or "Wed 11 Nov" for a YYYY-MM-DD date. */
+export function relativeDayLabel(isoDate?: string | null): string {
+  if (!isoDate) return ''
+  const today = localToday()
+  if (isoDate === today) return 'Today'
+  if (isoDate === addDays(today, 1)) return 'Tomorrow'
+  const [y, m, d] = isoDate.split('-').map(Number)
+  if (!y || !m || !d) return isoDate
+  return new Date(y, m - 1, d).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
+}

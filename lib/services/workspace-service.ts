@@ -15,6 +15,9 @@ import {
   QuizResult,
   FlashcardDeck,
   StudyPlan,
+  StudyTask,
+  StudyTaskKind,
+  TodayPlan,
   LearningActivity,
   ActivityType,
   TutorMessage,
@@ -54,6 +57,61 @@ function formatActivityTimestamp(rawTs: any): string {
     return rawTs.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   }
   return 'Just now'
+}
+
+const TASK_TYPE_BY_ACTION: Record<string, StudyTask['type']> = {
+  quiz: 'quiz',
+  flashcards: 'flashcard',
+  tutor: 'tutor',
+  sources: 'reading',
+}
+
+function mapStudyTask(t: any, workspaceId: string): StudyTask {
+  return {
+    id: t.id,
+    workspaceId,
+    title: t.title,
+    description: t.description || '',
+    topicName: t.concept || t.tag || 'Study',
+    topic: t.topic ?? null,
+    estimatedMinutes: t.estimatedMinutes || 0,
+    priority: (t.priority || 'medium') as StudyTask['priority'],
+    kind: (t.kind || 'learn') as StudyTaskKind,
+    type: TASK_TYPE_BY_ACTION[t.action] || 'study',
+    href: t.href || `/dashboard/workspace/${workspaceId}/tutor`,
+    completed: Boolean(t.completed),
+    scheduledFor: (t.scheduledFor || 'today') as StudyTask['scheduledFor'],
+    scheduledDate: t.scheduledDate || '',
+    carriedOver: Boolean(t.carriedOver),
+    doneAhead: Boolean(t.doneAhead),
+  }
+}
+
+function mapStudyPlan(res: any, workspaceId: string): StudyPlan {
+  const wsId = res.workspace_id || workspaceId
+  const cov = res.coverage || {}
+  return {
+    workspaceId: wsId,
+    date: res.date || '',
+    dailyTargetMinutes: res.daily_target_minutes || 45,
+    todayCompletedMinutes: res.today_completed_minutes || 0,
+    todayPlannedMinutes: res.today_planned_minutes || 0,
+    weeklyTargetMinutes: res.weekly_target_minutes || (res.daily_target_minutes || 45) * 7,
+    weekCompletedMinutes: res.week_completed_minutes || 0,
+    neededDailyMinutes: res.needed_daily_minutes || res.daily_target_minutes || 45,
+    onTrack: res.on_track !== false,
+    expectedFinishDate: res.expected_finish_date ?? null,
+    coverage: {
+      totalConcepts: cov.total_concepts || 0,
+      mastered: cov.mastered || 0,
+      inProgress: cov.in_progress || 0,
+      notStarted: cov.not_started || 0,
+    },
+    targetDate: res.target_date ?? null,
+    daysRemaining: res.days_remaining ?? null,
+    targetPassed: Boolean(res.target_passed),
+    tasks: (res.tasks || []).map((t: any) => mapStudyTask(t, wsId)),
+  }
 }
 
 function toDeck(workspaceId: string, flashcards: any[]): FlashcardDeck {
@@ -153,15 +211,6 @@ export const workspaceService = {
     readinessCache[created.id] = []
     quizzesCache[created.id] = []
     flashcardDecksCache[created.id] = []
-
-    studyPlansCache[created.id] = {
-      workspaceId: created.id,
-      dailyTargetMinutes: data.dailyTargetMinutes || 45,
-      todayCompletedMinutes: 0,
-      weeklyTargetMinutes: (data.dailyTargetMinutes || 45) * 5,
-      weekCompletedMinutes: 0,
-      tasks: [],
-    }
 
     activitiesCache[created.id] = [
       {
@@ -611,73 +660,79 @@ export const workspaceService = {
   // 5. STUDY PLAN & ACTIVITY METHODS
   async getStudyPlan(workspaceId: string): Promise<StudyPlan | null> {
     if (!workspaceId) return null
-
     try {
       const res = await tutorApiClient.getStudyPlan(workspaceId)
       if (res && Array.isArray(res.tasks)) {
-        const mappedPlan: StudyPlan = {
-          workspaceId: res.workspace_id || workspaceId,
-          dailyTargetMinutes: res.daily_target_minutes || 45,
-          todayCompletedMinutes: res.today_completed_minutes || 0,
-          weeklyTargetMinutes: res.weekly_target_minutes || 225,
-          weekCompletedMinutes: res.week_completed_minutes || 0,
-          targetDate: res.target_date ?? null,
-          daysRemaining: res.days_remaining ?? null,
-          targetPassed: Boolean(res.target_passed),
-          tasks: res.tasks.map((t: any) => ({
-            id: t.id,
-            workspaceId: res.workspace_id || workspaceId,
-            title: t.title,
-            topicName: t.tag || 'Core Topic',
-            estimatedMinutes: t.estimatedMinutes || 20,
-            priority: (t.priority || 'medium') as 'high' | 'medium' | 'low',
-            type: (t.tag?.toLowerCase().includes('quiz')
-              ? 'quiz'
-              : t.tag?.toLowerCase().includes('flashcard')
-              ? 'flashcard'
-              : 'tutor') as any,
-            completed: Boolean(t.completed),
-            scheduledFor: (t.scheduledFor || 'today') as 'today' | 'this_week' | 'upcoming',
-          })),
-        }
-        studyPlansCache[workspaceId] = mappedPlan
-        return mappedPlan
+        studyPlansCache[workspaceId] = mapStudyPlan(res, workspaceId)
+        return studyPlansCache[workspaceId]
       }
     } catch (err) {
       console.warn(`Failed to fetch live study plan for '${workspaceId}':`, err)
     }
-
     return studyPlansCache[workspaceId] || null
   },
 
-  async toggleTaskCompletion(workspaceId: string, taskId: string): Promise<StudyPlan | null> {
-    const plan = studyPlansCache[workspaceId]
-    if (!plan) return null
-
-    const task = plan.tasks.find((t) => t.id === taskId)
-    if (task) {
-      task.completed = !task.completed
-      if (task.completed) {
-        plan.todayCompletedMinutes += task.estimatedMinutes
-        plan.weekCompletedMinutes += task.estimatedMinutes
-      } else {
-        plan.todayCompletedMinutes = Math.max(0, plan.todayCompletedMinutes - task.estimatedMinutes)
-        plan.weekCompletedMinutes = Math.max(0, plan.weekCompletedMinutes - task.estimatedMinutes)
-      }
-    }
-    return { ...plan }
-  },
-
+  /** Ticks a task off (or unticks it). Returns the updated plan, or null if the server refused. */
   async toggleStudyTask(workspaceId: string, taskId: string): Promise<StudyPlan | null> {
     try {
       const res = await tutorApiClient.toggleStudyTask(workspaceId, taskId)
-      if (res && res.tasks) {
-        return this.getStudyPlan(workspaceId)
+      if (res && Array.isArray(res.tasks)) {
+        studyPlansCache[workspaceId] = mapStudyPlan(res, workspaceId)
+        return studyPlansCache[workspaceId]
       }
     } catch (err) {
-      console.warn(`Failed to toggle backend study task for '${workspaceId}':`, err)
+      console.warn(`Failed to toggle study task for '${workspaceId}':`, err)
     }
-    return this.toggleTaskCompletion(workspaceId, taskId)
+    return null
+  },
+
+  /** Rebuilds today's list from the latest results (tasks already done today are kept). */
+  async planMoreForToday(workspaceId: string): Promise<StudyPlan | null> {
+    try {
+      const res = await tutorApiClient.planMoreForToday(workspaceId)
+      if (res && Array.isArray(res.tasks)) {
+        studyPlansCache[workspaceId] = mapStudyPlan(res, workspaceId)
+        return studyPlansCache[workspaceId]
+      }
+    } catch (err) {
+      console.warn(`Failed to rebuild today's plan for '${workspaceId}':`, err)
+    }
+    return null
+  },
+
+  /** Today's tasks across every workspace (dashboard). */
+  async getTodayPlan(): Promise<TodayPlan | null> {
+    try {
+      const res = await tutorApiClient.getTodayPlan()
+      if (!res || !Array.isArray(res.tasks)) return null
+      return {
+        date: res.date,
+        plannedMinutes: res.planned_minutes || 0,
+        completedMinutes: res.completed_minutes || 0,
+        dailyTargetMinutes: res.daily_target_minutes || 0,
+        openTasks: res.open_tasks || 0,
+        tasks: res.tasks.map((t: any) => ({
+          ...mapStudyTask(t, t.workspace_id),
+          workspaceName: t.workspace_name || 'Workspace',
+        })),
+        workspaces: (res.workspaces || []).map((w: any) => ({
+          workspaceId: w.workspace_id,
+          workspaceName: w.workspace_name || 'Workspace',
+          targetDate: w.target_date ?? null,
+          daysRemaining: w.days_remaining ?? null,
+          targetPassed: Boolean(w.target_passed),
+          dailyTargetMinutes: w.daily_target_minutes || 0,
+          todayCompletedMinutes: w.today_completed_minutes || 0,
+          todayPlannedMinutes: w.today_planned_minutes || 0,
+          openTasks: w.open_tasks || 0,
+          onTrack: w.on_track !== false,
+          neededDailyMinutes: w.needed_daily_minutes || 0,
+        })),
+      }
+    } catch (err) {
+      console.warn('Failed to fetch today\'s plan:', err)
+      return null
+    }
   },
 
   async getActivities(workspaceId?: string): Promise<LearningActivity[]> {

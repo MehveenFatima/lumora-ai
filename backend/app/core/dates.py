@@ -11,6 +11,7 @@ from typing import Any, Optional
 from fastapi import Request
 
 CLIENT_DATE_HEADER = "x-client-date"
+CLIENT_TZ_HEADER = "x-client-tz-offset"  # minutes east of UTC, e.g. 330 for India
 DEFAULT_TARGET_DAYS = 30
 
 
@@ -43,3 +44,16 @@ def default_target(today: date) -> date:
 
 def format_long(d: date) -> str:
     return f"{d.day} {d.strftime('%b %Y')}"
+
+
+def client_tz_offset(request: Optional[Request] = None, default: int = 330) -> int:
+    """The learner's UTC offset in minutes, sent by the web app; clamped to real time zones."""
+    if request is not None:
+        raw = request.headers.get(CLIENT_TZ_HEADER)
+        try:
+            value = int(str(raw).strip())
+            if -14 * 60 <= value <= 14 * 60:
+                return value
+        except (TypeError, ValueError):
+            pass
+    return default

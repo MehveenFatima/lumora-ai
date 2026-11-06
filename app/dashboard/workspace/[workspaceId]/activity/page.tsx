@@ -11,6 +11,7 @@ import {
   FileText,
   MessagesSquare,
   Filter,
+  CalendarCheck,
 } from 'lucide-react'
 import { workspaceService } from '@/lib/services/workspace-service'
 import {
@@ -62,6 +63,10 @@ export default function ActivityPage() {
         return <FileText className="size-4 text-chart-2" />
       case 'tutor_session':
         return <MessagesSquare className="size-4 text-primary" />
+      case 'study_task_completed':
+        return <CalendarCheck className="size-4 text-success" />
+      default:
+        return <Zap className="size-4 text-muted-foreground" />
     }
   }
 

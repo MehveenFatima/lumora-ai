@@ -25,7 +25,8 @@ import {
 } from 'lucide-react'
 import { workspaceService } from '@/lib/services/workspace-service'
 import { tutorApiClient } from '@/lib/api/tutor-api-client'
-import { Workspace, LearningActivity, NotificationItem, AIRecommendation } from '@/lib/types/domain'
+import { Workspace, LearningActivity, NotificationItem, AIRecommendation, TodayPlan, TodayPlanTask } from '@/lib/types/domain'
+import { TodayPlanPanel } from '@/components/study-plan/today-plan-panel'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { ThemeToggle } from '@/components/ui/theme-toggle'
@@ -43,6 +44,8 @@ export default function GlobalDashboardPage() {
   const [activities, setActivities] = useState<LearningActivity[]>([])
   const [notifications, setNotifications] = useState<NotificationItem[]>([])
   const [topRecommendation, setTopRecommendation] = useState<AIRecommendation | null>(null)
+  const [todayPlan, setTodayPlan] = useState<TodayPlan | null>(null)
+  const [busyTask, setBusyTask] = useState<string | null>(null)
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)
   const [toastMessage, setToastMessage] = useState<string | null>(null)
@@ -60,14 +63,16 @@ export default function GlobalDashboardPage() {
       if (!isBackendHealthy) {
         setBackendError('FastAPI backend service is unreachable.')
       }
-      const [ws, acts, notifs] = await Promise.all([
+      const [ws, acts, notifs, plan] = await Promise.all([
         workspaceService.getWorkspaces(),
         workspaceService.getActivities(),
         workspaceService.getNotifications(),
+        workspaceService.getTodayPlan(),
       ])
       setWorkspaces(ws)
       setActivities(acts)
       setNotifications(notifs)
+      setTodayPlan(plan)
       // Next-step banner: the BKT-based recommendation for the most recent workspace, if any
       setTopRecommendation(
         ws.length > 0 ? await workspaceService.getRecommendation(ws[0].id).catch(() => null) : null
@@ -83,6 +88,20 @@ export default function GlobalDashboardPage() {
   useEffect(() => {
     loadDashboard()
   }, [loadDashboard])
+
+  const handleToggleTask = async (task: TodayPlanTask) => {
+    const key = `${task.workspaceId}:${task.id}`
+    setBusyTask(key)
+    const updated = await workspaceService.toggleStudyTask(task.workspaceId, task.id)
+    const [plan, acts] = await Promise.all([workspaceService.getTodayPlan(), workspaceService.getActivities()])
+    setBusyTask(null)
+    if (plan) setTodayPlan(plan)
+    setActivities(acts)
+    if (!updated) showToast('That task could not be updated. The plan was refreshed.')
+  }
+
+  // Next step: the first open task of today's plan, otherwise the latest workspace's recommendation
+  const nextTask = todayPlan?.tasks.find((t) => !t.completed) || null
 
   const showToast = (msg: string) => {
     setToastMessage(msg)
@@ -297,25 +316,28 @@ export default function GlobalDashboardPage() {
                     <Sparkles className="size-3.5" />
                   </span>
                   <span className="text-xs font-bold uppercase tracking-wider text-primary">
-                    Top Recommended Next Step
+                    {nextTask ? 'Up next' : 'Top Recommended Next Step'}
                   </span>
                 </div>
                 <h2 className="font-display text-lg font-semibold text-foreground">
-                  {workspaces[0]?.name}
-                  {topRecommendation ? `: ${topRecommendation.title}` : ''}
+                  {nextTask
+                    ? `${nextTask.workspaceName}: ${nextTask.title}`
+                    : `${workspaces[0]?.name}${topRecommendation ? `: ${topRecommendation.title}` : ''}`}
                 </h2>
                 <p className="text-xs text-muted-foreground max-w-2xl">
-                  {topRecommendation
-                    ? topRecommendation.rationale
-                    : 'Ask the AI tutor about your sources or take an adaptive quiz to start building your mastery profile.'}
+                  {nextTask
+                    ? `${nextTask.description} About ${nextTask.estimatedMinutes} minutes.`
+                    : topRecommendation
+                      ? topRecommendation.rationale
+                      : 'Ask the AI tutor about your sources or take an adaptive quiz to start building your mastery profile.'}
                 </p>
               </div>
 
               <Link
-                href={`/dashboard/workspace/${workspaces[0]?.id}`}
+                href={nextTask ? nextTask.href : `/dashboard/workspace/${workspaces[0]?.id}`}
                 className="inline-flex shrink-0 items-center justify-center gap-2 rounded-2xl bg-primary px-6 py-3 text-xs font-semibold text-primary-foreground shadow-glow transition-opacity hover:opacity-90"
               >
-                <span>Enter Workspace</span>
+                <span>{nextTask ? 'Start now' : 'Enter Workspace'}</span>
                 <ArrowRight className="size-4" />
               </Link>
             </div>
@@ -392,6 +414,11 @@ export default function GlobalDashboardPage() {
             </button>
           </div>
         </section>
+
+        {/* Today's plan across all workspaces */}
+        {workspaces.length > 0 && (
+          <TodayPlanPanel plan={todayPlan} onToggle={handleToggleTask} busyTask={busyTask} />
+        )}
 
         {/* Global Recent Activity */}
         <section className="rounded-3xl border border-border bg-card p-6 shadow-soft space-y-4">

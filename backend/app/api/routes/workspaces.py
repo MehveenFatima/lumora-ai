@@ -154,6 +154,11 @@ async def update_workspace(
     updated = await workspace_repo.update_settings(workspace_id, payload.model_dump(exclude_none=True))
     if not updated:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Workspace '{workspace_id}' not found.")
+    if payload.target_date is not None or payload.daily_target_minutes is not None:
+        # The day's plan depends on these: rebuild today's list (tasks already done stay done)
+        from backend.app.services.study_plan_service import study_plan_service
+
+        await study_plan_service.invalidate_today(workspace_id)
     docs = await document_repo.list_by_workspace(workspace_id)
     return _to_response(updated, len(docs))
 

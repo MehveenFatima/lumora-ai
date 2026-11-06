@@ -197,6 +197,8 @@ async function apiFetch(path: string, options: RequestInit = {}): Promise<Respon
   if (isBrowser) {
     // The learner's local date, so date rules (e.g. target completion dates) follow their calendar
     headers.set('X-Client-Date', localToday())
+    // Minutes east of UTC (330 for India), for "today" in the study plan and reminder times
+    headers.set('X-Client-Tz-Offset', String(-new Date().getTimezoneOffset()))
   }
   const fetchOptions: RequestInit = {
     ...options,
@@ -785,9 +787,24 @@ export const tutorApiClient = {
   },
 
   async toggleStudyTask(workspaceId: string, taskId: string): Promise<any> {
-    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/study-plan/tasks/${taskId}/toggle`, {
-      method: 'POST',
-    })
+    const response = await apiFetch(
+      `/api/v1/workspaces/${workspaceId}/study-plan/tasks/${encodeURIComponent(taskId)}/toggle`,
+      { method: 'POST' },
+    )
+    if (!response.ok) return null
+    return response.json()
+  },
+
+  /** Rebuilds today's list from the latest results; tasks already done today are kept. */
+  async planMoreForToday(workspaceId: string): Promise<any> {
+    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/study-plan/generate`, { method: 'POST' })
+    if (!response.ok) return null
+    return response.json()
+  },
+
+  /** Today's tasks across all of the user's workspaces (dashboard). */
+  async getTodayPlan(): Promise<any> {
+    const response = await apiFetch('/api/v1/study-plan/today')
     if (!response.ok) return null
     return response.json()
   },
