@@ -115,6 +115,11 @@ class Settings(BaseSettings):
     # auto = required whenever an email provider is configured; true/false force it
     email_verification: str = Field(default="auto", validation_alias="EMAIL_VERIFICATION")
     email_code_ttl_minutes: int = Field(default=10, validation_alias="EMAIL_CODE_TTL_MINUTES")
+    # Daily study reminder emails: a scheduler (the GitHub Actions workflow) calls
+    # POST /api/v1/reminders/run with this secret every hour; each learner gets one email a day,
+    # from REMINDER_HOUR in their own time zone.
+    cron_secret: Optional[str] = Field(default=None, validation_alias="CRON_SECRET")
+    reminder_hour: int = Field(default=7, ge=0, le=20, validation_alias="REMINDER_HOUR")
     # Public URL of the web app, used for links inside emails
     app_base_url: Optional[str] = Field(default=None, validation_alias="APP_BASE_URL")
 

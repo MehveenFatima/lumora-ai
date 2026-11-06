@@ -7,6 +7,10 @@ export interface AuthUser {
   email: string
   name: string
   created_at?: string | null
+  /** Daily study reminder email */
+  email_reminders?: boolean
+  /** False when the server has no email provider, so reminders can't be sent */
+  reminders_available?: boolean
 }
 
 export class AuthError extends Error {
@@ -141,6 +145,15 @@ export const authClient = {
 
   async updateProfile(name: string): Promise<AuthUser> {
     const user = await authRequest<AuthUser>('/me', { method: 'PATCH', body: JSON.stringify({ name }) })
+    setCachedUser(user)
+    return user
+  },
+
+  async setEmailReminders(enabled: boolean): Promise<AuthUser> {
+    const user = await authRequest<AuthUser>('/me', {
+      method: 'PATCH',
+      body: JSON.stringify({ email_reminders: enabled }),
+    })
     setCachedUser(user)
     return user
   },

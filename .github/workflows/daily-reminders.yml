@@ -1,0 +1,38 @@
+# Sends the daily study reminder emails. Runs every hour; the API emails each learner once a day,
+# from REMINDER_HOUR (default 7 am) in their own time zone, and only when they have tasks planned.
+#
+# Setup: put the same random value in the repository secret CRON_SECRET (Settings → Secrets and
+# variables → Actions) and in the API's CRON_SECRET environment variable on Render.
+# Until CRON_SECRET is set this workflow does nothing.
+name: Daily reminders
+
+on:
+  schedule:
+    - cron: "5 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Send due reminders
+        env:
+          APP_URL: ${{ vars.APP_URL || 'https://lumora-ai-alpha.vercel.app' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::notice::CRON_SECRET is not set, so reminder emails are off."
+            exit 0
+          fi
+          for attempt in 1 2 3; do
+            code=$(curl -sS --max-time 240 -o result.json -w "%{http_code}" -X POST \
+              -H "X-Cron-Secret: $CRON_SECRET" "$APP_URL/api/v1/reminders/run" || echo 000)
+            echo "Attempt $attempt: HTTP $code $(cat result.json 2>/dev/null)"
+            [ "$code" = "200" ] && exit 0
+            sleep 20
+          done
+          echo "::error title=Reminder run failed::HTTP $code"
+          exit 1

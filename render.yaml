@@ -41,3 +41,7 @@ services:
         sync: false
       - key: EMAIL_FROM_NAME
         value: LumoraAI
+      # Daily study reminder emails: the same random value as the GitHub repository secret
+      # CRON_SECRET (the "Daily reminders" workflow calls the API hourly). Empty = reminders off.
+      - key: CRON_SECRET
+        sync: false
