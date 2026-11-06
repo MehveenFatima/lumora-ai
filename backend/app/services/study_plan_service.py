@@ -108,6 +108,14 @@ class StudyPlanService:
         from backend.app.services.concept_map import concept_map_service
 
         if concept_map_service.ai_available():
+            # Make sure the background job is running (it may have been cut off by a restart);
+            # it does nothing if it is already running or finished moments ago
+            from backend.app.repositories.documents import document_repo
+            from backend.app.services.study_prep import study_prep_service
+
+            docs = await document_repo.list_by_workspace(workspace_id)
+            if any(d.get("status") == "ready" for d in docs):
+                study_prep_service.schedule(workspace_id)
             return []
         try:
             return await concept_map_service.ensure_workspace(workspace_id)

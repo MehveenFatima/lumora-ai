@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 from backend.app.repositories.chunks import chunk_repo
 from backend.app.repositories.documents import document_repo
 from backend.app.repositories.workspaces import workspace_repo
-from backend.app.repositories.secondary import flashcard_repo, study_plan_repo, activity_repo
+from backend.app.repositories.secondary import flashcard_repo, activity_repo
 from backend.app.repositories.bkt import bkt_repo
 from backend.app.services.knowledge_gap_engine import knowledge_gap_engine
 from backend.app.core.dates import client_today, parse_date

@@ -14,7 +14,6 @@ from backend.app.repositories.bkt import bkt_repo
 from backend.app.repositories.concepts import concept_repo
 from backend.app.repositories.workspaces import workspace_repo
 from backend.app.services import study_planner as planner
-from backend.app.services.study_plan_service import study_plan_service
 
 TODAY = date(2026, 11, 9)  # a Monday
 NOW = datetime(2026, 11, 9, 4, 0, tzinfo=timezone.utc)

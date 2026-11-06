@@ -12,7 +12,10 @@ Apply them **in order**; each file is idempotent (`CREATE ... IF NOT EXISTS`).
 | `005_question_quality_and_anti_leakage_schema.sql` | `quality_score` and `question_type` on `quiz_questions` |
 | `006_secondary_presentation_features.sql` | `flashcards`, `study_plans`, `activity_events` |
 | `007_workspace_question_bank.sql` | `workspace_question_bank` (validated questions served by the adaptive quiz) |
+| `008`–`010` | users and workspace ownership, flashcard review scheduling, email codes and notifications |
 | `011_concept_map_and_quality_bank.sql` | `workspace_concepts` (topic map per document); concept, embedding and generator columns on `workspace_question_bank` and `flashcards`; retires template-generated bank questions |
+| `012_dated_study_plan_and_reminders.sql` | dated completions and today's frozen list on `study_plans`; time zone and reminder settings on `users`; `resume_count` on `documents` |
+| `013_fitted_bkt_parameters.sql` | `bkt_parameters` (BKT values fitted from quiz answers) |
 
 ## Supabase
 

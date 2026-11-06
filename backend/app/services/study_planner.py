@@ -20,7 +20,6 @@ This module is pure (no I/O) so the scheduling rules can be tested directly.
 from __future__ import annotations
 
 import hashlib
-import math
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Tuple

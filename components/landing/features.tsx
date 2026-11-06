@@ -38,8 +38,8 @@ const features = [
   },
   {
     icon: Map,
-    title: 'Self-Adapting Roadmaps',
-    desc: 'A roadmap built from your topic mastery that highlights weak concepts to revisit before moving on.',
+    title: 'Day-by-Day Study Plan',
+    desc: 'Every topic in your notes planned day by day until your target date, weak spots first, re-planned after every quiz, with a morning reminder email.',
     tag: 'Dynamic Planning',
   },
   {

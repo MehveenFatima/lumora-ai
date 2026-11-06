@@ -9,7 +9,7 @@ import pytest
 
 from backend.app.core.config import settings
 from backend.app.repositories.concepts import concept_repo
-from backend.app.repositories.users import _memory_users, user_repo
+from backend.app.repositories.users import user_repo
 from backend.app.repositories.workspaces import workspace_repo
 from backend.app.services import reminder_service
 from backend.app.services.email_service import email_service
