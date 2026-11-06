@@ -15,7 +15,8 @@ def setup_logging(level: int = logging.INFO) -> None:
     )
     # Silence overly verbose external libraries
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
-    logging.getLogger("google.generativeai").setLevel(logging.WARNING)
+    logging.getLogger("google_genai").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("asyncpg").setLevel(logging.WARNING)
 
 

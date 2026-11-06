@@ -91,8 +91,9 @@ class GeminiProvider(BaseAIProvider):
             )
         if not self._configured:
             try:
-                import google.generativeai as genai
-                genai.configure(api_key=self._api_key)
+                from backend.app.ai.genai_client import get_client
+
+                get_client(self._api_key)
                 self._configured = True
             except Exception as e:
                 sanitized_msg = sanitize_text(str(e), self._known_secrets)
@@ -133,41 +134,29 @@ class GeminiProvider(BaseAIProvider):
         start_time = time.time()
 
         try:
-            import google.generativeai as genai
-
-            # Build generation config with validated Gemini 3.8 parameters
-            gen_config: Dict[str, Any] = {}
-            if request.temperature is not None:
-                gen_config["temperature"] = float(request.temperature)
-            if request.max_tokens is not None:
-                gen_config["max_output_tokens"] = int(request.max_tokens)
+            from backend.app.ai.genai_client import generate_content
 
             model_name = self._model_for(request)
-            model = genai.GenerativeModel(
-                model_name=model_name,
-                system_instruction=request.system_prompt if request.system_prompt else None,
-                generation_config=gen_config or None,
+            # Run the blocking SDK call off the event loop so other requests keep being served
+            text = await asyncio.to_thread(
+                generate_content,
+                self._api_key,
+                model_name,
+                request.prompt,
+                system_instruction=request.system_prompt or None,
+                temperature=request.temperature,
+                max_output_tokens=request.max_tokens,
+                images=request.images or None,
             )
 
-            # Multimodal support: image bytes + text prompt
-            if request.images and len(request.images) > 0:
-                contents: List[Any] = [request.prompt]
-                for img_bytes in request.images:
-                    contents.append({"mime_type": "image/png", "data": img_bytes})
-            else:
-                contents = request.prompt
-
-            # Run the blocking SDK call off the event loop so other requests keep being served
-            response = await asyncio.to_thread(model.generate_content, contents)
-
-            if not response or not hasattr(response, "text") or not response.text:
+            if not text:
                 raise ProviderUnavailableError("Gemini returned empty text response.", provider=self.provider_name)
 
             latency_ms = round((time.time() - start_time) * 1000, 2)
             self.mark_success()
 
             return AIResponse(
-                content=response.text.strip(),
+                content=text,
                 structured_data=None,
                 provider=self.provider_name,
                 model=model_name,
@@ -184,41 +173,28 @@ class GeminiProvider(BaseAIProvider):
         start_time = time.time()
 
         try:
-            import google.generativeai as genai
-
-            gen_config: Dict[str, Any] = {
-                "response_mime_type": "application/json"
-            }
-            if request.temperature is not None:
-                gen_config["temperature"] = float(request.temperature)
-            if request.max_tokens is not None:
-                gen_config["max_output_tokens"] = int(request.max_tokens)
+            from backend.app.ai.genai_client import generate_content
 
             model_name = self._model_for(request)
-            model = genai.GenerativeModel(
-                model_name=model_name,
-                system_instruction=request.system_prompt if request.system_prompt else None,
-                generation_config=gen_config,
-            )
-
             prompt = request.prompt
             if request.schema_definition:
                 prompt += f"\n\nOutput MUST strictly conform to this JSON schema:\n{json.dumps(request.schema_definition)}"
 
-            if request.images and len(request.images) > 0:
-                contents: List[Any] = [prompt]
-                for img_bytes in request.images:
-                    contents.append({"mime_type": "image/png", "data": img_bytes})
-            else:
-                contents = prompt
-
             # Run the blocking SDK call off the event loop so other requests keep being served
-            response = await asyncio.to_thread(model.generate_content, contents)
-
-            if not response or not hasattr(response, "text") or not response.text:
+            raw_text = await asyncio.to_thread(
+                generate_content,
+                self._api_key,
+                model_name,
+                prompt,
+                system_instruction=request.system_prompt or None,
+                temperature=request.temperature,
+                max_output_tokens=request.max_tokens,
+                json_output=True,
+                images=request.images or None,
+            )
+            if not raw_text:
                 raise ProviderUnavailableError("Gemini returned empty structured response.", provider=self.provider_name)
 
-            raw_text = response.text.strip()
             # Clean possible markdown fence blocks
             if raw_text.startswith("```"):
                 raw_text = re.sub(r"^```(?:json)?\n?", "", raw_text)

@@ -440,8 +440,9 @@ class TutorService:
         if not key:
             return False
         try:
-            import google.generativeai as genai
-            genai.configure(api_key=key)
+            from backend.app.ai.genai_client import get_client
+
+            get_client(key)
             self._gemini_configured = True
             return True
         except Exception as e:
