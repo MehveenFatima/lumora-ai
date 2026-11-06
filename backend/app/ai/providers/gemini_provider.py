@@ -21,6 +21,9 @@ from backend.app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Cooldown after Gemini reports it is overloaded (shorter than for a quota 429)
+OVERLOAD_COOLDOWN_SECONDS = 20.0
+
 
 class GeminiProvider(BaseAIProvider):
     """
@@ -121,8 +124,14 @@ class GeminiProvider(BaseAIProvider):
             self.mark_failure(sanitized_msg)
             return AuthenticationError(f"Gemini authentication failed: {sanitized_msg}", provider=self.provider_name)
 
-        # 4. Service Unavailable / Internal error
-        if any(w in lower_err for w in ["500", "503", "unavailable", "internal", "connection error"]):
+        # 4. Overloaded ("high demand", 503) after the SDK's own retries: a short cooldown, so the
+        # gateway sends the next calls to the secondary provider and comes back to Gemini soon
+        if any(w in lower_err for w in ["503", "unavailable", "high demand", "overloaded"]):
+            self.mark_rate_limited(cooldown_seconds=OVERLOAD_COOLDOWN_SECONDS, error=sanitized_msg)
+            return ProviderUnavailableError(f"Gemini is temporarily overloaded: {sanitized_msg}", provider=self.provider_name)
+
+        # 5. Internal error
+        if any(w in lower_err for w in ["500", "internal", "connection error"]):
             self.mark_failure(sanitized_msg)
             return ProviderUnavailableError(f"Gemini service unavailable: {sanitized_msg}", provider=self.provider_name)
 
