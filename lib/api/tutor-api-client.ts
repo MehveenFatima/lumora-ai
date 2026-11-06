@@ -89,6 +89,7 @@ function mapDocument(doc: any): WorkspaceDocument {
     uploadedAt: doc.created_at ? doc.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
     summary: doc.summary,
     errorMessage: doc.error_message || undefined,
+    canRetry: Boolean(doc.can_retry),
   }
 }
 
@@ -501,6 +502,16 @@ export const tutorApiClient = {
     } catch {
       return []
     }
+  },
+
+  /** Processes a failed file again from its stored original. Throws with the API's message. */
+  async retryDocument(documentId: string): Promise<WorkspaceDocument> {
+    const response = await apiFetch(`/api/v1/documents/${documentId}/retry`, { method: 'POST' })
+    const body = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new Error(typeof body?.detail === 'string' ? body.detail : 'This file could not be retried.')
+    }
+    return mapDocument(body)
   },
 
   async deleteDocument(documentId: string): Promise<boolean> {

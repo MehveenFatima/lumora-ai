@@ -37,16 +37,24 @@ async def lifespan(app: FastAPI):
         if not settings.database_url:
             logger.warning("ENVIRONMENT=production without DATABASE_URL: data will not survive a restart.")
 
+    background_tasks = []
+
     async def on_database_ready():
         await run_migrations()
-        from backend.app.api.routes.documents import mark_interrupted_documents
+        from backend.app.api.routes.documents import resume_stalled_documents, watch_stalled_documents
 
         try:
-            interrupted = await mark_interrupted_documents()
-            if interrupted:
-                logger.warning(f"Marked {interrupted} interrupted document upload(s) as failed.")
+            result = await resume_stalled_documents()
+            if result["resumed"] or result["failed"]:
+                logger.warning(
+                    f"Interrupted uploads: {result['resumed']} resumed, {result['failed']} marked failed."
+                )
         except Exception as e:
             logger.warning(f"Could not check for interrupted uploads: {e}")
+        if not any(getattr(t, "_lumora_name", "") == "stalled-uploads" for t in background_tasks):
+            task = asyncio.create_task(watch_stalled_documents())
+            task._lumora_name = "stalled-uploads"
+            background_tasks.append(task)
 
     # Start serving even when the database is unreachable (e.g. a paused free-tier project):
     # data requests get a clear 503 and the API reconnects and migrates on its own once it is back.
@@ -61,6 +69,8 @@ async def lifespan(app: FastAPI):
     logger.info(f"Shutting down {settings.app_name}...")
     if reconnect_task:
         reconnect_task.cancel()
+    for task in background_tasks:
+        task.cancel()
     await close_db_pool()
 
 

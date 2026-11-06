@@ -54,6 +54,8 @@ export interface WorkspaceDocument {
   uploadedAt: string
   summary?: string
   errorMessage?: string
+  /** A failed file whose original is still stored can be processed again */
+  canRetry?: boolean
   chunks?: DocumentChunk[]
 }
 

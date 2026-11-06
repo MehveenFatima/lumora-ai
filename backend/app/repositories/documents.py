@@ -171,6 +171,20 @@ class DocumentRepository:
             return doc
         return None
 
+    async def clear_storage_path(self, document_id: str) -> None:
+        """Forgets the stored original (after it was deleted)."""
+        pool = await get_db_pool()
+        if pool:
+            try:
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE documents SET storage_path = NULL WHERE id = $1", uuid.UUID(str(document_id))
+                    )
+            except Exception as e:
+                logger.warning(f"Could not clear the storage path of document {document_id}: {e}")
+        if document_id in _memory_documents:
+            _memory_documents[document_id]["storage_path"] = None
+
     async def delete(self, document_id: str) -> bool:
         pool = await get_db_pool()
         if pool:

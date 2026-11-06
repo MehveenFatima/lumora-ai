@@ -20,6 +20,7 @@ import {
   Trash2,
   Eye,
   Download,
+  RotateCcw,
 } from 'lucide-react'
 import { workspaceService } from '@/lib/services/workspace-service'
 import { tutorApiClient } from '@/lib/api/tutor-api-client'
@@ -83,6 +84,21 @@ export default function SourcesPage() {
     setTimeout(() => {
       setToastMessage(null)
     }, 3000)
+  }
+
+  const [retrying, setRetrying] = useState<string | null>(null)
+  const handleRetry = async (doc: WorkspaceDocument) => {
+    setRetrying(doc.id)
+    try {
+      const updated = await tutorApiClient.retryDocument(doc.id)
+      setDocuments((prev) => prev.map((d) => (d.id === doc.id ? updated : d)))
+      setSelectedDoc((sel) => (sel && sel.id === doc.id ? updated : sel))
+      showToast(`Processing ${doc.filename} again.`)
+    } catch (e: any) {
+      showToast(e?.message || 'This file could not be retried.')
+    } finally {
+      setRetrying(null)
+    }
   }
 
   const handleSourceAdded = (newDoc: WorkspaceDocument) => {
@@ -224,6 +240,21 @@ export default function SourcesPage() {
                             : doc.summary}
                       </p>
                     </div>
+
+                    {doc.status === 'failed' && doc.canRetry ? (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleRetry(doc)
+                        }}
+                        disabled={retrying === doc.id}
+                        className="mt-3 inline-flex items-center justify-center gap-1.5 rounded-xl bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary transition-colors hover:bg-primary/20 disabled:opacity-60"
+                      >
+                        {retrying === doc.id ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCcw className="size-3.5" />}
+                        Retry
+                      </button>
+                    ) : null}
 
                     <div className="mt-4 border-t border-border/70 pt-3 flex items-center justify-between text-[11px] text-muted-foreground">
                       <span>{doc.pagesCount} pages / slides</span>
