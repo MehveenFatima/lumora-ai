@@ -83,3 +83,12 @@ async def create_activity(
         timestamp=request.timestamp,
     )
     return ActivityItem(**item)
+
+
+@router.get("/learner-model")
+async def get_learner_model(user: CurrentUser = Depends(get_current_user)) -> dict:
+    """The BKT parameters in use: the defaults, or values fitted from learners' quiz answers."""
+    from backend.app.services.bkt_fitting import MIN_ATTEMPTS, current_model
+
+    model = current_model()
+    return {**model, "min_attempts_to_fit": MIN_ATTEMPTS}

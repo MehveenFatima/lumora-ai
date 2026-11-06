@@ -54,6 +54,8 @@ export interface WorkspaceDocument {
   uploadedAt: string
   summary?: string
   errorMessage?: string
+  /** A failed file whose original is still stored can be processed again */
+  canRetry?: boolean
   chunks?: DocumentChunk[]
 }
 
@@ -232,24 +234,55 @@ export interface FlashcardDeck {
   cards: Flashcard[]
 }
 
+export type StudyTaskKind = 'learn' | 'practice' | 'review' | 'flashcards' | 'final' | 'setup'
+
 export interface StudyTask {
   id: string
   workspaceId: string
   title: string
+  description: string
+  /** Concept the task is about (or a label such as "Flashcards") */
   topicName: string
+  /** Topic-map topic the concept belongs to */
+  topic?: string | null
   estimatedMinutes: number
   priority: 'high' | 'medium' | 'low'
+  kind: StudyTaskKind
   type: 'quiz' | 'tutor' | 'flashcard' | 'reading' | 'study'
+  /** Page that opens the task (tutor with a ready question, quiz, flashcards, sources) */
+  href: string
   completed: boolean
   scheduledFor: 'today' | 'this_week' | 'upcoming'
+  /** YYYY-MM-DD */
+  scheduledDate: string
+  /** Planned for an earlier day and not done then */
+  carriedOver?: boolean
+  /** Done before the day it was planned for */
+  doneAhead?: boolean
+}
+
+export interface StudyPlanCoverage {
+  totalConcepts: number
+  mastered: number
+  inProgress: number
+  notStarted: number
 }
 
 export interface StudyPlan {
   workspaceId: string
+  /** The learner's date the plan was built for (YYYY-MM-DD) */
+  date: string
   dailyTargetMinutes: number
   todayCompletedMinutes: number
+  todayPlannedMinutes: number
   weeklyTargetMinutes: number
   weekCompletedMinutes: number
+  /** Minutes a day needed to cover everything by the target date */
+  neededDailyMinutes: number
+  onTrack: boolean
+  /** Day the last concept task is planned for */
+  expectedFinishDate?: string | null
+  coverage: StudyPlanCoverage
   tasks: StudyTask[]
   /** Target completion date (YYYY-MM-DD) */
   targetDate?: string | null
@@ -259,6 +292,34 @@ export interface StudyPlan {
   targetPassed?: boolean
 }
 
+export interface TodayPlanTask extends StudyTask {
+  workspaceName: string
+}
+
+export interface TodayPlanWorkspace {
+  workspaceId: string
+  workspaceName: string
+  targetDate?: string | null
+  daysRemaining?: number | null
+  targetPassed: boolean
+  dailyTargetMinutes: number
+  todayCompletedMinutes: number
+  todayPlannedMinutes: number
+  openTasks: number
+  onTrack: boolean
+  neededDailyMinutes: number
+}
+
+export interface TodayPlan {
+  date: string
+  plannedMinutes: number
+  completedMinutes: number
+  dailyTargetMinutes: number
+  openTasks: number
+  tasks: TodayPlanTask[]
+  workspaces: TodayPlanWorkspace[]
+}
+
 export type ActivityType =
   | 'quiz_completed'
   | 'flashcard_review'
@@ -266,6 +327,7 @@ export type ActivityType =
   | 'roadmap_adapted'
   | 'source_added'
   | 'tutor_session'
+  | 'study_task_completed'
 
 export interface LearningActivity {
   id: string

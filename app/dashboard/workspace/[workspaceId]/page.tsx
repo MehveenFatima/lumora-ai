@@ -24,6 +24,7 @@ import {
   X,
   Upload,
 } from 'lucide-react'
+import { StudyTaskRow } from '@/components/study-plan/study-task-row'
 import { workspaceService } from '@/lib/services/workspace-service'
 import {
   Workspace,
@@ -617,45 +618,26 @@ export default function WorkspaceLandingPage() {
                       Set a new target date →
                     </Link>
                   </div>
-                ) : (studyPlan.tasks || []).length === 0 ? (
+                ) : (studyPlan.tasks || []).filter((t) => t.scheduledFor === 'today').length === 0 ? (
                   <p className="py-4 text-center text-xs text-muted-foreground italic">
-                    No scheduled tasks yet for today.
+                    Nothing planned for today.
                   </p>
                 ) : (
-                  (studyPlan.tasks || []).slice(0, 4).map((task) => (
-                    <div
-                      key={task.id}
-                      className={cn(
-                        'flex items-start gap-2.5 rounded-2xl border p-3 text-xs transition-colors',
-                        task.completed ? 'border-border/60 bg-background/30 opacity-70' : 'border-border bg-background'
-                      )}
-                    >
-                      <button
-                        onClick={async () => {
-                          await workspaceService.toggleStudyTask(workspace.id, task.id)
-                          const updated = await workspaceService.getStudyPlan(workspace.id)
-                          setStudyPlan(updated)
+                  (studyPlan.tasks || [])
+                    .filter((t) => t.scheduledFor === 'today')
+                    .sort((a, b) => Number(a.completed) - Number(b.completed))
+                    .slice(0, 4)
+                    .map((task) => (
+                      <StudyTaskRow
+                        key={task.id}
+                        task={task}
+                        compact
+                        onToggle={async (t) => {
+                          const updated = await workspaceService.toggleStudyTask(workspace.id, t.id)
+                          if (updated) setStudyPlan(updated)
                         }}
-                        className="mt-0.5"
-                      >
-                        {task.completed ? (
-                          <CheckCircle2 className="size-4 text-success" />
-                        ) : (
-                          <div className="size-4 rounded-md border border-border bg-card" />
-                        )}
-                      </button>
-                      <div className="min-w-0 flex-1">
-                        <p className={cn('font-medium text-foreground', task.completed && 'line-through text-muted-foreground')}>
-                          {task.title}
-                        </p>
-                        <div className="mt-1 flex items-center gap-2 text-[10px] text-muted-foreground">
-                          <span>{task.estimatedMinutes} mins</span>
-                          <span>•</span>
-                          <span className="capitalize">{task.type}</span>
-                        </div>
-                      </div>
-                    </div>
-                  ))
+                      />
+                    ))
                 )}
               </div>
 

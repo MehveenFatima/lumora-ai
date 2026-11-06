@@ -211,7 +211,8 @@ def heuristic_concepts(chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     doc_topic = None
     if chunks:
         name = str(chunks[0].get("document_name") or "")
-        doc_topic = re.sub(r"\.(pdf|docx?|pptx?|txt)$", "", name, flags=re.IGNORECASE).strip()[:60] or None
+        stem = re.sub(r"\.(pdf|docx?|pptx?|txt)$", "", name, flags=re.IGNORECASE)
+        doc_topic = re.sub(r"[_\s]+", " ", stem).strip()[:60] or None
 
     concepts = []
     for key in order:

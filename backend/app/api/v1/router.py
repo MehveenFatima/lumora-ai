@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from backend.app.api.routes import auth, health, documents, tutor, workspaces, quizzes, mastery, flashcards, study_plans, activities, notifications, search
+from backend.app.api.routes import auth, health, documents, tutor, workspaces, quizzes, mastery, flashcards, study_plans, activities, notifications, search, reminders
 
 api_router = APIRouter()
 
@@ -15,3 +15,4 @@ api_router.include_router(study_plans.router)
 api_router.include_router(activities.router)
 api_router.include_router(notifications.router)
 api_router.include_router(search.router)
+api_router.include_router(reminders.router)

@@ -48,11 +48,11 @@ async def test_offline_mode_tags_vectors_and_is_deterministic():
 async def test_gemini_embeddings_are_batched_and_normalized(gemini_configured):
     calls = []
 
-    def fake_embed_content(model, content, task_type, output_dimensionality):
+    def fake_embed_content(model, content, task_type, output_dimensionality=None, api_key=None):
         calls.append(len(content))
         return {"embedding": [[3.0] + [4.0] + [0.0] * 3070 for _ in content]}
 
-    with patch("google.generativeai.embed_content", side_effect=fake_embed_content):
+    with patch("backend.app.ai.genai_client.embed_content", side_effect=fake_embed_content):
         vectors, tag = await embedding_service.embed_documents([f"chunk {i}" for i in range(250)])
 
     assert tag == "gemini-embedding-001"
@@ -63,7 +63,7 @@ async def test_gemini_embeddings_are_batched_and_normalized(gemini_configured):
 
 @pytest.mark.asyncio
 async def test_gemini_failure_raises_instead_of_storing_offline_vectors(gemini_configured):
-    with patch("google.generativeai.embed_content", side_effect=Exception("HTTP 429 quota exceeded")), patch(
+    with patch("backend.app.ai.genai_client.embed_content", side_effect=Exception("HTTP 429 quota exceeded")), patch(
         "backend.app.services.embeddings.asyncio.sleep", side_effect=_no_sleep
     ):
         with pytest.raises(EmbeddingUnavailableError):
@@ -72,7 +72,7 @@ async def test_gemini_failure_raises_instead_of_storing_offline_vectors(gemini_c
 
 @pytest.mark.asyncio
 async def test_query_for_unavailable_space_returns_none(gemini_configured):
-    with patch("google.generativeai.embed_content", side_effect=Exception("HTTP 429 quota exceeded")):
+    with patch("backend.app.ai.genai_client.embed_content", side_effect=Exception("HTTP 429 quota exceeded")):
         assert await embedding_service.embed_query_for("what is paging", "gemini-embedding-001") is None
     # An unknown model space can never be produced
     assert await embedding_service.embed_query_for("what is paging", "some-other-model") is None
@@ -101,14 +101,14 @@ async def test_offline_seeded_chunks_still_retrieved_when_gemini_is_configured(g
     def gemini_must_not_be_used(*_a, **_k):
         raise AssertionError("Gemini should not be called for an offline-embedded workspace")
 
-    with patch("google.generativeai.embed_content", side_effect=gemini_must_not_be_used):
+    with patch("backend.app.ai.genai_client.embed_content", side_effect=gemini_must_not_be_used):
         results = await retrieval_service._vector_search(ws_id, "How do page tables translate virtual addresses?", top_k=3)
     assert results and results[0]["text"] == text
 
 
 @pytest.mark.asyncio
 async def test_upload_returns_503_and_leaves_no_record_when_embeddings_fail(async_client, gemini_configured):
-    with patch("google.generativeai.embed_content", side_effect=Exception("HTTP 503 unavailable")), patch(
+    with patch("backend.app.ai.genai_client.embed_content", side_effect=Exception("HTTP 503 unavailable")), patch(
         "backend.app.services.embeddings.asyncio.sleep", side_effect=_no_sleep
     ):
         res = await async_client.post(

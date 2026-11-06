@@ -1,5 +1,5 @@
 from typing import Optional, List, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, model_validator, Field
 from datetime import datetime
 
 
@@ -31,8 +31,17 @@ class DocumentResponse(BaseModel):
     chunk_count: int
     summary: Optional[str] = None
     error_message: Optional[str] = None
+    # A failed file whose original is still stored can be processed again
+    can_retry: bool = False
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="before")
+    @classmethod
+    def _retry_flag(cls, data):
+        if isinstance(data, dict) and "can_retry" not in data:
+            data = {**data, "can_retry": data.get("status") == "failed" and bool(data.get("storage_path"))}
+        return data
 
 
 class DocumentUploadResponse(BaseModel):

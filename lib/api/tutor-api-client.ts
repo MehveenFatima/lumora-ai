@@ -89,6 +89,7 @@ function mapDocument(doc: any): WorkspaceDocument {
     uploadedAt: doc.created_at ? doc.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
     summary: doc.summary,
     errorMessage: doc.error_message || undefined,
+    canRetry: Boolean(doc.can_retry),
   }
 }
 
@@ -197,6 +198,8 @@ async function apiFetch(path: string, options: RequestInit = {}): Promise<Respon
   if (isBrowser) {
     // The learner's local date, so date rules (e.g. target completion dates) follow their calendar
     headers.set('X-Client-Date', localToday())
+    // Minutes east of UTC (330 for India), for "today" in the study plan and reminder times
+    headers.set('X-Client-Tz-Offset', String(-new Date().getTimezoneOffset()))
   }
   const fetchOptions: RequestInit = {
     ...options,
@@ -501,6 +504,16 @@ export const tutorApiClient = {
     }
   },
 
+  /** Processes a failed file again from its stored original. Throws with the API's message. */
+  async retryDocument(documentId: string): Promise<WorkspaceDocument> {
+    const response = await apiFetch(`/api/v1/documents/${documentId}/retry`, { method: 'POST' })
+    const body = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new Error(typeof body?.detail === 'string' ? body.detail : 'This file could not be retried.')
+    }
+    return mapDocument(body)
+  },
+
   async deleteDocument(documentId: string): Promise<boolean> {
     try {
       const response = await apiFetch(`/api/v1/documents/${documentId}`, { method: 'DELETE' })
@@ -785,9 +798,31 @@ export const tutorApiClient = {
   },
 
   async toggleStudyTask(workspaceId: string, taskId: string): Promise<any> {
-    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/study-plan/tasks/${taskId}/toggle`, {
-      method: 'POST',
-    })
+    const response = await apiFetch(
+      `/api/v1/workspaces/${workspaceId}/study-plan/tasks/${encodeURIComponent(taskId)}/toggle`,
+      { method: 'POST' },
+    )
+    if (!response.ok) return null
+    return response.json()
+  },
+
+  /** Rebuilds today's list from the latest results; tasks already done today are kept. */
+  async planMoreForToday(workspaceId: string): Promise<any> {
+    const response = await apiFetch(`/api/v1/workspaces/${workspaceId}/study-plan/generate`, { method: 'POST' })
+    if (!response.ok) return null
+    return response.json()
+  },
+
+  /** The BKT parameters in use (defaults, or fitted from learners' quiz answers). */
+  async getLearnerModel(): Promise<any> {
+    const response = await apiFetch('/api/v1/learner-model')
+    if (!response.ok) return null
+    return response.json()
+  },
+
+  /** Today's tasks across all of the user's workspaces (dashboard). */
+  async getTodayPlan(): Promise<any> {
+    const response = await apiFetch('/api/v1/study-plan/today')
     if (!response.ok) return null
     return response.json()
   },

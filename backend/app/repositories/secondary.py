@@ -1,7 +1,7 @@
 import uuid
 import json
 from typing import Optional, Dict, Any, List
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from backend.app.db.connection import get_db_pool, check_presentation_mode_database_availability
 from backend.app.core.logging import get_logger
 
@@ -196,7 +196,24 @@ class FlashcardRepository:
         return None
 
 
+_PLAN_JSON_FIELDS = ("tasks", "completions", "snapshot", "previous_snapshot")
+
+
+def _plan_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    for key in _PLAN_JSON_FIELDS:
+        if isinstance(row.get(key), str):
+            try:
+                row[key] = json.loads(row[key])
+            except ValueError:
+                row[key] = None
+    row["completions"] = row.get("completions") or []
+    return row
+
+
 class StudyPlanRepository:
+    """One row per workspace: today's frozen task list, every completion with its date, and the
+    latest full schedule (``tasks``) for reference."""
+
     async def get_by_workspace(self, workspace_id: str) -> Optional[Dict[str, Any]]:
         pool = await get_db_pool()
         check_presentation_mode_database_availability(pool)
@@ -207,15 +224,12 @@ class StudyPlanRepository:
                     row = await conn.fetchrow(
                         "SELECT * FROM study_plans WHERE workspace_id = $1", workspace_id
                     )
-                    if row:
-                        res = dict(row)
-                        if isinstance(res.get("tasks"), str):
-                            res["tasks"] = json.loads(res["tasks"])
-                        return res
+                    return _plan_row(dict(row)) if row else None
             except Exception as e:
                 logger.error(f"Error querying study plan for {workspace_id}: {e}")
 
-        return _memory_study_plans.get(workspace_id)
+        plan = _memory_study_plans.get(workspace_id)
+        return _plan_row(json.loads(json.dumps(plan, default=str))) if plan else None
 
     async def save_plan(self, plan: Dict[str, Any]) -> Dict[str, Any]:
         ws_id = plan["workspace_id"]
@@ -223,36 +237,59 @@ class StudyPlanRepository:
         check_presentation_mode_database_availability(pool)
 
         now = datetime.now(timezone.utc)
-        tasks_json = json.dumps(plan.get("tasks", []))
+        snapshot_date = plan.get("snapshot_date")
+        if isinstance(snapshot_date, str):
+            snapshot_date = date.fromisoformat(snapshot_date[:10])
+        snapshot_at = plan.get("snapshot_at")
+        if isinstance(snapshot_at, str):
+            snapshot_at = datetime.fromisoformat(snapshot_at)
+
+        def dump(value: Any) -> Optional[str]:
+            return None if value is None else json.dumps(value, default=str)
 
         if pool:
             try:
                 async with pool.acquire() as conn:
                     await conn.execute(
                         """
-                        INSERT INTO study_plans (workspace_id, daily_target_minutes, today_completed_minutes, weekly_target_minutes, week_completed_minutes, tasks, updated_at)
-                        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+                        INSERT INTO study_plans (
+                            workspace_id, daily_target_minutes, today_completed_minutes, weekly_target_minutes,
+                            week_completed_minutes, tasks, completions, snapshot, snapshot_date, snapshot_at,
+                            previous_snapshot, updated_at
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, $11::jsonb, $12)
                         ON CONFLICT (workspace_id) DO UPDATE SET
                             daily_target_minutes = EXCLUDED.daily_target_minutes,
                             today_completed_minutes = EXCLUDED.today_completed_minutes,
                             weekly_target_minutes = EXCLUDED.weekly_target_minutes,
                             week_completed_minutes = EXCLUDED.week_completed_minutes,
                             tasks = EXCLUDED.tasks,
+                            completions = EXCLUDED.completions,
+                            snapshot = EXCLUDED.snapshot,
+                            snapshot_date = EXCLUDED.snapshot_date,
+                            snapshot_at = EXCLUDED.snapshot_at,
+                            previous_snapshot = EXCLUDED.previous_snapshot,
                             updated_at = EXCLUDED.updated_at
                         """,
                         ws_id,
                         plan.get("daily_target_minutes", 45),
                         plan.get("today_completed_minutes", 0),
-                        plan.get("weekly_target_minutes", 225),
+                        plan.get("weekly_target_minutes", 315),
                         plan.get("week_completed_minutes", 0),
-                        tasks_json,
+                        dump(plan.get("tasks") or []),
+                        dump(plan.get("completions") or []),
+                        dump(plan.get("snapshot")),
+                        snapshot_date,
+                        snapshot_at,
+                        dump(plan.get("previous_snapshot")),
                         now,
                     )
             except Exception as e:
                 logger.error(f"Error saving study plan for {ws_id}: {e}")
 
-        _memory_study_plans[ws_id] = {**plan, "updated_at": now}
-        return _memory_study_plans[ws_id]
+        stored = json.loads(json.dumps({**plan, "updated_at": now}, default=str))
+        _memory_study_plans[ws_id] = stored
+        return _plan_row(json.loads(json.dumps(stored)))
 
 
 class ActivityRepository:

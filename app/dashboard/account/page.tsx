@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, GraduationCap, KeyRound, Loader2, Mail, ShieldAlert, Trash2, User } from 'lucide-react'
+import { ArrowLeft, Bell, GraduationCap, KeyRound, Loader2, Mail, ShieldAlert, Trash2, User } from 'lucide-react'
 import { TextField } from '@/components/auth/text-field'
 import { AuthAlert } from '@/components/auth/auth-alert'
 import { PasswordStrength, getPasswordStrength } from '@/components/auth/password-strength'
@@ -100,6 +100,26 @@ export default function AccountPage() {
     }
   }
 
+  const [savingReminders, setSavingReminders] = useState(false)
+  const [remindersFeedback, setRemindersFeedback] = useState<Feedback>(null)
+  async function toggleReminders() {
+    if (!user) return
+    const next = user.email_reminders === false
+    setSavingReminders(true)
+    setRemindersFeedback(null)
+    try {
+      await authClient.setEmailReminders(next)
+      setRemindersFeedback({
+        variant: 'success',
+        text: next ? 'Daily reminders are on.' : 'Daily reminders are off.',
+      })
+    } catch (err: any) {
+      setRemindersFeedback({ variant: 'error', text: err?.message || 'Could not update the setting.' })
+    } finally {
+      setSavingReminders(false)
+    }
+  }
+
   async function savePassword(e: React.FormEvent) {
     e.preventDefault()
     setPwTouched(true)
@@ -164,7 +184,7 @@ export default function AccountPage() {
             All workspaces
           </Link>
           <h1 className="mt-3 font-display text-2xl font-semibold tracking-tight">Account settings</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Manage your profile, password and account.</p>
+          <p className="mt-1 text-sm text-muted-foreground">Manage your profile, reminders, password and account.</p>
         </div>
 
         <Section icon={<User className="size-4" />} title="Profile" description="Your name appears across LumoraAI.">
@@ -186,6 +206,43 @@ export default function AccountPage() {
               </button>
             </div>
           </form>
+        </Section>
+
+        <Section
+          icon={<Bell className="size-4" />}
+          title="Daily reminder"
+          description="One email in the morning with today's study plan, only on days you have tasks planned."
+        >
+          <div className="flex flex-col gap-3">
+            {remindersFeedback ? <AuthAlert variant={remindersFeedback.variant}>{remindersFeedback.text}</AuthAlert> : null}
+            <div className="flex items-center justify-between gap-4 rounded-2xl border border-border bg-background p-4">
+              <div>
+                <p className="text-sm font-medium text-foreground">Email me today&apos;s plan</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {user?.reminders_available === false
+                    ? 'Email isn’t set up on this server yet, so reminders aren’t sent.'
+                    : `Sent to ${user?.email || 'your email'} around 7 am your time.`}
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={user?.email_reminders !== false}
+                aria-label="Daily reminder email"
+                onClick={toggleReminders}
+                disabled={!user || savingReminders}
+                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-60 ${
+                  user?.email_reminders !== false ? 'bg-primary' : 'bg-secondary'
+                }`}
+              >
+                <span
+                  className={`inline-block size-5 rounded-full bg-white shadow transition-transform ${
+                    user?.email_reminders !== false ? 'translate-x-5' : 'translate-x-0.5'
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
         </Section>
 
         <Section

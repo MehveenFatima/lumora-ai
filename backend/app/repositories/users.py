@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from backend.app.core.logging import get_logger
 from backend.app.db.connection import get_db_pool
@@ -112,6 +112,32 @@ class UserRepository:
 
     async def update_name(self, user_id: str, name: str) -> Optional[Dict[str, Any]]:
         return await self._update(user_id, {"name": name.strip()})
+
+    async def update_timezone(self, user_id: str, tz_offset_minutes: int) -> None:
+        try:
+            await self._update(user_id, {"tz_offset_minutes": int(tz_offset_minutes)})
+        except Exception as e:
+            logger.warning(f"Could not store the time zone for {user_id}: {e}")
+
+    async def set_email_reminders(self, user_id: str, enabled: bool) -> Optional[Dict[str, Any]]:
+        return await self._update(user_id, {"email_reminders": bool(enabled)})
+
+    async def mark_reminder_sent(self, user_id: str, day) -> None:
+        await self._update(user_id, {"last_reminder_date": day})
+
+    async def list_for_reminders(self) -> List[Dict[str, Any]]:
+        """Verified users who want the daily reminder email."""
+        pool = await get_db_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT * FROM users WHERE email_reminders IS NOT FALSE AND email_verified IS NOT FALSE"
+                )
+                return [dict(r) for r in rows]
+        return [
+            u for u in _memory_users.values()
+            if u.get("email_reminders", True) is not False and u.get("email_verified", True) is not False
+        ]
 
     async def delete(self, user_id: str) -> None:
         """Deletes the account; workspaces and all learner data cascade with it."""

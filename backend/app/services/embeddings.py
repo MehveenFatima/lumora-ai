@@ -192,12 +192,13 @@ class EmbeddingService:
         if not self.api_key:
             return False
         try:
-            import google.generativeai as genai
-            genai.configure(api_key=self.api_key)
+            from backend.app.ai.genai_client import get_client
+
+            get_client(self.api_key)
             self._gemini_client_initialized = True
             return True
         except Exception as e:
-            logger.error(f"Failed to configure Google Generative AI: {e}")
+            logger.error(f"Failed to configure the Gemini client: {e}")
             return False
 
     async def get_embedding(self, text: str) -> List[float]:
@@ -208,12 +209,15 @@ class EmbeddingService:
 
         if self._init_gemini():
             try:
-                import google.generativeai as genai
+                from backend.app.ai import genai_client
+
                 result = await asyncio.to_thread(
-                    genai.embed_content,
+                    genai_client.embed_content,
                     model=self.model_name,
                     content=clean_text,
                     task_type="retrieval_document",
+                    output_dimensionality=self.dimension,
+                    api_key=self.api_key,
                 )
                 raw_emb = result["embedding"]
                 # Truncate / pad to 768 dimensions if necessary
@@ -240,12 +244,15 @@ class EmbeddingService:
 
         if self._init_gemini():
             try:
-                import google.generativeai as genai
+                from backend.app.ai import genai_client
+
                 result = await asyncio.to_thread(
-                    genai.embed_content,
+                    genai_client.embed_content,
                     model=self.model_name,
                     content=clean_query,
                     task_type="retrieval_query",
+                    output_dimensionality=self.dimension,
+                    api_key=self.api_key,
                 )
                 raw_emb = result["embedding"]
                 if len(raw_emb) > self.dimension:
@@ -291,11 +298,9 @@ class EmbeddingService:
         if not self.api_key:
             return [generate_deterministic_mock_embedding(t, self.dimension) for t in clean], OFFLINE_EMBEDDING_TAG
 
-        import google.generativeai as genai
+        from backend.app.ai import genai_client
 
-        if not self._gemini_client_initialized:
-            genai.configure(api_key=self.api_key)
-            self._gemini_client_initialized = True
+        self._gemini_client_initialized = True
 
         vectors: List[List[float]] = []
         for start in range(0, len(clean), GEMINI_BATCH_SIZE):
@@ -304,11 +309,12 @@ class EmbeddingService:
             for attempt in range(len(_RETRY_DELAYS_SECONDS) + 1):
                 try:
                     result = await asyncio.to_thread(
-                        genai.embed_content,
+                        genai_client.embed_content,
                         model=self.model_name,
                         content=batch,
                         task_type="retrieval_document",
                         output_dimensionality=self.dimension,
+                        api_key=self.api_key,
                     )
                     batch_vectors = result["embedding"]
                     if len(batch) == 1 and batch_vectors and isinstance(batch_vectors[0], (int, float)):
@@ -342,14 +348,15 @@ class EmbeddingService:
         if tag != self.gemini_tag or not self._init_gemini():
             return None
         try:
-            import google.generativeai as genai
+            from backend.app.ai import genai_client
 
             result = await asyncio.to_thread(
-                genai.embed_content,
+                genai_client.embed_content,
                 model=self.model_name,
                 content=clean,
                 task_type="retrieval_query",
                 output_dimensionality=self.dimension,
+                api_key=self.api_key,
             )
             return self._normalize_vector(list(result["embedding"]))
         except Exception as e:

@@ -4,7 +4,7 @@ import os
 import re
 import secrets
 import time
-from typing import List, Optional
+from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Request, status
 from pydantic import BaseModel, Field as PydanticField
 from backend.app.api.deps import CurrentUser, get_current_user, ensure_document_access, require_workspace
@@ -301,6 +301,11 @@ INGEST_WAIT_SECONDS = 20
 _INGEST_TASKS: set = set()
 _GENERIC_INGEST_ERROR = "This file could not be processed. Check that it is a valid, text-based document and try again."
 _IN_PROGRESS = ("uploading", "processing", "extracting", "indexing")
+# Documents this process is processing right now (never treated as stalled)
+_ACTIVE_DOCS: set = set()
+# Minutes without progress before a document counts as stalled, and resume attempts allowed
+STALE_MINUTES = 10
+MAX_RESUMES = 2
 
 
 async def _ingest_document(
@@ -312,12 +317,31 @@ async def _ingest_document(
     file_type: str,
     file_bytes: bytes,
     content_type: str,
+    stored_path: Optional[str] = None,
 ) -> dict:
-    """Parses, (OCRs), chunks, embeds and stores one document. Returns the updated record."""
+    """Stores the original, then parses, (OCRs), chunks, embeds and indexes one document.
+
+    The original is stored first so processing can be resumed after a restart (or retried after
+    a temporary failure) without uploading the file again. Returns the updated record."""
     from backend.app.services.notification_service import notification_service
     from backend.app.services.ocr import ocr_available, ocr_pages, pages_needing_ocr, pdf_page_count
 
+    _ACTIVE_DOCS.add(str(doc_id))
+    storage_path = stored_path
     try:
+        if storage_path is None:
+            storage_path = await storage_service.upload_file(
+                workspace_id=workspace_id,
+                document_id=doc_id,
+                filename=filename,
+                file_bytes=file_bytes,
+                content_type=content_type,
+            )
+            await document_repo.update_status(doc_id, status="processing", storage_path=storage_path)
+        else:
+            # Resumed or retried: drop anything indexed by the earlier attempt
+            await chunk_repo.delete_by_document(doc_id)
+
         # Step A: parse text, headings and page numbers
         parsed_pages = await asyncio.to_thread(document_parser.parse, file_bytes, file_type)
         page_count = len(parsed_pages)
@@ -372,15 +396,7 @@ async def _ingest_document(
             c_dict["document_title"] = doc_title
             chunk_dicts.append(c_dict)
 
-        # Step E: store the original file and the chunks
-        storage_path = await storage_service.upload_file(
-            workspace_id=workspace_id,
-            document_id=doc_id,
-            filename=filename,
-            file_bytes=file_bytes,
-            content_type=content_type,
-        )
-        await document_repo.update_status(doc_id, status="indexing", storage_path=storage_path)
+        # Step E: store the chunks
         await chunk_repo.insert_chunks(chunk_dicts)
 
         summary_text = f"Indexed {len(chunks)} semantic chunks across {page_count} pages for grounded AI retrieval."
@@ -423,29 +439,94 @@ async def _ingest_document(
         if not mode["background"]:
             # The uploader is still waiting: remove the record and report the error directly
             await document_repo.delete(doc_id)
+            await storage_service.delete_file(storage_path)
             raise
-        # Processing continued in the background: keep the record so the failure is visible
+        # Processing continued in the background: keep the record so the failure is visible.
+        # A problem with the file itself can't be fixed by retrying, so its copy is removed;
+        # otherwise the original is kept so the learner can retry without uploading again.
         reason = str(e) if expected else _GENERIC_INGEST_ERROR
+        if isinstance(e, DocumentContentError):
+            await storage_service.delete_file(storage_path)
+            await document_repo.clear_storage_path(doc_id)
         failed = await document_repo.update_status(doc_id, status="failed", error_message=reason)
         await notification_service.document_failed(workspace_id, failed or {"id": doc_id, "title": doc_title}, reason)
         return failed or {}
+    finally:
+        _ACTIVE_DOCS.discard(str(doc_id))
 
 
-async def mark_interrupted_documents() -> int:
-    """Documents left mid-processing by a restart are marked failed so they don't spin forever."""
+_INTERRUPTED_MESSAGE = "Processing was interrupted. Press Retry to process this file again."
+
+
+def _start_background_ingest(doc: dict, file_bytes: bytes) -> None:
+    task = asyncio.create_task(
+        _ingest_document(
+            {"background": True},
+            str(doc["workspace_id"]),
+            str(doc["id"]),
+            doc.get("title") or doc.get("filename") or "Document",
+            doc.get("filename") or "document",
+            doc.get("file_type") or "pdf",
+            file_bytes,
+            "application/octet-stream",
+            stored_path=doc.get("storage_path"),
+        )
+    )
+    _INGEST_TASKS.add(task)
+    task.add_done_callback(_INGEST_TASKS.discard)
+
+
+async def resume_stalled_documents(stale_minutes: int = STALE_MINUTES) -> Dict[str, int]:
+    """Documents left mid-processing (for example by a restart or deploy) are processed again from
+    the stored original, up to MAX_RESUMES times; after that, or without a stored original, they
+    are marked failed. Returns counts of resumed and failed documents."""
     from backend.app.db.connection import get_db_pool
 
     pool = await get_db_pool()
     if not pool:
-        return 0
+        return {"resumed": 0, "failed": 0}
     async with pool.acquire() as conn:
-        result = await conn.execute(
-            "UPDATE documents SET status = 'failed', error_message = $1, updated_at = NOW() "
-            "WHERE status = ANY($2::text[]) AND updated_at < NOW() - INTERVAL '10 minutes'",
-            "Processing was interrupted. Please delete this file and upload it again.",
+        # Claim the stalled rows atomically so two instances never resume the same file
+        rows = await conn.fetch(
+            "UPDATE documents SET resume_count = resume_count + 1, updated_at = NOW(), status = 'processing' "
+            "WHERE status = ANY($1::text[]) AND updated_at < NOW() - make_interval(mins => $2) "
+            "AND NOT (id::text = ANY($3::text[])) "
+            "RETURNING id, workspace_id, title, filename, file_type, storage_path, resume_count",
             list(_IN_PROGRESS),
+            int(stale_minutes),
+            list(_ACTIVE_DOCS),
         )
-    return int(result.split()[-1]) if result else 0
+    resumed = failed = 0
+    for row in rows:
+        doc = dict(row)
+        file_bytes = None
+        if doc.get("storage_path") and int(doc.get("resume_count") or 0) <= MAX_RESUMES:
+            file_bytes = await storage_service.get_file_bytes(doc["storage_path"])
+        if file_bytes:
+            logger.warning(f"Resuming interrupted processing of document {doc['id']} (attempt {doc['resume_count']}).")
+            _start_background_ingest(doc, file_bytes)
+            resumed += 1
+        else:
+            await document_repo.update_status(str(doc["id"]), status="failed", error_message=(
+                _INTERRUPTED_MESSAGE if doc.get("storage_path")
+                else "Processing was interrupted. Please delete this file and upload it again."
+            ))
+            failed += 1
+    return {"resumed": resumed, "failed": failed}
+
+
+async def watch_stalled_documents(interval_seconds: int = 300) -> None:
+    """Runs `resume_stalled_documents` every few minutes for the life of the API."""
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            result = await resume_stalled_documents()
+            if result["resumed"] or result["failed"]:
+                logger.warning(f"Stalled uploads: {result['resumed']} resumed, {result['failed']} marked failed.")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"Could not check for stalled uploads: {e}")
 
 
 @router.get(
@@ -479,6 +560,23 @@ async def get_document(document_id: str, user: CurrentUser = Depends(get_current
             detail=f"Document '{document_id}' not found.",
         )
     return DocumentResponse(**doc)
+
+
+@router.post("/documents/{document_id}/retry", response_model=DocumentResponse)
+async def retry_document(document_id: str, user: CurrentUser = Depends(get_current_user)) -> DocumentResponse:
+    """Processes a failed document again from its stored original (no new upload needed)."""
+    doc = await ensure_document_access(await document_repo.get_by_id(document_id), user)
+    if doc.get("status") != "failed":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only a failed file can be retried.")
+    file_bytes = await storage_service.get_file_bytes(doc["storage_path"]) if doc.get("storage_path") else None
+    if not file_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="The original file is no longer stored. Please delete it and upload it again.",
+        )
+    updated = await document_repo.update_status(document_id, status="processing", error_message=None)
+    _start_background_ingest({**doc, **(updated or {})}, file_bytes)
+    return DocumentResponse(**(updated or {**doc, "status": "processing", "error_message": None}))
 
 
 @router.get("/documents/{document_id}/download")

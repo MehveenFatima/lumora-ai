@@ -90,7 +90,8 @@ class ChangePasswordRequest(BaseModel):
 
 
 class UpdateProfileRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=80)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    email_reminders: Optional[bool] = None
 
 
 class DeleteAccountRequest(BaseModel):
@@ -107,6 +108,9 @@ class UserResponse(BaseModel):
     email: str
     name: str
     created_at: Optional[datetime] = None
+    # Daily study reminder email (sent only when an email provider is configured)
+    email_reminders: bool = True
+    reminders_available: bool = False
 
 
 class AuthResponse(BaseModel):
@@ -191,7 +195,14 @@ async def _send_code(user: CurrentUser, purpose: str) -> bool:
 
 
 def _to_user_response(user: CurrentUser) -> UserResponse:
-    return UserResponse(id=user["id"], email=user["email"], name=user["name"], created_at=user.get("created_at"))
+    return UserResponse(
+        id=user["id"],
+        email=user["email"],
+        name=user["name"],
+        created_at=user.get("created_at"),
+        email_reminders=user.get("email_reminders") is not False,
+        reminders_available=settings.email_enabled,
+    )
 
 
 def _start_session(response: Response, user: CurrentUser) -> AuthResponse:
@@ -354,10 +365,14 @@ async def me(user: CurrentUser = Depends(get_current_user)) -> UserResponse:
 
 @router.patch("/me", response_model=UserResponse)
 async def update_profile(payload: UpdateProfileRequest, user: CurrentUser = Depends(get_current_user)) -> UserResponse:
-    name = payload.name.strip()
-    if len(name) < 2:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Enter your full name.")
-    updated = await user_repo.update_name(user["id"], name) or user
+    updated = user
+    if payload.name is not None:
+        name = payload.name.strip()
+        if len(name) < 2:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Enter your full name.")
+        updated = await user_repo.update_name(user["id"], name) or updated
+    if payload.email_reminders is not None:
+        updated = await user_repo.set_email_reminders(user["id"], payload.email_reminders) or updated
     return _to_user_response(updated)
 
 
