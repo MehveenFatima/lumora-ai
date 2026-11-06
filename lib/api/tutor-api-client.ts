@@ -813,6 +813,13 @@ export const tutorApiClient = {
     return response.json()
   },
 
+  /** The BKT parameters in use (defaults, or fitted from learners' quiz answers). */
+  async getLearnerModel(): Promise<any> {
+    const response = await apiFetch('/api/v1/learner-model')
+    if (!response.ok) return null
+    return response.json()
+  },
+
   /** Today's tasks across all of the user's workspaces (dashboard). */
   async getTodayPlan(): Promise<any> {
     const response = await apiFetch('/api/v1/study-plan/today')

@@ -98,18 +98,21 @@ export default function AnalyticsPage() {
   const [perf, setPerf] = useState<RecentPerformance | null>(null)
   const [streakDays, setStreakDays] = useState(0)
   const [history, setHistory] = useState<MasteryPoint[] | null>(null)
+  const [model, setModel] = useState<any>(null)
 
   useEffect(() => {
     if (!workspaceId) return
 
     async function loadAnalytics() {
-      const [ws, top, profile, acts, hist] = await Promise.all([
+      const [ws, top, profile, acts, hist, lm] = await Promise.all([
         workspaceService.getWorkspaceById(workspaceId),
         workspaceService.getTopics(workspaceId),
         tutorApiClient.getLearnerProfile(workspaceId).catch(() => null),
         workspaceService.getActivities(workspaceId).catch(() => []),
         tutorApiClient.getMasteryHistory(workspaceId, 30).catch(() => ({ points: [] })),
+        tutorApiClient.getLearnerModel().catch(() => null),
       ])
+      setModel(lm)
       setHistory(hist.points || [])
       setWorkspace(ws)
       setTopics(top)
@@ -188,6 +191,17 @@ export default function AnalyticsPage() {
           Daily workspace mastery for the last 30 days, from Bayesian Knowledge Tracing snapshots
         </p>
         <div className="mt-4">{history === null ? null : <MasteryTrendChart points={history} />}</div>
+        {model?.params ? (
+          <p className="mt-3 border-t border-border/70 pt-3 text-[11px] text-muted-foreground">
+            BKT parameters:{' '}
+            <span className="font-mono text-foreground">
+              P(L0) {model.params.p_l0} · P(T) {model.params.p_t} · P(G) {model.params.p_g} · P(S) {model.params.p_s}
+            </span>{' '}
+            {model.source === 'fitted'
+              ? `· fitted from ${model.attempts} quiz answers`
+              : `· standard values, fitted automatically once ${model.min_attempts_to_fit} quiz answers are collected`}
+          </p>
+        ) : null}
       </section>
 
       {/* Center Charts: Recent Performance + Topic Breakdown */}

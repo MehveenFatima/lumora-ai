@@ -121,6 +121,21 @@ async def preview_study_material(path: str, out: str, max_concepts: int) -> None
     print(f"{len(cards)} flashcards. Report written to {out}")
 
 
+async def fit_bkt() -> None:
+    import json
+
+    conn = await _connect()  # waits for the database, then the app's pool is used
+    await conn.close()
+    from backend.app.db.connection import close_db_pool
+    from backend.app.services import bkt_fitting
+
+    try:
+        result = await bkt_fitting.refit()
+        print(json.dumps(result, indent=2, default=str))
+    finally:
+        await close_db_pool()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m backend.app.cli")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -139,6 +154,8 @@ def main() -> None:
     ps.add_argument("--out", default="study-material-preview.md")
     ps.add_argument("--max-concepts", type=int, default=12)
 
+    sub.add_parser("fit-bkt", help="Fit the BKT parameters from the quiz answers collected so far")
+
     args = parser.parse_args()
     if args.command == "migrate":
         asyncio.run(migrate())
@@ -149,6 +166,8 @@ def main() -> None:
         asyncio.run(create_user(args.email, args.name, password))
     elif args.command == "claim-workspaces":
         asyncio.run(claim_workspaces(args.email))
+    elif args.command == "fit-bkt":
+        asyncio.run(fit_bkt())
     elif args.command == "preview-study-material":
         asyncio.run(preview_study_material(args.file, args.out, args.max_concepts))
 

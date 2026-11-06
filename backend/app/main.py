@@ -51,10 +51,15 @@ async def lifespan(app: FastAPI):
                 )
         except Exception as e:
             logger.warning(f"Could not check for interrupted uploads: {e}")
-        if not any(getattr(t, "_lumora_name", "") == "stalled-uploads" for t in background_tasks):
-            task = asyncio.create_task(watch_stalled_documents())
-            task._lumora_name = "stalled-uploads"
-            background_tasks.append(task)
+        from backend.app.services import bkt_fitting
+
+        try:
+            await bkt_fitting.load_saved()
+        except Exception as e:
+            logger.warning(f"Could not load the fitted BKT parameters: {e}")
+        if not background_tasks:
+            background_tasks.append(asyncio.create_task(watch_stalled_documents()))
+            background_tasks.append(asyncio.create_task(bkt_fitting.refit_loop()))
 
     # Start serving even when the database is unreachable (e.g. a paused free-tier project):
     # data requests get a clear 503 and the API reconnects and migrates on its own once it is back.
