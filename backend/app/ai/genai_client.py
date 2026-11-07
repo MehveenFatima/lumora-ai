@@ -15,6 +15,8 @@ _clients: Dict[str, Any] = {}
 _lock = threading.Lock()
 
 REQUEST_TIMEOUT_MS = 120_000
+# Tries for one call when Gemini is temporarily overloaded (waits of about 2, 4, 8 s in between)
+OVERLOAD_RETRY_ATTEMPTS = 4
 
 
 def _model_id(model: str) -> str:
@@ -28,12 +30,21 @@ def get_client(api_key: str):
     with _lock:
         client = _clients.get(api_key)
         if client is None:
-            # No retries inside the SDK: the AI gateway retries once, then fails over to the
-            # secondary provider, and a 429 must reach it quickly to start the cooldown
+            # Temporary server-side errors (Google's "high demand" 503, 500, 502, 504) are retried
+            # here with growing waits. A 429 is NOT retried here: it must reach the AI gateway
+            # quickly so it starts the cooldown and fails over to the secondary provider.
             client = genai.Client(
                 api_key=api_key,
                 http_options=types.HttpOptions(
-                    timeout=REQUEST_TIMEOUT_MS, retry_options=types.HttpRetryOptions(attempts=1)
+                    timeout=REQUEST_TIMEOUT_MS,
+                    retry_options=types.HttpRetryOptions(
+                        attempts=OVERLOAD_RETRY_ATTEMPTS,
+                        initial_delay=2.0,
+                        max_delay=20.0,
+                        exp_base=2.0,
+                        jitter=1.0,
+                        http_status_codes=[500, 502, 503, 504],
+                    ),
                 ),
             )
             _clients[api_key] = client

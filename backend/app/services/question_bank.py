@@ -41,6 +41,8 @@ TARGET_PER_CONCEPT = 6
 REFILL_BELOW = 3
 MAX_PER_CONCEPT = 24
 GENERATION_TIMEOUT_SECONDS = 90
+# Tries per concept before giving up for this run (the next trigger fills the rest)
+GENERATION_ATTEMPTS = 5
 BUILD_CONCURRENCY = 2
 
 QUESTION_TYPES_FOR_PROMPT = (
@@ -508,7 +510,7 @@ class QuestionBankService:
             nonlocal added, done
             async with semaphore:
                 source = concept_map_service.source_text(concept, chunks)
-                for attempt in range(3):
+                for attempt in range(GENERATION_ATTEMPTS):
                     try:
                         questions = await asyncio.wait_for(
                             generate_for_concept(
@@ -520,14 +522,16 @@ class QuestionBankService:
                         added += await store_questions(workspace_id, questions)
                         break
                     except Exception as e:
-                        # Long enough for a rate-limited provider to leave its cooldown
+                        # Long enough for a rate-limited or overloaded provider to recover
+                        # (waits of 30, 60, 90 and 120 s: about five minutes in all)
                         wait = 30 * (attempt + 1)
+                        last = attempt == GENERATION_ATTEMPTS - 1
                         logger.warning(
+                            f"Question generation for '{concept['concept']}' failed: {type(e).__name__}: {e}" if last else
                             f"Question generation for '{concept['concept']}' failed ({type(e).__name__}: {e}); "
-                            f"retrying in {wait}s." if attempt < 2 else
-                            f"Question generation for '{concept['concept']}' failed: {type(e).__name__}: {e}"
+                            f"retrying in {wait}s."
                         )
-                        if attempt < 2:
+                        if not last:
                             await asyncio.sleep(wait)
                 done += 1
                 if on_progress:

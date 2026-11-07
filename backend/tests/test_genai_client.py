@@ -76,3 +76,48 @@ def test_a_429_puts_gemini_in_cooldown_so_the_gateway_fails_over():
     with pytest.raises(RateLimitError):
         asyncio.run(provider.generate_structured(AIRequest(prompt="x", task_type=TaskType.QUIZ)))
     assert provider.get_health().status.value == "cooldown"
+
+
+HIGH_DEMAND = {"error": {"code": 503, "message": "This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.", "status": "UNAVAILABLE"}}
+
+
+def test_high_demand_503_is_retried_and_then_succeeds(monkeypatch):
+    calls = []
+
+    def handler(req):
+        calls.append(1)
+        if len(calls) < 3:
+            return httpx.Response(503, json=HIGH_DEMAND)
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": "ok"}], "role": "model"}}]})
+
+    client = genai.Client(
+        api_key="k-overload-001",
+        http_options=types.HttpOptions(
+            httpx_client=httpx.Client(transport=httpx.MockTransport(handler)),
+            retry_options=types.HttpRetryOptions(
+                attempts=genai_client.OVERLOAD_RETRY_ATTEMPTS, initial_delay=0.01, max_delay=0.02,
+                http_status_codes=[500, 502, 503, 504],
+            ),
+        ),
+    )
+    genai_client._clients["k-overload-001"] = client
+    assert genai_client.generate_content("k-overload-001", "gemini-3.8-flash", "hi") == "ok"
+    assert len(calls) == 3
+
+
+def test_retry_settings_cover_overload_but_not_quota():
+    genai_client._clients.pop("k-settings-0001", None)
+    opts = genai_client.get_client("k-settings-0001")._api_client._http_options.retry_options
+    assert opts.attempts >= 3 and 503 in opts.http_status_codes and 429 not in opts.http_status_codes
+
+
+def test_overload_after_retries_cools_gemini_down_so_the_gateway_fails_over():
+    _client("k-overload-002", lambda req: httpx.Response(503, json=HIGH_DEMAND))
+    provider = GeminiProvider(api_key="k-overload-002")
+    from backend.app.ai.types import ProviderUnavailableError
+
+    with pytest.raises(ProviderUnavailableError):
+        asyncio.run(provider.generate_structured(AIRequest(prompt="x", task_type=TaskType.QUIZ)))
+    health = provider.get_health()
+    assert health.status.value == "cooldown"
+    assert "high demand" in (health.last_error or "")
