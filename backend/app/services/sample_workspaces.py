@@ -142,7 +142,7 @@ async def create_for_user(owner_id: str, wait_for_indexing: bool = False) -> Lis
             level=spec["level"],
             target_date=(date.today() + timedelta(days=TARGET_DAYS)).isoformat(),
             daily_target_minutes=DAILY_MINUTES,
-            description=f"Exam revision for {spec['name']} from the course notes",
+            description="Custom learning workspace grounded in your uploaded documents.",
             owner_id=owner_id,
         )
         # Flag first, so the background preparation started by the upload leaves it alone

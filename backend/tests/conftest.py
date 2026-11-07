@@ -20,6 +20,14 @@ def reset_memory_store():
     yield
 
 
+@pytest.fixture(autouse=True)
+def no_starter_workspaces(monkeypatch):
+    """Tests start with an empty account; test_sample_workspaces turns the starter set back on."""
+    from backend.app.core.config import settings
+
+    monkeypatch.setattr(settings, "starter_workspaces", False)
+
+
 TEST_USER_ID = "usr_test_default"
 TEST_USER_EMAIL = "tester@lumora.test"
 

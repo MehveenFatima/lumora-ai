@@ -122,3 +122,35 @@ async def test_sample_notes_are_indexed_even_when_embeddings_are_unavailable(mon
         assert [d["status"] for d in docs] == ["ready"]
     listing = await workspace_repo.list_by_owner(owner)
     assert sum(1 for w in listing if w.get("is_sample")) == 3
+
+
+@pytest.mark.asyncio
+async def test_every_account_gets_the_starter_workspaces_once(async_client, monkeypatch):
+    import asyncio
+
+    from backend.app.api.routes.documents import _INGEST_TASKS
+    from backend.app.core.config import settings
+    from backend.app.repositories.users import user_repo
+    from backend.app.repositories.workspaces import workspace_repo
+
+    owner = "usr_test_default"
+    for w in await workspace_repo.list_by_owner(owner):
+        if w.get("is_sample"):
+            await workspace_repo.delete(w["id"])
+    await user_repo._update(owner, {"starter_workspaces_added": False})
+    monkeypatch.setattr(settings, "starter_workspaces", True)
+
+    first, second = await asyncio.gather(
+        async_client.get("/api/v1/workspaces"), async_client.get("/api/v1/workspaces")
+    )
+    if _INGEST_TASKS:
+        await asyncio.gather(*list(_INGEST_TASKS))
+    listing = (await async_client.get("/api/v1/workspaces")).json()["workspaces"]
+    names = sorted(w["name"] for w in listing if w.get("is_sample"))
+    assert names == ["Computer Networks", "DBMS", "Operating Systems"]
+
+    # Deleting one doesn't bring it back on the next visit
+    os_ws = next(w for w in listing if w["name"] == "Operating Systems" and w.get("is_sample"))
+    await async_client.delete(f"/api/v1/workspaces/{os_ws['id']}")
+    listing = (await async_client.get("/api/v1/workspaces")).json()["workspaces"]
+    assert sorted(w["name"] for w in listing if w.get("is_sample")) == ["Computer Networks", "DBMS"]
