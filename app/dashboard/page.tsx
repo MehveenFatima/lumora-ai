@@ -129,9 +129,9 @@ export default function GlobalDashboardPage() {
     try {
       const added = await tutorApiClient.createSampleWorkspaces()
       await loadDashboard()
-      showToast(added > 0 ? `${added} sample workspace${added === 1 ? '' : 's'} added.` : 'The sample workspaces are already here.')
+      showToast(added > 0 ? `${added} workspace${added === 1 ? '' : 's'} added.` : 'These workspaces are already in your account.')
     } catch (err: any) {
-      showToast(err?.message || 'Could not add the sample workspaces. Please try again.')
+      showToast(err?.message || 'Could not add the workspaces. Please try again.')
     } finally {
       setAddingSamples(false)
     }
@@ -376,7 +376,7 @@ export default function GlobalDashboardPage() {
                 className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2 text-xs font-semibold text-foreground shadow-soft transition-colors hover:border-primary/60 hover:text-primary disabled:cursor-wait disabled:opacity-70"
               >
                 <BookOpen className="size-3.5" />
-                {addingSamples ? 'Adding samples… (about a minute)' : 'Add sample workspaces'}
+                {addingSamples ? 'Setting up workspaces… (about a minute)' : 'Add OS, DBMS & CN workspaces'}
               </button>
             )}
           </div>
@@ -394,11 +394,6 @@ export default function GlobalDashboardPage() {
                       <FolderKanban className="size-5" />
                     </span>
                     <div className="flex items-center gap-1.5">
-                      {ws.isSample && (
-                        <Badge variant="outline" size="sm">
-                          Sample
-                        </Badge>
-                      )}
                       <Badge variant={ws.status === 'on_track' ? 'success' : ws.status === 'active' ? 'default' : 'warning'} size="sm">
                         {ws.status.replace('_', ' ')}
                       </Badge>

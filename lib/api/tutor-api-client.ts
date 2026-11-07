@@ -297,7 +297,7 @@ export const tutorApiClient = {
     const response = await apiFetch('/api/v1/sample-workspaces', { method: 'POST' })
     if (!response.ok) {
       const err = await response.json().catch(() => ({}))
-      throw new Error(err.detail || `Could not add the sample workspaces (HTTP ${response.status})`)
+      throw new Error(err.detail || `Could not add the workspaces (HTTP ${response.status})`)
     }
     const data = await response.json().catch(() => ({}))
     return data.total_count ?? (data.workspaces || []).length

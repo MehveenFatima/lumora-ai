@@ -38,16 +38,19 @@ def test_every_sample_question_passes_the_quality_gates(module):
 
 @pytest.mark.asyncio
 async def test_sample_workspaces_work_end_to_end(async_client):
+    from backend.app.repositories.workspaces import workspace_repo
+
+    for w in await workspace_repo.list_by_owner("usr_test_default"):  # start clean
+        if w.get("is_sample"):
+            await workspace_repo.delete(w["id"])
     res = await async_client.post("/api/v1/sample-workspaces")
     assert res.status_code == 201, res.text
     created = res.json()["workspaces"]
     by_name = {w["name"]: w for w in created}
-    assert set(by_name) >= {"Operating Systems", "DBMS", "Computer Networks"} or created == []
-    if not created:  # created by an earlier test in this session
-        listing = (await async_client.get("/api/v1/workspaces")).json()["workspaces"]
-        by_name = {w["name"]: w for w in listing if w.get("is_sample")}
+    assert set(by_name) == {"Operating Systems", "DBMS", "Computer Networks"}
     ws = by_name["Operating Systems"]
     assert ws["is_sample"] is True and ws["document_count"] == 1
+    assert "sample" not in (ws["description"] or "").lower()
 
     # A second call adds nothing
     again = await async_client.post("/api/v1/sample-workspaces")
