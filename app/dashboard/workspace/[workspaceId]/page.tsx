@@ -132,6 +132,11 @@ export default function WorkspaceLandingPage() {
           </div>
           <h1 className="mt-1 font-display text-2xl font-semibold tracking-tight text-foreground md:text-3xl">
             {workspace.name}
+            {workspace.isSample && (
+              <Badge variant="outline" size="sm" className="ml-2 align-middle">
+                Sample
+              </Badge>
+            )}
           </h1>
           <p className="mt-1 text-xs text-muted-foreground max-w-2xl">
             {workspace.description}

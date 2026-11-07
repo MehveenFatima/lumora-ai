@@ -25,6 +25,8 @@ export interface Workspace {
   status: 'active' | 'on_track' | 'needs_review'
   iconName: string
   documentCount: number
+  /** Built-in sample workspace with ready-made study material */
+  isSample?: boolean
   topicsCount: number
   flashcardsDueCount: number
   lastActive: string
