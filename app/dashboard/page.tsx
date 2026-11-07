@@ -376,7 +376,7 @@ export default function GlobalDashboardPage() {
                 className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2 text-xs font-semibold text-foreground shadow-soft transition-colors hover:border-primary/60 hover:text-primary disabled:cursor-wait disabled:opacity-70"
               >
                 <BookOpen className="size-3.5" />
-                {addingSamples ? 'Setting up workspaces… (about a minute)' : 'Add OS, DBMS & CN workspaces'}
+                {addingSamples ? 'Setting up workspaces…' : 'Add OS, DBMS & CN workspaces'}
               </button>
             )}
           </div>
