@@ -100,7 +100,10 @@ async def test_sample_notes_are_indexed_even_when_embeddings_are_unavailable(mon
         raise EmbeddingUnavailableError("rate-limited")
 
     monkeypatch.setattr(embedding_service, "embed_documents", unavailable)
-    owner = "sample-offline-user"
+    owner = "usr_test_default"  # the signed-in test user (exists in the database too)
+    for w in await workspace_repo.list_by_owner(owner):
+        if w.get("is_sample"):
+            await workspace_repo.delete(w["id"])
     created = await sample_workspaces.create_for_user(owner)
     assert len(created) == 3
     listing = await workspace_repo.list_by_owner(owner)
