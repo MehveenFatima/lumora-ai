@@ -23,6 +23,21 @@ from backend.app.core.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _max_tokens(requested: Optional[int]) -> int:
+    """The answer-length limit to send: the caller's, capped by SECONDARY_AI_MAX_TOKENS."""
+    cap = settings.secondary_ai_max_tokens
+    return min(int(requested), cap) if requested else cap
+
+
+def _retry_after_seconds(response_text: str, default: float = 60.0) -> float:
+    """Groq and OpenAI say how long to wait ("Please try again in 7.66s" / "in 1m3.5s")."""
+    m = re.search(r"try again in (?:(\d+)m)?([\d.]+)s", response_text or "")
+    if not m:
+        return default
+    wait = int(m.group(1) or 0) * 60 + float(m.group(2))
+    return max(2.0, min(wait + 1.0, 300.0))
+
+
 class OpenAICompatibleProvider(BaseAIProvider):
     """
     OpenAI-compatible REST provider implementation (works with OpenAI,
@@ -36,12 +51,12 @@ class OpenAICompatibleProvider(BaseAIProvider):
         base_url: Optional[str] = None,
         model_name: Optional[str] = None,
         provider_name: Optional[str] = None,
-        timeout_seconds: float = 30.0,
+        timeout_seconds: Optional[float] = None,
     ):
         self._api_key = api_key if api_key is not None else settings.effective_secondary_api_key
         self._base_url = (base_url or settings.effective_secondary_base_url).rstrip("/")
         effective_model = model_name or settings.effective_secondary_model
-        self.timeout_seconds = timeout_seconds
+        self.timeout_seconds = timeout_seconds if timeout_seconds is not None else settings.secondary_ai_timeout_seconds
         resolved_provider_name = provider_name or settings.secondary_ai_provider_name or "openrouter"
 
         super().__init__(provider_name=resolved_provider_name, model_name=effective_model)
@@ -75,8 +90,14 @@ class OpenAICompatibleProvider(BaseAIProvider):
     def _classify_http_status(self, status_code: int, response_text: str) -> Exception:
         sanitized_msg = sanitize_text(response_text, self._known_secrets)
 
+        if status_code == 413 or "request too large" in response_text.lower():
+            self.mark_failure(sanitized_msg)
+            return ProviderUnavailableError(
+                f"Secondary provider rejected the request as too large (HTTP {status_code}): {sanitized_msg}",
+                provider=self.provider_name,
+            )
         if status_code == 429:
-            self.mark_rate_limited(cooldown_seconds=60.0, error=sanitized_msg)
+            self.mark_rate_limited(cooldown_seconds=_retry_after_seconds(response_text), error=sanitized_msg)
             return RateLimitError(
                 f"Secondary provider rate limit exceeded (HTTP 429): {sanitized_msg}",
                 provider=self.provider_name,
@@ -136,8 +157,7 @@ class OpenAICompatibleProvider(BaseAIProvider):
             "messages": messages,
             "temperature": request.temperature,
         }
-        if request.max_tokens:
-            payload["max_tokens"] = request.max_tokens
+        payload["max_tokens"] = _max_tokens(request.max_tokens)
 
         url = self._get_endpoint_url()
         headers = self._get_headers()
@@ -200,8 +220,7 @@ class OpenAICompatibleProvider(BaseAIProvider):
             "temperature": request.temperature,
             "response_format": {"type": "json_object"},
         }
-        if request.max_tokens:
-            payload["max_tokens"] = request.max_tokens
+        payload["max_tokens"] = _max_tokens(request.max_tokens)
 
         url = self._get_endpoint_url()
         headers = self._get_headers()

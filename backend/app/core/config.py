@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     secondary_ai_api_key: Optional[str] = Field(default=None, validation_alias="SECONDARY_AI_API_KEY")
     secondary_ai_base_url: str = Field(default="https://openrouter.ai/api/v1", validation_alias="SECONDARY_AI_BASE_URL")
     secondary_ai_model: str = Field(default="qwen/qwen3.8-27b:free", validation_alias="SECONDARY_AI_MODEL")
+    # Longest answer the secondary model may write. Always sent: providers such as Groq otherwise
+    # count the model's full maximum against the per-minute token limit and reject every request.
+    secondary_ai_max_tokens: int = Field(default=4096, ge=256, le=32768, validation_alias="SECONDARY_AI_MAX_TOKENS")
+    secondary_ai_timeout_seconds: float = Field(default=90.0, ge=10, le=300, validation_alias="SECONDARY_AI_TIMEOUT_SECONDS")
     openai_api_key: Optional[str] = Field(default=None, validation_alias="OPENAI_API_KEY")
     openai_base_url: Optional[str] = Field(default=None, validation_alias="OPENAI_BASE_URL")
     openai_model: Optional[str] = Field(default=None, validation_alias="OPENAI_MODEL")
