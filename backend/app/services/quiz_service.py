@@ -3,6 +3,7 @@ LumoraAI - Adaptive Quiz Service
 Orchestrates diagnostic baseline generation, Bayesian Knowledge Tracing updates,
 knowledge gap prioritization, candidate deduplication, and continuous multi-batch adaptation.
 """
+import asyncio
 from typing import List, Dict, Any, Optional, Tuple, Set
 from datetime import datetime, timezone
 from backend.app.core.logging import get_logger
@@ -36,6 +37,11 @@ from backend.app.schemas.quizzes import (
 
 logger = get_logger(__name__)
 
+
+# The browser gives up after 30 s; answer well before that and keep writing questions meanwhile
+QUIZ_START_BUDGET_SECONDS = 22.0
+_POOL_TASKS: Set[asyncio.Task] = set()
+_POOL_BY_WORKSPACE: Dict[str, asyncio.Task] = {}
 
 class QuizService:
     async def create_quiz_session(
@@ -105,14 +111,41 @@ class QuizService:
             preferred_diff = initial_difficulty
             stage = "diagnostic"
 
-        # 5. Generate Initial Pool (Adapting to existing learner state if present)
-        candidates = await question_generator_service.generate_candidate_pool(
-            workspace_id=workspace_id,
-            target_count=target_question_count,
-            target_concepts=target_concept_dicts,
-            excluded_fingerprints=workspace_fps,
-            preferred_difficulty=preferred_diff,
+        # 5. Generate Initial Pool (Adapting to existing learner state if present). Questions written
+        # on demand are stored in the bank, so if writing takes longer than the page can wait, it
+        # carries on in the background and the page's automatic retry picks them up.
+        # A retry while questions are still being written waits for that work instead of starting more
+        running = _POOL_BY_WORKSPACE.get(workspace_id)
+        if running is not None and not running.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(running), timeout=QUIZ_START_BUDGET_SECONDS)
+            except asyncio.TimeoutError:
+                await quiz_repo.update_session(session_id, status="abandoned")
+                raise QuizPreparingError(
+                    "Your quiz questions are being written from your notes. This takes about a minute the first time."
+                )
+            except Exception:
+                pass
+        pool_task = asyncio.create_task(
+            question_generator_service.generate_candidate_pool(
+                workspace_id=workspace_id,
+                target_count=target_question_count,
+                target_concepts=target_concept_dicts,
+                excluded_fingerprints=workspace_fps,
+                preferred_difficulty=preferred_diff,
+            )
         )
+        _POOL_TASKS.add(pool_task)
+        pool_task.add_done_callback(_POOL_TASKS.discard)
+        _POOL_BY_WORKSPACE[workspace_id] = pool_task
+        try:
+            candidates = await asyncio.wait_for(asyncio.shield(pool_task), timeout=QUIZ_START_BUDGET_SECONDS)
+        except asyncio.TimeoutError:
+            logger.info(f"Quiz questions for {workspace_id} are still being written; asking the page to retry")
+            await quiz_repo.update_session(session_id, status="abandoned")
+            raise QuizPreparingError(
+                "Your quiz questions are being written from your notes. This takes about a minute the first time."
+            )
 
         self._schedule_preparation(workspace_id)
         if not candidates:
