@@ -52,6 +52,8 @@ class WorkspaceResponse(BaseModel):
     status: str = "active"
     icon_name: str = "FolderKanban"
     document_count: int = 0
+    # Built-in sample workspace (ready-made topic map, questions and flashcards)
+    is_sample: bool = False
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

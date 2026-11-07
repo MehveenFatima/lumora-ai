@@ -386,7 +386,18 @@ async def _ingest_document(
 
         # Step D: embeddings in batches, tagged with the model used
         await document_repo.update_status(doc_id, status="indexing")
-        vectors, model_tag = await embedding_service.embed_documents([c.text for c in chunks])
+        try:
+            vectors, model_tag = await embedding_service.embed_documents([c.text for c in chunks])
+        except EmbeddingUnavailableError:
+            if not mode.get("offline_fallback"):
+                raise
+            # Built-in sample notes: index them with the offline embedder so they are always
+            # available. Searches in that workspace then use the same offline vector space.
+            from backend.app.services.embeddings import OFFLINE_EMBEDDING_TAG, generate_deterministic_mock_embedding
+
+            logger.warning(f"Embeddings unavailable for sample doc {doc_id}; using offline vectors.")
+            vectors = [generate_deterministic_mock_embedding(c.text, embedding_service.dimension) for c in chunks]
+            model_tag = OFFLINE_EMBEDDING_TAG
         chunk_dicts = []
         for c, embedding in zip(chunks, vectors):
             c_dict = c.to_dict()

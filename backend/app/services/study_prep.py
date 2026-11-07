@@ -75,6 +75,12 @@ class StudyPreparationService:
 
     async def _run(self, workspace_id: str) -> None:
         try:
+            from backend.app.repositories.workspaces import workspace_repo
+
+            if await workspace_repo.is_sample(workspace_id):
+                # Sample workspaces ship with their material; nothing to write
+                self._set(workspace_id, state="ready", stage="done", finished_at=time.time())
+                return
             concepts = await concept_map_service.ensure_workspace(workspace_id)
             self._set(workspace_id, concepts=len(concepts))
             if not concepts:

@@ -291,6 +291,19 @@ class WorkspaceRepository:
             _memory_workspaces[workspace_id]["updated_at"] = now
         return await self.get_by_id(workspace_id)
 
+    async def mark_sample(self, workspace_id: str) -> None:
+        """Flags a workspace as a built-in sample (its study material is not regenerated)."""
+        pool = await get_db_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                await conn.execute("UPDATE workspaces SET is_sample = TRUE WHERE id = $1", workspace_id)
+        if workspace_id in _memory_workspaces:
+            _memory_workspaces[workspace_id]["is_sample"] = True
+
+    async def is_sample(self, workspace_id: str) -> bool:
+        ws = await self.get_by_id(workspace_id)
+        return bool(ws and ws.get("is_sample"))
+
     async def increment_doc_count(self, workspace_id: str, delta: int = 1) -> None:
         pool = await get_db_pool()
         if pool:

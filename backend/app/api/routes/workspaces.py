@@ -51,6 +51,7 @@ def _to_response(ws: dict, document_count=None) -> WorkspaceResponse:
         status=ws.get("status", "active"),
         icon_name=ws.get("icon_name", "FolderKanban"),
         document_count=ws.get("document_count", 0) if document_count is None else document_count,
+        is_sample=bool(ws.get("is_sample")),
         created_at=ws.get("created_at"),
         updated_at=ws.get("updated_at"),
     )
@@ -208,3 +209,21 @@ async def delete_workspace(workspace_id: str, ws: dict = Depends(require_workspa
 
     await workspace_repo.delete(workspace_id)
     return {"success": True, "message": f"Workspace '{workspace_id}' and all associated documents deleted."}
+
+
+@router.post("/sample-workspaces", response_model=WorkspaceListResponse, status_code=status.HTTP_201_CREATED)
+async def create_sample_workspaces(user: CurrentUser = Depends(get_current_user)) -> WorkspaceListResponse:
+    """Adds the built-in sample workspaces (Operating Systems, DBMS, Computer Networks) that the
+    user doesn't have yet, each with its notes, topic map, questions and flashcards ready."""
+    from backend.app.services.embeddings import EmbeddingUnavailableError
+    from backend.app.services.sample_workspaces import create_for_user
+
+    try:
+        created = await create_for_user(user["id"])
+    except EmbeddingUnavailableError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The notes could not be indexed right now. Please try again in a minute.",
+        )
+    items = [_to_response(ws) for ws in created if ws]
+    return WorkspaceListResponse(workspaces=items, total_count=len(items))

@@ -284,11 +284,23 @@ export const tutorApiClient = {
       status: ws.status || 'active',
       iconName: ws.icon_name || ws.iconName || 'FolderKanban',
       documentCount: ws.document_count || ws.documentCount || 0,
+      isSample: Boolean(ws.is_sample ?? ws.isSample),
       topicsCount: 0,
       flashcardsDueCount: 0,
       lastActive: 'Just now',
       createdAt: ws.created_at ? ws.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
     }
+  },
+
+  /** Adds the built-in sample workspaces (OS, DBMS, Computer Networks) the user doesn't have yet. */
+  async createSampleWorkspaces(): Promise<number> {
+    const response = await apiFetch('/api/v1/sample-workspaces', { method: 'POST' })
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.detail || `Could not add the sample workspaces (HTTP ${response.status})`)
+    }
+    const data = await response.json().catch(() => ({}))
+    return data.total_count ?? (data.workspaces || []).length
   },
 
   async getWorkspaces(init: RequestInit = {}): Promise<Workspace[]> {
@@ -309,6 +321,7 @@ export const tutorApiClient = {
         status: ws.status || 'active',
         iconName: ws.icon_name || ws.iconName || 'FolderKanban',
         documentCount: ws.document_count || ws.documentCount || 0,
+        isSample: Boolean(ws.is_sample ?? ws.isSample),
         topicsCount: 0,
         flashcardsDueCount: 0,
         lastActive: 'Recently',
@@ -337,6 +350,7 @@ export const tutorApiClient = {
         status: ws.status || 'active',
         iconName: ws.icon_name || ws.iconName || 'FolderKanban',
         documentCount: ws.document_count || ws.documentCount || 0,
+        isSample: Boolean(ws.is_sample ?? ws.isSample),
         topicsCount: 0,
         flashcardsDueCount: 0,
         lastActive: 'Just now',

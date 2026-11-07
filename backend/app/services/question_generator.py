@@ -373,7 +373,12 @@ class QuestionGeneratorService:
 
         from backend.app.ai.gateway import ai_gateway
         from backend.app.ai.types import TaskType
+        from backend.app.repositories.workspaces import workspace_repo
 
+        if await workspace_repo.is_sample(workspace_id):
+            return await self._sample_candidate_pool(
+                workspace_id, target_count, target_concepts, excluded_fps, excluded_qs, preferred_difficulty
+            )
         if ai_gateway.has_configured_provider(TaskType.QUIZ):
             return await self._ai_candidate_pool(
                 workspace_id, target_count, target_concepts, excluded_fps, excluded_qs, preferred_difficulty, all_chunks
@@ -382,6 +387,28 @@ class QuestionGeneratorService:
         return await self._offline_candidate_pool(
             target_count, target_concepts, excluded_fps, excluded_qs, preferred_difficulty, all_chunks
         )
+
+    async def _sample_candidate_pool(
+        self,
+        workspace_id: str,
+        target_count: int,
+        target_concepts: Optional[List[Any]],
+        excluded_fps: Set[str],
+        excluded_qs: List[str],
+        preferred_difficulty: int,
+    ) -> List[GeneratedQuestionData]:
+        """Sample workspaces quiz from their ready-made bank only: unseen questions first, and once
+        every question has been answered, the bank is reused (no AI calls)."""
+        from backend.app.services import question_bank as qb
+
+        targets = list(target_concepts or [])
+        rows = await quiz_repo.list_question_bank(workspace_id, limit=100000)
+        selected = qb.select_questions(rows, target_count, targets, preferred_difficulty, excluded_fps, excluded_qs)
+        if len(selected) < target_count:
+            chosen = {q.fingerprint for q in selected}
+            again = qb.select_questions(rows, target_count, targets, preferred_difficulty, chosen, [])
+            selected.extend(q for q in again if q.fingerprint not in chosen)
+        return selected[:target_count]
 
     async def _ai_candidate_pool(
         self,
