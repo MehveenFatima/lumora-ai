@@ -107,25 +107,48 @@ async def create_workspace(
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, status, Query
 
-async def _add_starter_workspaces_once(user_id: str) -> None:
-    """The first time an account opens its workspaces, it gets the Operating Systems, DBMS and
-    Computer Networks workspaces with their notes, topics, questions and flashcards."""
-    from backend.app.core.config import settings
+STARTER_WAIT_SECONDS = 20.0
+
+
+async def _create_starter_workspaces(user_id: str) -> None:
     from backend.app.repositories.users import user_repo
+    from backend.app.services.sample_workspaces import create_for_user
 
-    if not settings.starter_workspaces:
-        return
     try:
-        if await user_repo.claim_starter_workspaces(user_id):
-            from backend.app.services.sample_workspaces import create_for_user
-
-            await create_for_user(user_id)
+        await create_for_user(user_id)
     except Exception:
         logger.error(f"Could not add the starter workspaces for {user_id}", exc_info=True)
         try:  # try again on the next visit
             await user_repo._update(user_id, {"starter_workspaces_added": False})
         except Exception:
             pass
+
+
+async def _add_starter_workspaces_once(user_id: str) -> None:
+    """The first time an account opens its workspaces, it gets the Operating Systems, DBMS and
+    Computer Networks workspaces with their notes, topics, questions and flashcards. The list
+    waits for them at most STARTER_WAIT_SECONDS; a slow database finishes in the background."""
+    import asyncio
+
+    from backend.app.api.routes.documents import _INGEST_TASKS
+    from backend.app.core.config import settings
+    from backend.app.repositories.users import user_repo
+
+    if not settings.starter_workspaces:
+        return
+    try:
+        if not await user_repo.claim_starter_workspaces(user_id):
+            return
+    except Exception:
+        logger.error(f"Could not check the starter workspaces for {user_id}", exc_info=True)
+        return
+    task = asyncio.create_task(_create_starter_workspaces(user_id))
+    _INGEST_TASKS.add(task)
+    task.add_done_callback(_INGEST_TASKS.discard)
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=STARTER_WAIT_SECONDS)
+    except asyncio.TimeoutError:
+        logger.warning(f"Starter workspaces for {user_id} are still being added in the background")
 
 
 @router.get("/workspaces", response_model=WorkspaceListResponse)
