@@ -124,6 +124,8 @@ class Settings(BaseSettings):
     # from REMINDER_HOUR in their own time zone.
     cron_secret: Optional[str] = Field(default=None, validation_alias="CRON_SECRET")
     reminder_hour: int = Field(default=7, ge=0, le=20, validation_alias="REMINDER_HOUR")
+    # Adds the Operating Systems, DBMS and Computer Networks workspaces to every account once
+    starter_workspaces: bool = Field(default=True, validation_alias="STARTER_WORKSPACES")
     # Public URL of the web app, used for links inside emails
     app_base_url: Optional[str] = Field(default=None, validation_alias="APP_BASE_URL")
 

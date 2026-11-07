@@ -107,10 +107,32 @@ async def create_workspace(
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, status, Query
 
+async def _add_starter_workspaces_once(user_id: str) -> None:
+    """The first time an account opens its workspaces, it gets the Operating Systems, DBMS and
+    Computer Networks workspaces with their notes, topics, questions and flashcards."""
+    from backend.app.core.config import settings
+    from backend.app.repositories.users import user_repo
+
+    if not settings.starter_workspaces:
+        return
+    try:
+        if await user_repo.claim_starter_workspaces(user_id):
+            from backend.app.services.sample_workspaces import create_for_user
+
+            await create_for_user(user_id)
+    except Exception:
+        logger.error(f"Could not add the starter workspaces for {user_id}", exc_info=True)
+        try:  # try again on the next visit
+            await user_repo._update(user_id, {"starter_workspaces_added": False})
+        except Exception:
+            pass
+
+
 @router.get("/workspaces", response_model=WorkspaceListResponse)
 async def list_workspaces(
     name: Optional[str] = Query(default=None), user: CurrentUser = Depends(get_current_user)
 ) -> WorkspaceListResponse:
+    await _add_starter_workspaces_once(user["id"])
     workspaces = await workspace_repo.list_by_owner(user["id"])
     if name:
         target = name.strip().lower()
@@ -133,6 +155,7 @@ async def list_workspaces(
                 status=w.get("status", "active"),
                 icon_name=w.get("icon_name", "FolderKanban"),
                 document_count=doc_count,
+                is_sample=bool(w.get("is_sample")),
                 created_at=w.get("created_at"),
                 updated_at=w.get("updated_at"),
             )

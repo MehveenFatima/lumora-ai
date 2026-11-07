@@ -101,6 +101,24 @@ class UserRepository:
             user.update(fields)
         return user
 
+    async def claim_starter_workspaces(self, user_id: str) -> bool:
+        """Marks that the account received the starter workspaces. True only for the first caller,
+        so two dashboard requests at once never add them twice."""
+        pool = await get_db_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "UPDATE users SET starter_workspaces_added = TRUE "
+                    "WHERE id = $1 AND NOT starter_workspaces_added RETURNING id",
+                    user_id,
+                )
+                return row is not None
+        user = _memory_users.get(user_id)
+        if not user or user.get("starter_workspaces_added"):
+            return False
+        user["starter_workspaces_added"] = True
+        return True
+
     async def mark_email_verified(self, user_id: str) -> Optional[Dict[str, Any]]:
         return await self._update(user_id, {"email_verified": True})
 

@@ -19,7 +19,6 @@ import {
   Bell,
   Search,
   Command,
-  BookOpen,
   CheckCircle2,
   AlertTriangle,
 } from 'lucide-react'
@@ -50,7 +49,6 @@ export default function GlobalDashboardPage() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)
   const [toastMessage, setToastMessage] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  const [addingSamples, setAddingSamples] = useState(false)
   const [backendError, setBackendError] = useState<string | null>(null)
 
   const loadDashboard = useCallback(async () => {
@@ -120,21 +118,6 @@ export default function GlobalDashboardPage() {
     setWorkspaces(updatedWs)
     setActivities(updatedActs)
     showToast('Workspace deleted.')
-  }
-
-  const sampleCount = workspaces.filter((w) => w.isSample).length
-
-  const handleAddSamples = async () => {
-    setAddingSamples(true)
-    try {
-      const added = await tutorApiClient.createSampleWorkspaces()
-      await loadDashboard()
-      showToast(added > 0 ? `${added} workspace${added === 1 ? '' : 's'} added.` : 'These workspaces are already in your account.')
-    } catch (err: any) {
-      showToast(err?.message || 'Could not add the workspaces. Please try again.')
-    } finally {
-      setAddingSamples(false)
-    }
   }
 
   const totalDocs = workspaces.reduce((acc, w) => acc + w.documentCount, 0)
@@ -369,16 +352,6 @@ export default function GlobalDashboardPage() {
                 Each workspace is an independent learning environment with isolated sources, tutor memory, and roadmaps.
               </p>
             </div>
-            {sampleCount < 3 && (
-              <button
-                onClick={handleAddSamples}
-                disabled={addingSamples}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2 text-xs font-semibold text-foreground shadow-soft transition-colors hover:border-primary/60 hover:text-primary disabled:cursor-wait disabled:opacity-70"
-              >
-                <BookOpen className="size-3.5" />
-                {addingSamples ? 'Setting up workspaces…' : 'Add OS, DBMS & CN workspaces'}
-              </button>
-            )}
           </div>
 
           <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
