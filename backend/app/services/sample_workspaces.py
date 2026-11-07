@@ -6,8 +6,8 @@ Each one is created for the signed-in user from notes that ship with the app
 embeddings), so the tutor and search work on it like on any upload. The topic map, the question
 bank and the flashcard deck are written from the same notes and stored ready to use, so quizzes,
 flashcards, mastery tracking, knowledge gaps, analytics and the study plan all work straight away
-without waiting for an AI provider. Sample workspaces are flagged `is_sample`, shown with a
-"Sample" label, and their material is not regenerated in the background.
+without waiting for an AI provider. Sample workspaces are flagged `is_sample`, look like any other
+workspace to the user, and their material is not regenerated in the background.
 """
 from __future__ import annotations
 
@@ -120,7 +120,7 @@ async def create_for_user(owner_id: str) -> List[Dict[str, Any]]:
             level=spec["level"],
             target_date=(date.today() + timedelta(days=TARGET_DAYS)).isoformat(),
             daily_target_minutes=DAILY_MINUTES,
-            description="Sample workspace with ready-made study material",
+            description=f"Exam revision for {spec['name']} from the course notes",
             owner_id=owner_id,
         )
         # Flag first, so the background preparation started by the upload leaves it alone
