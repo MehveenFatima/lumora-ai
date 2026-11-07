@@ -161,6 +161,9 @@ export const workspaceService = {
       }
     } catch (err) {
       console.error('Failed to fetch workspaces from FastAPI backend:', err)
+      // Keep showing what was loaded before; with nothing loaded yet, report the problem
+      // instead of pretending the account has no workspaces.
+      if (workspacesCache.length === 0) throw err
     }
     return [...workspacesCache]
   },

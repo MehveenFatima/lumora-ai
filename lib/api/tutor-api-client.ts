@@ -177,6 +177,26 @@ function getBaseUrl(): string {
   return process.env.BACKEND_API_URL || DEFAULT_SERVER_BACKEND_URL
 }
 
+/**
+ * GET that retries while the backend is waking up (free hosting sleeps when idle): network
+ * errors and 5xx answers are tried again, up to three times. Returns the last response, or
+ * null if the server never answered.
+ */
+async function fetchWhileWaking(path: string, init: RequestInit = {}): Promise<Response | null> {
+  let response: Response | null = null
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, attempt * 3000))
+    try {
+      response = await apiFetch(path, init)
+    } catch {
+      response = null
+      continue
+    }
+    if (response.status < 500) break
+  }
+  return response
+}
+
 async function apiFetch(path: string, options: RequestInit = {}): Promise<Response> {
   const isBrowser = typeof window !== 'undefined'
   let cleanPath = path
@@ -303,10 +323,16 @@ export const tutorApiClient = {
     return data.total_count ?? (data.workspaces || []).length
   },
 
+  /**
+   * The user's workspaces. Retries while the server is waking up, and throws if it still can't
+   * be reached, so callers never mistake "server unreachable" for "no workspaces".
+   */
   async getWorkspaces(init: RequestInit = {}): Promise<Workspace[]> {
+    const response = await fetchWhileWaking('/api/v1/workspaces', init)
+    if (!response || !response.ok) {
+      throw new Error(`Could not load your workspaces (${response ? `HTTP ${response.status}` : 'server not reachable'})`)
+    }
     try {
-      const response = await apiFetch('/api/v1/workspaces', init)
-      if (!response.ok) return []
       const data = await response.json()
       return (data.workspaces || []).map((ws: any) => ({
         id: ws.id,
@@ -328,13 +354,17 @@ export const tutorApiClient = {
         createdAt: ws.created_at ? ws.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
       }))
     } catch {
-      return []
+      throw new Error('Could not read the workspace list from the server')
     }
   },
 
+  /** The workspace, or null if it doesn't exist. Throws if the server can't be reached. */
   async getWorkspaceById(workspaceId: string, init: RequestInit = {}): Promise<Workspace | null> {
+    const response = await fetchWhileWaking(`/api/v1/workspaces/${workspaceId}`, init)
+    if (!response || response.status >= 500) {
+      throw new Error(`Could not load the workspace (${response ? `HTTP ${response.status}` : 'server not reachable'})`)
+    }
     try {
-      const response = await apiFetch(`/api/v1/workspaces/${workspaceId}`, init)
       if (!response.ok) return null
       const ws = await response.json()
       return {

@@ -14,10 +14,32 @@ export default async function WorkspaceLayout({ children, params }: WorkspaceLay
   if (!hasSession) redirect(`/login?next=${encodeURIComponent(`/dashboard/workspace/${workspaceId}`)}`)
 
   // Uncached, per-request calls made with this user's own session
-  const [workspaces, currentWorkspace] = await Promise.all([
-    tutorApiClient.getWorkspaces(init),
-    tutorApiClient.getWorkspaceById(workspaceId, init),
-  ])
+  let workspaces: Awaited<ReturnType<typeof tutorApiClient.getWorkspaces>> = []
+  let currentWorkspace: Awaited<ReturnType<typeof tutorApiClient.getWorkspaceById>> = null
+  try {
+    ;[workspaces, currentWorkspace] = await Promise.all([
+      tutorApiClient.getWorkspaces(init),
+      tutorApiClient.getWorkspaceById(workspaceId, init),
+    ])
+  } catch {
+    // The server is still starting up: say so (never "not found") and offer to try again
+    return (
+      <div className="flex min-h-dvh flex-col items-center justify-center p-6 text-center bg-background text-foreground">
+        <div className="max-w-md rounded-3xl border border-border bg-card p-8 shadow-card">
+          <h2 className="font-display text-lg font-semibold text-foreground">Connecting to the server…</h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            The server is starting up. This takes up to a minute after a quiet period. Your workspace is safe.
+          </p>
+          <a
+            href={`/dashboard/workspace/${workspaceId}`}
+            className="mt-5 inline-flex rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground"
+          >
+            Try again
+          </a>
+        </div>
+      </div>
+    )
+  }
   const notifications: never[] = []
 
   if (!currentWorkspace) {

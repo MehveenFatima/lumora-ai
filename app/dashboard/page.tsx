@@ -50,6 +50,7 @@ export default function GlobalDashboardPage() {
   const [toastMessage, setToastMessage] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [backendError, setBackendError] = useState<string | null>(null)
+  const [reconnects, setReconnects] = useState(0)
 
   const loadDashboard = useCallback(async () => {
     setLoading(true)
@@ -60,14 +61,17 @@ export default function GlobalDashboardPage() {
         health &&
         (health.status === 'ok' || health.status === 'healthy' || health.backend === 'healthy')
       if (!isBackendHealthy) {
-        setBackendError('FastAPI backend service is unreachable.')
+        setBackendError('The server is starting up. Your workspaces will appear in a moment.')
       }
+      // Workspaces must load; the side panels may fail without hiding them
       const [ws, acts, notifs, plan] = await Promise.all([
         workspaceService.getWorkspaces(),
-        workspaceService.getActivities(),
-        workspaceService.getNotifications(),
-        workspaceService.getTodayPlan(),
+        workspaceService.getActivities().catch(() => []),
+        workspaceService.getNotifications().catch(() => []),
+        workspaceService.getTodayPlan().catch(() => null),
       ])
+      setBackendError(null)
+      setReconnects(0)
       setWorkspaces(ws)
       setActivities(acts)
       setNotifications(notifs)
@@ -78,7 +82,9 @@ export default function GlobalDashboardPage() {
       )
     } catch (err: any) {
       console.error(err)
-      setBackendError(err.message || 'Failed to connect to backend service')
+      // Keep whatever was shown before and try again shortly (the server may be waking up)
+      setBackendError('The server is starting up. Your workspaces will appear in a moment.')
+      setReconnects((n) => n + 1)
     } finally {
       setLoading(false)
     }
@@ -87,6 +93,15 @@ export default function GlobalDashboardPage() {
   useEffect(() => {
     loadDashboard()
   }, [loadDashboard])
+
+  // Reconnect automatically after a failed load: every 10 s, for up to about 3 minutes
+  useEffect(() => {
+    if (reconnects === 0 || reconnects > 18) return
+    const timer = setTimeout(() => loadDashboard(), 10000)
+    return () => clearTimeout(timer)
+  }, [reconnects, loadDashboard])
+
+  const workspacesUnavailable = workspaces.length === 0 && (loading || !!backendError)
 
   const handleToggleTask = async (task: TodayPlanTask) => {
     const key = `${task.workspaceId}:${task.id}`
@@ -240,9 +255,9 @@ export default function GlobalDashboardPage() {
             <div className="flex items-center gap-2.5">
               <AlertTriangle className="size-5 shrink-0" />
               <div>
-                <span className="font-semibold">Backend Connection Issue:</span> {backendError}
+                <span className="font-semibold">Reconnecting:</span> {backendError}
                 <p className="mt-0.5 text-[11px] text-muted-foreground">
-                  Ensure the FastAPI backend service is running and accessible via the <code>/api/v1</code> proxy.
+                  Nothing is lost. The page retries on its own, or you can retry now.
                 </p>
               </div>
             </div>
@@ -250,7 +265,7 @@ export default function GlobalDashboardPage() {
               onClick={() => loadDashboard()}
               className="shrink-0 rounded-xl bg-destructive px-3.5 py-1.5 text-xs font-semibold text-destructive-foreground shadow-sm hover:opacity-90"
             >
-              Retry Connection
+              Retry now
             </button>
           </div>
         )}
@@ -355,6 +370,15 @@ export default function GlobalDashboardPage() {
           </div>
 
           <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {workspacesUnavailable && (
+              <div className="flex min-h-[220px] flex-col items-center justify-center gap-2 rounded-3xl border border-border bg-card p-6 text-center shadow-soft">
+                <span className="size-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                <p className="text-sm font-semibold text-foreground">Loading your workspaces…</p>
+                <p className="max-w-[200px] text-xs text-muted-foreground">
+                  {backendError ? 'Connecting to the server. This can take up to a minute.' : 'Just a moment.'}
+                </p>
+              </div>
+            )}
             {workspaces.map((ws) => (
               <Link
                 key={ws.id}
