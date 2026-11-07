@@ -46,9 +46,15 @@ async def test_sample_workspaces_work_end_to_end(async_client):
     res = await async_client.post("/api/v1/sample-workspaces")
     assert res.status_code == 201, res.text
     created = res.json()["workspaces"]
+    # The notes are indexed in the background after the response; let that finish here
+    import asyncio
+    from backend.app.api.routes.documents import _INGEST_TASKS
+
+    if _INGEST_TASKS:
+        await asyncio.gather(*list(_INGEST_TASKS))
     by_name = {w["name"]: w for w in created}
     assert set(by_name) == {"Operating Systems", "DBMS", "Computer Networks"}
-    ws = by_name["Operating Systems"]
+    ws = (await async_client.get(f"/api/v1/workspaces/{by_name['Operating Systems']['id']}")).json()
     assert ws["is_sample"] is True and ws["document_count"] == 1
     assert "sample" not in (ws["description"] or "").lower()
 
@@ -107,7 +113,12 @@ async def test_sample_notes_are_indexed_even_when_embeddings_are_unavailable(mon
     for w in await workspace_repo.list_by_owner(owner):
         if w.get("is_sample"):
             await workspace_repo.delete(w["id"])
-    created = await sample_workspaces.create_for_user(owner)
+    created = await sample_workspaces.create_for_user(owner, wait_for_indexing=True)
     assert len(created) == 3
+    from backend.app.repositories.documents import document_repo
+
+    for ws in created:
+        docs = await document_repo.list_by_workspace(ws["id"])
+        assert [d["status"] for d in docs] == ["ready"]
     listing = await workspace_repo.list_by_owner(owner)
     assert sum(1 for w in listing if w.get("is_sample")) == 3

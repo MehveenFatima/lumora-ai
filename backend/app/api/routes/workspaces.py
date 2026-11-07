@@ -187,6 +187,7 @@ async def get_workspace(workspace_id: str, ws: dict = Depends(require_workspace)
         status=ws.get("status", "active"),
         icon_name=ws.get("icon_name", "FolderKanban"),
         document_count=doc_count,
+        is_sample=bool(ws.get("is_sample")),
         created_at=ws.get("created_at"),
         updated_at=ws.get("updated_at"),
     )

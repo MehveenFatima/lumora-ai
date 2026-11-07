@@ -3,7 +3,7 @@ Built-in sample workspaces: Operating Systems, DBMS and Computer Networks.
 
 Each one is created for the signed-in user from notes that ship with the app
 (`sample_content/pdfs`). The PDF goes through the normal upload pipeline (parsing, chunking,
-embeddings), so the tutor and search work on it like on any upload. The topic map, the question
+embeddings) in the background, so the tutor and search work on it like on any upload. The topic map, the question
 bank and the flashcard deck are written from the same notes and stored ready to use, so quizzes,
 flashcards, mastery tracking, knowledge gaps, analytics and the study plan all work straight away
 without waiting for an AI provider. Sample workspaces are flagged `is_sample`, look like any other
@@ -11,6 +11,7 @@ workspace to the user, and their material is not regenerated in the background.
 """
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import date, timedelta
 from pathlib import Path
@@ -41,18 +42,38 @@ async def _existing_sample_names(owner_id: str) -> set:
     }
 
 
-async def _ingest_pdf(workspace_id: str, filename: str) -> Dict[str, Any]:
-    from backend.app.api.routes.documents import _ingest_document
-
+async def _create_document(workspace_id: str, filename: str) -> Dict[str, Any]:
     data = (PDF_DIR / filename).read_bytes()
     title = filename.rsplit(".", 1)[0].replace("_", " ")
-    doc = await document_repo.create(
+    return await document_repo.create(
         workspace_id=workspace_id, title=title, filename=filename, file_type="pdf",
         file_size=len(data), status="processing",
     )
-    return await _ingest_document(
-        {"background": False, "offline_fallback": True}, workspace_id, doc["id"], title, filename, "pdf", data, "application/pdf",
-    ) or doc
+
+
+async def _index_documents(docs: List[Dict[str, Any]]) -> None:
+    """Indexes the notes (parse, chunk, embed) one after another, after the response has gone
+    out. The quizzes, flashcards and plan don't wait for this; the tutor's search does."""
+    from backend.app.api.routes.documents import _ingest_document
+
+    for doc in docs:
+        filename = doc["filename"]
+        try:
+            await _ingest_document(
+                {"background": True, "offline_fallback": True},
+                str(doc["workspace_id"]), str(doc["id"]), doc["title"], filename, "pdf",
+                (PDF_DIR / filename).read_bytes(), "application/pdf",
+            )
+        except Exception:
+            logger.error(f"Indexing the notes '{filename}' failed", exc_info=True)
+
+
+def _start_indexing(docs: List[Dict[str, Any]]) -> None:
+    from backend.app.api.routes.documents import _INGEST_TASKS
+
+    task = asyncio.create_task(_index_documents(docs))
+    _INGEST_TASKS.add(task)
+    task.add_done_callback(_INGEST_TASKS.discard)
 
 
 async def _store_material(workspace_id: str, doc: Dict[str, Any], module) -> Dict[str, int]:
@@ -104,10 +125,11 @@ async def _store_material(workspace_id: str, doc: Dict[str, Any], module) -> Dic
     return {"concepts": len(saved), "questions": stored_q, "flashcards": len(stored_c)}
 
 
-async def create_for_user(owner_id: str) -> List[Dict[str, Any]]:
+async def create_for_user(owner_id: str, wait_for_indexing: bool = False) -> List[Dict[str, Any]]:
     """Creates the sample workspaces the user doesn't have yet. Returns the created workspaces."""
     have = await _existing_sample_names(owner_id)
     created = []
+    docs: List[Dict[str, Any]] = []
     for module in MODULES:
         spec = module.WORKSPACE
         if spec["name"].lower() in have:
@@ -126,12 +148,18 @@ async def create_for_user(owner_id: str) -> List[Dict[str, Any]]:
         # Flag first, so the background preparation started by the upload leaves it alone
         await workspace_repo.mark_sample(ws_id)
         try:
-            doc = await _ingest_pdf(ws_id, spec["pdf"])
+            doc = await _create_document(ws_id, spec["pdf"])
             counts = await _store_material(ws_id, doc, module)
+            docs.append(doc)
         except Exception:
             logger.error(f"Could not create the sample workspace '{spec['name']}'", exc_info=True)
             await workspace_repo.delete(ws_id)
             raise
         logger.info(f"Sample workspace '{spec['name']}' created for {owner_id}: {counts}")
         created.append(await workspace_repo.get_by_id(ws_id))
+    if docs:
+        if wait_for_indexing:
+            await _index_documents(docs)
+        else:
+            _start_indexing(docs)
     return created
